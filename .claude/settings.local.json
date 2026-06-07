@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "mcp__Claude_in_Chrome__javascript_tool",
-      "WebFetch(domain:www.postman.com)",
-      "mcp__Claude_in_Chrome__read_network_requests"
-    ]
-  }
-}
