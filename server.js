@@ -43,7 +43,7 @@ app.get('/turmas', async (req, res) => {
       body: JSON.stringify({
         filter: {
           and: [
-            { property: 'Status', status: { equals: 'Ativa' } },
+            { property: 'Status', select: { equals: 'Ativa' } },
             { property: 'Modalidade', select: { equals: 'Aéreos' } },
           ]
         },
