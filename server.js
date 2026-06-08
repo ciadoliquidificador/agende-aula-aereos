@@ -16,7 +16,7 @@ const DIGISAC_URL = 'https://ciadoliquidificador.digisac.biz/api/v1/messages';
 const DIGISAC_TOKEN = 'c2e0a3ac3ae20585924b2dbc133d68d779770199';
 const SERVICE_ID = '012587f9-21ea-4143-9005-c0fbdf109f05';
 const USER_ID = 'b0bb99db-a668-403a-af70-efc1d4a7259a';
-const NOTION_TOKEN = 'process.env.NOTION_TOKEN';
+const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const ALUNAS_DB = '41bb69c4-2d18-4c81-9e43-e60c5f4033f6';
 
 async function enviarWhatsApp(numero, texto) {
