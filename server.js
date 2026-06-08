@@ -31,6 +31,7 @@ async function enviarWhatsApp(numero, texto) {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Retorna turmas com alunas ativas + experimentais (para calcular vagas)
 app.get('/turmas', async (req, res) => {
   try {
     const response = await fetch(`https://api.notion.com/v1/databases/${ALUNAS_DB}/query`, {
@@ -43,7 +44,12 @@ app.get('/turmas', async (req, res) => {
       body: JSON.stringify({
         filter: {
           and: [
-            { property: 'Status', select: { equals: 'Ativa' } },
+            {
+              or: [
+                { property: 'Status', select: { equals: 'Ativa' } },
+                { property: 'Status', select: { equals: 'Experimental' } },
+              ]
+            },
             { property: 'Modalidade', select: { equals: 'Aéreos' } },
           ]
         },
@@ -59,15 +65,55 @@ app.get('/turmas', async (req, res) => {
       const nome = props.Nome?.title?.[0]?.plain_text || '';
       const turma = props.Turma?.select?.name || props.Turma?.rich_text?.[0]?.plain_text || '';
       const professor = props.Professor?.select?.name || props.Professor?.rich_text?.[0]?.plain_text || '';
+      const status = props.Status?.select?.name || '';
       if (!turma) continue;
       if (!map[turma]) {
-        map[turma] = { id: `t_${turma.replace(/[\s/:]/g, '_')}`, nome: `${turma} – Prof. ${professor}`, professor, alunas: [] };
+        map[turma] = { id: `t_${turma.replace(/[\s/:]/g, '_')}`, nome: `${turma} - Prof. ${professor}`, professor, alunas: [], experimentais: [] };
       }
-      if (nome && !map[turma].alunas.includes(nome)) map[turma].alunas.push(nome);
+      if (status === 'Experimental') {
+        if (nome && !map[turma].experimentais.includes(nome)) map[turma].experimentais.push(nome);
+      } else {
+        if (nome && !map[turma].alunas.includes(nome)) map[turma].alunas.push(nome);
+      }
     }
     return res.json({ ok: true, turmas: Object.values(map) });
   } catch (err) {
     return res.json({ ok: false, erro: err.message, turmas: [] });
+  }
+});
+
+// Cria inscrição experimental no Notion
+app.post('/inscricao', async (req, res) => {
+  try {
+    const { nome, telefone, turma, professor, dia, horario, data } = req.body;
+    if (!nome || !telefone || !turma) return res.json({ ok: false, erro: 'Campos obrigatórios: nome, telefone, turma.' });
+
+    const response = await fetch(`https://api.notion.com/v1/pages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${NOTION_TOKEN}`,
+        'Notion-Version': '2022-06-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        parent: { database_id: ALUNAS_DB },
+        properties: {
+          Nome: { title: [{ text: { content: nome } }] },
+          Contato: { phone_number: telefone },
+          Turma: { select: { name: turma } },
+          Professor: { select: { name: professor || '' } },
+          Dia: { select: { name: dia || '' } },
+          Horário: { select: { name: horario || '' } },
+          Modalidade: { select: { name: 'Aéreos' } },
+          Status: { select: { name: 'Experimental' } },
+          Observações: { rich_text: [{ text: { content: `Aula experimental agendada para ${data || ''}` } }] },
+        },
+      }),
+    });
+    if (!response.ok) { const t = await response.text(); throw new Error(`Notion ${response.status}: ${t}`); }
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.json({ ok: false, erro: err.message });
   }
 });
 
