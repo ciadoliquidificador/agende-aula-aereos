@@ -1859,7 +1859,10 @@ async function obterOcupacaoNotion(timeMinISO, timeMaxISO) {
 const BUFFER_MONTAGEM_MS = 15 * 60 * 1000;
 
 function aplicarBufferIntervalos(intervalos) {
-  return intervalos.map(iv => ({ start: iv.start, end: new Date(iv.end.getTime() + BUFFER_MONTAGEM_MS) }));
+  return intervalos.map(iv => ({
+    start: new Date(iv.start.getTime() - BUFFER_MONTAGEM_MS),
+    end: new Date(iv.end.getTime() + BUFFER_MONTAGEM_MS),
+  }));
 }
 
 async function verificarDisponibilidade(inicioISO, fimISO) {
