@@ -2337,25 +2337,27 @@ app.post('/webhook-cancelamento-notion', async (req, res) => {
 
   try {
     const body = req.body || {};
-    console.log('[webhook-cancelamento-notion] payload recebido:', JSON.stringify(body).slice(0, 2000));
+    console.log('[webhook-cancelamento-notion] payload recebido:', JSON.stringify(body).slice(0, 1000));
 
-    let pageData = (body.data && body.data.object === 'page') ? body.data : null;
-    const pageId = pageData?.id || body.pageId || body.page_id || null;
-
-    if (!pageData && pageId) {
-      const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
-        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
-      });
-      pageData = await rPage.json();
-    }
-
-    if (!pageData || !pageData.properties) {
-      console.error('[webhook-cancelamento-notion] nao foi possivel obter os dados da pagina.');
+    const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
+    if (!pageId) {
+      console.error('[webhook-cancelamento-notion] payload sem page id reconhecivel.');
       return;
     }
 
+    // Sempre busca a pagina completa e atualizada pelo ID, em vez de confiar
+    // nas propriedades que a automation do Notion decidiu incluir no payload
+    // (essas variam conforme o que foi marcado na configuracao da automation).
+    const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pageData = await rPage.json();
+
     const status = pageData.properties?.Status?.select?.name || '';
-    if (status !== 'Cancelado') return; // seguranca extra: so age se realmente estiver Cancelado
+    if (status !== 'Cancelado') {
+      console.log('[webhook-cancelamento-notion] status atual da pagina nao e Cancelado (' + status + '), ignorando.');
+      return;
+    }
 
     const eventId = pageData.properties?.['Google Event ID']?.rich_text?.[0]?.plain_text || '';
     if (eventId) {
