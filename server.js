@@ -166,30 +166,40 @@ async function enviarWhatsApp(numero, texto) {
   return response.json();
 }
 
-function calcularProximoHorarioComercial() {
-  const agora = new Date();
+async function calcularProximoHorarioComercial() {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo',
     hour: 'numeric', hour12: false,
     weekday: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit',
   });
   const diasMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-  const parts = fmt.formatToParts(agora);
-  const hora = parseInt(parts.find(p => p.type === 'hour').value, 10);
-  const diaSemana = diasMap[parts.find(p => p.type === 'weekday').value];
+  function partesDe(data) {
+    const parts = fmt.formatToParts(data);
+    const obj = {};
+    parts.forEach(p => { obj[p.type] = p.value; });
+    return {
+      hora: parseInt(obj.hour, 10),
+      diaSemana: diasMap[obj.weekday],
+      dataStr: obj.year + '-' + obj.month + '-' + obj.day,
+      ano: obj.year,
+    };
+  }
 
-  const dentroHorario = hora >= 8 && hora < 18 && diaSemana >= 1 && diaSemana <= 5;
+  const agora = new Date();
+  const p0 = partesDe(agora);
+  const feriadosCache = { [p0.ano]: await getFeriadosDoAno(p0.ano) };
+  const dentroHorario = p0.hora >= 8 && p0.hora < 18 && p0.diaSemana >= 1 && p0.diaSemana <= 5 && !feriadosCache[p0.ano].has(p0.dataStr);
   if (dentroHorario) return null;
 
-  // Avanca hora a hora ate encontrar 8h de um dia util (Brasilia)
+  // Avanca hora a hora ate encontrar 8h de um dia util (Brasilia), pulando feriados
   let candidato = new Date(agora);
-  for (let i = 0; i < 24 * 8; i++) {
+  for (let i = 0; i < 24 * 10; i++) {
     candidato = new Date(candidato.getTime() + 60 * 60000);
-    const partsC = fmt.formatToParts(candidato);
-    const horaC = parseInt(partsC.find(p => p.type === 'hour').value, 10);
-    const diaC = diasMap[partsC.find(p => p.type === 'weekday').value];
-    if (horaC === 8 && diaC >= 1 && diaC <= 5) {
+    const pc = partesDe(candidato);
+    if (!feriadosCache[pc.ano]) feriadosCache[pc.ano] = await getFeriadosDoAno(pc.ano);
+    if (pc.hora === 8 && pc.diaSemana >= 1 && pc.diaSemana <= 5 && !feriadosCache[pc.ano].has(pc.dataStr)) {
       return candidato;
     }
   }
@@ -197,7 +207,7 @@ function calcularProximoHorarioComercial() {
 }
 
 async function enviarWhatsAppComHorarioComercial(numero, texto) {
-  const agendamento = calcularProximoHorarioComercial();
+  const agendamento = await calcularProximoHorarioComercial();
   console.log('[horario-comercial] agora=' + new Date().toISOString() + ' agendamento=' + (agendamento ? agendamento.toISOString() : 'null (envio imediato)'));
   const contactId = await getOrCreateContactId(numero);
   if (!contactId) throw new Error('Contato nao encontrado');
@@ -1992,6 +2002,26 @@ async function verificarDisponibilidade(inicioISO, fimISO) {
 }
 
 // GET /disponibilidade-mes?ano=2026&mes=8
+async function obterOcupacaoResidente(timeMinISO, timeMaxISO) {
+  try {
+    const { google } = require('googleapis');
+    const auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+      scopes: ['https://www.googleapis.com/auth/calendar.readonly'],
+    });
+    const authClient = await auth.getClient();
+    const calendar = google.calendar({ version: 'v3', auth: authClient });
+    const resp = await calendar.freebusy.query({
+      requestBody: { timeMin: timeMinISO, timeMax: timeMaxISO, items: [{ id: RESIDENTE_CIA_PLA_CALENDAR }] },
+    });
+    const busy = resp.data.calendars?.[RESIDENTE_CIA_PLA_CALENDAR]?.busy || [];
+    return busy.map(b => ({ start: new Date(b.start), end: new Date(b.end) }));
+  } catch (e) {
+    console.error('[disponibilidade-mes] erro ao buscar ocupacao residente:', e.message);
+    return [];
+  }
+}
+
 app.get('/disponibilidade-mes', async (req, res) => {
   const { ano, mes } = req.query;
   if (!ano || !mes) return res.status(400).json({ error: 'ano e mes obrigatorios' });
@@ -2002,11 +2032,29 @@ app.get('/disponibilidade-mes', async (req, res) => {
     const timeMinISO = new Date(Date.UTC(anoNum, mesNum - 1, 1, 3, 0, 0)).toISOString();
     const timeMaxISO = new Date(Date.UTC(anoNum, mesNum, 1, 2, 59, 59)).toISOString();
 
-    const [ocupGoogle, ocupNotion] = await Promise.all([
+    const [ocupGoogle, ocupNotion, ocupResidenteBruto] = await Promise.all([
       obterOcupacaoGoogle(timeMinISO, timeMaxISO),
       obterOcupacaoNotion(timeMinISO, timeMaxISO),
+      obterOcupacaoResidente(timeMinISO, timeMaxISO),
     ]);
-    const todasOcupacoes = aplicarBufferIntervalos([...ocupGoogle, ...ocupNotion]);
+
+    // So mostramos o horario da Cia Pla como ocupado nos dias em que a cota
+    // mensal de remarcacoes deles ja estiver esgotada (mesma regra usada na
+    // hora de confirmar a reserva). Enquanto tiver cota, o dia fica livre no
+    // calendario visual, porque o cliente ainda pode negociar aquele horario.
+    const diasResidenteEsgotados = new Set();
+    for (const iv of ocupResidenteBruto) {
+      const diaStr = new Date(iv.start.getTime() - 3 * 60 * 60000).toISOString().split('T')[0];
+      if (diasResidenteEsgotados.has(diaStr)) continue;
+      const podeUsar = await residenteDisponivelParaTerceiro(diaStr);
+      if (!podeUsar) diasResidenteEsgotados.add(diaStr);
+    }
+    const ocupResidenteFiltrada = ocupResidenteBruto.filter(iv => {
+      const diaStr = new Date(iv.start.getTime() - 3 * 60 * 60000).toISOString().split('T')[0];
+      return diasResidenteEsgotados.has(diaStr);
+    });
+
+    const todasOcupacoes = aplicarBufferIntervalos([...ocupGoogle, ...ocupNotion, ...ocupResidenteFiltrada]);
 
     const diasNoMes = new Date(anoNum, mesNum, 0).getDate();
     const porDia = {};
@@ -2094,7 +2142,7 @@ async function excluirEventoEnsaioExterno(eventId) {
 // Verifica a cada 15 minutos se algum pre-agendamento de sala ficou sem resposta por 3h+ (em horario comercial)
 setInterval(async () => {
   const agora = Date.now();
-  const dentroHorarioComercial = calcularProximoHorarioComercial() === null;
+  const dentroHorarioComercial = (await calcularProximoHorarioComercial()) === null;
   if (!dentroHorarioComercial) return;
 
   for (const numero in CONVERSAS_ESTADO) {
@@ -2273,7 +2321,7 @@ app.post('/confirmar-remarcacao', async (req, res) => {
 
     const dataFmt = data.split('-').reverse().join('/');
     const msgConfirmacao = 'Prontinho! ✅\n\nSeu ensaio foi remarcado para ' + dataFmt + ', das ' + inicio + ' às ' + fim + '.';
-    try { await enviarWhatsApp(WHATSAPP_CIA_PLA, msgConfirmacao); } catch(e) {}
+    try { await enviarWhatsAppComHorarioComercial(WHATSAPP_CIA_PLA, msgConfirmacao); } catch(e) {}
     const msgInterna = '🔄 Cia Plá remarcou o ensaio para ' + dataFmt + ' (' + inicio + '-' + fim + ') — oferta ' + ofertaId;
     try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) {}
     try { await enviarWhatsApp(WHATSAPP_CIA, msgInterna); } catch(e) {}
