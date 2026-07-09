@@ -1553,28 +1553,65 @@ function getDescontoPacote(totalHoras, ehFDS) {
 // Cache de feriados por ano
 const _cacheFeriados = {};
 
+// Calcula a data da Pascoa (algoritmo de Meeus/Jones/Butcher), usada para
+// derivar os feriados moveis (Carnaval, Sexta-feira Santa, Corpus Christi).
+function calcularPascoa(ano) {
+  const a = ano % 19;
+  const b = Math.floor(ano / 100);
+  const c = ano % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const mes = Math.floor((h + l - 7 * m + 114) / 31);
+  const dia = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(Date.UTC(ano, mes - 1, dia));
+}
+
+function formatarDataStrUTC(data) {
+  return data.toISOString().split('T')[0];
+}
+
+// Feriados nacionais + estaduais de Sao Paulo + municipais da cidade de Sao Paulo.
+// Calculado localmente (sem depender de calendario externo do Google, que so
+// tem feriados nacionais) para o Espaco Liquidificador, em Campos Eliseos, SP.
 async function getFeriadosDoAno(ano) {
   if (_cacheFeriados[ano]) return _cacheFeriados[ano];
-  try {
-    const auth = new (require('googleapis').google.auth.GoogleAuth)({
-      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
-      scopes: ['https://www.googleapis.com/auth/calendar.readonly'],
-    });
-    const authClient = await auth.getClient();
-    const calendar = require('googleapis').google.calendar({ version: 'v3', auth: authClient });
-    const resp = await calendar.events.list({
-      calendarId: CALENDARIO_FERIADOS_ID,
-      timeMin: ano + '-01-01T00:00:00Z',
-      timeMax: ano + '-12-31T23:59:59Z',
-      singleEvents: true,
-    });
-    const datas = new Set((resp.data.items || []).map(ev => ev.start?.date).filter(Boolean));
-    _cacheFeriados[ano] = datas;
-    return datas;
-  } catch (e) {
-    console.error('[sala-ensaio] erro ao buscar feriados:', e.message);
-    return new Set(); // fallback: sem feriados detectados
-  }
+
+  const feriados = new Set();
+
+  // Nacionais (fixos)
+  feriados.add(ano + '-01-01'); // Confraternizacao Universal
+  feriados.add(ano + '-04-21'); // Tiradentes
+  feriados.add(ano + '-05-01'); // Dia do Trabalho
+  feriados.add(ano + '-09-07'); // Independencia do Brasil
+  feriados.add(ano + '-10-12'); // Nossa Senhora Aparecida
+  feriados.add(ano + '-11-02'); // Finados
+  feriados.add(ano + '-11-15'); // Proclamacao da Republica
+  feriados.add(ano + '-11-20'); // Dia Nacional de Zumbi e da Consciencia Negra
+  feriados.add(ano + '-12-25'); // Natal
+
+  // Estadual (Sao Paulo)
+  feriados.add(ano + '-07-09'); // Revolucao Constitucionalista de 1932
+
+  // Municipal (cidade de Sao Paulo)
+  feriados.add(ano + '-01-25'); // Aniversario da cidade de Sao Paulo
+
+  // Moveis (calculados a partir da Pascoa)
+  const pascoa = calcularPascoa(ano);
+  const addDias = (data, dias) => new Date(data.getTime() + dias * 24 * 60 * 60000);
+  feriados.add(formatarDataStrUTC(addDias(pascoa, -48))); // Segunda-feira de Carnaval
+  feriados.add(formatarDataStrUTC(addDias(pascoa, -47))); // Terca-feira de Carnaval
+  feriados.add(formatarDataStrUTC(addDias(pascoa, -2)));  // Sexta-feira Santa
+  feriados.add(formatarDataStrUTC(addDias(pascoa, 60)));  // Corpus Christi
+
+  _cacheFeriados[ano] = feriados;
+  return feriados;
 }
 
 async function ehFimDeSemanaOuFeriado(dataStr) {
