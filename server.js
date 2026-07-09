@@ -2176,6 +2176,69 @@ async function excluirEventoEnsaioExterno(eventId) {
   }
 }
 
+// ============================================================
+// MANUTENCAO — Limpar eventos orfaos no calendario Ensaio Externo
+// (eventos cujo registro no Notion foi apagado ou marcado Cancelado
+// direto na interface, sem passar pelo fluxo automatico)
+// ============================================================
+app.get('/limpar-eventos-orfaos', async (req, res) => {
+  try {
+    const calendar = await getGoogleCalendarClient();
+    const agora = new Date();
+    const timeMin = new Date(agora.getTime() - 30 * 24 * 60 * 60000).toISOString();
+    const timeMax = new Date(agora.getTime() + 365 * 24 * 60 * 60000).toISOString();
+
+    const listaResp = await calendar.events.list({
+      calendarId: CALENDARIO_ENSAIO_EXTERNO,
+      timeMin, timeMax,
+      singleEvents: true,
+      maxResults: 2500,
+    });
+    const eventos = listaResp.data.items || [];
+
+    const removidos = [];
+    const mantidos = [];
+    const semReservaId = [];
+
+    for (const ev of eventos) {
+      const desc = ev.description || '';
+      const match = desc.match(/Reserva:\s*(ENS-\d+)/);
+      if (!match) { semReservaId.push({ id: ev.id, summary: ev.summary, start: ev.start }); continue; }
+      const reservaId = match[1];
+
+      const r = await fetch('https://api.notion.com/v1/databases/' + SALA_ENSAIO_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: { property: 'Reserva ID', rich_text: { equals: reservaId } }, page_size: 5 }),
+      });
+      const data = await r.json();
+      const registroAtivo = (data.results || []).some(p => p.properties?.Status?.select?.name !== 'Cancelado');
+
+      if (registroAtivo) {
+        mantidos.push({ reservaId, start: ev.start });
+      } else {
+        try {
+          await calendar.events.delete({ calendarId: CALENDARIO_ENSAIO_EXTERNO, eventId: ev.id });
+          removidos.push({ reservaId, start: ev.start, summary: ev.summary });
+        } catch (e) {
+          console.error('[limpar-eventos-orfaos] erro ao excluir evento ' + ev.id + ':', e.message);
+        }
+      }
+    }
+
+    res.json({
+      ok: true,
+      totalEventosVerificados: eventos.length,
+      removidos,
+      mantidos: mantidos.length,
+      semReservaId,
+    });
+  } catch (err) {
+    console.error('[limpar-eventos-orfaos] erro:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 
 // Verifica a cada 15 minutos se algum pre-agendamento de sala ficou sem resposta por 3h+ (em horario comercial)
 setInterval(async () => {
