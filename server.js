@@ -1692,6 +1692,8 @@ app.post('/reservar-sala', async (req, res) => {
     const deposito = Math.round(totalFinal * 0.3 * 100) / 100;
 
     const blocosResidentes = [];
+    const semanasResidentesNesteRequest = new Set();
+    let totalResidentesNesteRequest = 0;
     for (const b of blocos) {
       const inicioISO = b.data + 'T' + b.inicio + ':00-03:00';
       const fimISO = b.data + 'T' + b.fim + ':00-03:00';
@@ -1702,7 +1704,19 @@ app.post('/reservar-sala', async (req, res) => {
           : 'O dia ' + b.data + ' das ' + b.inicio + ' às ' + b.fim + ' já está reservado. Escolha outro horário.';
         return res.json({ ok: false, erro: motivo });
       }
-      if (resultadoDisp.ehResidente) blocosResidentes.push(b);
+      if (resultadoDisp.ehResidente) {
+        // Checagem extra: dentro desta MESMA reserva (varios dias de uma vez),
+        // nao deixa usar 2+ dias da Cia Pla na mesma semana nem mais de 4 no total,
+        // ja que o registro no Notion so acontece depois que o loop termina.
+        const semanaBloco = getNumeroSemanaISO(b.data);
+        if (semanasResidentesNesteRequest.has(semanaBloco) || totalResidentesNesteRequest >= 4) {
+          const motivo = 'O dia ' + b.data + ' das ' + b.inicio + ' às ' + b.fim + ' também pertence à residência da Cia Plá, e esta reserva já está usando outro horário deles na mesma semana/mês. Escolha outro horário para um dos dias.';
+          return res.json({ ok: false, erro: motivo });
+        }
+        semanasResidentesNesteRequest.add(semanaBloco);
+        totalResidentesNesteRequest++;
+        blocosResidentes.push(b);
+      }
     }
 
     const reservaId = 'ENS-' + Date.now();
