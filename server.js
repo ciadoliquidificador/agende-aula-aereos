@@ -1819,6 +1819,30 @@ app.post('/reservar-sala', async (req, res) => {
   }
 });
 
+async function expirarOfertaResidenteSeExistir(dataStr) {
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + RESIDENTES_REMARCACOES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { and: [
+        { property: 'Data Original', date: { equals: dataStr } },
+        { property: 'Status', select: { equals: 'Oferecida' } },
+      ]}, page_size: 10 }),
+    });
+    const d = await r.json();
+    for (const page of (d.results || [])) {
+      await fetch('https://api.notion.com/v1/pages/' + page.id, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ properties: { 'Status': { select: { name: 'Expirada' } } } }),
+      });
+      console.log('[residentes] oferta de remarcacao expirada para ' + dataStr + ' (reserva cancelada)');
+    }
+  } catch (e) {
+    console.error('[residentes] erro ao expirar oferta:', e.message);
+  }
+}
+
 async function atualizarStatusReserva(reservaId, novoStatus) {
   const r = await fetch('https://api.notion.com/v1/databases/' + SALA_ENSAIO_DB + '/query', {
     method: 'POST',
@@ -1836,6 +1860,12 @@ async function atualizarStatusReserva(reservaId, novoStatus) {
     if (novoStatus === 'Cancelado') {
       const eventId = page.properties?.['Google Event ID']?.rich_text?.[0]?.plain_text || '';
       if (eventId) await excluirEventoEnsaioExterno(eventId);
+
+      const inicioStr = page.properties?.['Início']?.date?.start || '';
+      if (inicioStr) {
+        const dataStr = inicioStr.split('T')[0];
+        await expirarOfertaResidenteSeExistir(dataStr);
+      }
     }
   }
 }
@@ -2270,37 +2300,38 @@ app.post('/webhook-cancelamento-notion', async (req, res) => {
 
   try {
     const body = req.body || {};
-    let pageId = body.pageId || body.page_id || null;
-    let reservaId = body.reservaId || body['Reserva ID'] || null;
+    console.log('[webhook-cancelamento-notion] payload recebido:', JSON.stringify(body).slice(0, 2000));
 
-    if (pageId && !reservaId) {
+    let pageData = (body.data && body.data.object === 'page') ? body.data : null;
+    const pageId = pageData?.id || body.pageId || body.page_id || null;
+
+    if (!pageData && pageId) {
       const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
       });
-      const pageData = await rPage.json();
-      reservaId = pageData.properties?.['Reserva ID']?.rich_text?.[0]?.plain_text || null;
+      pageData = await rPage.json();
     }
 
-    if (!reservaId) {
-      console.error('[webhook-cancelamento-notion] payload sem reservaId/pageId reconhecivel:', JSON.stringify(body).slice(0, 500));
+    if (!pageData || !pageData.properties) {
+      console.error('[webhook-cancelamento-notion] nao foi possivel obter os dados da pagina.');
       return;
     }
 
-    const rQuery = await fetch('https://api.notion.com/v1/databases/' + SALA_ENSAIO_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filter: { property: 'Reserva ID', rich_text: { equals: reservaId } }, page_size: 50 }),
-    });
-    const queryData = await rQuery.json();
+    const status = pageData.properties?.Status?.select?.name || '';
+    if (status !== 'Cancelado') return; // seguranca extra: so age se realmente estiver Cancelado
 
-    for (const page of (queryData.results || [])) {
-      const status = page.properties?.Status?.select?.name || '';
-      if (status !== 'Cancelado') continue;
-      const eventId = page.properties?.['Google Event ID']?.rich_text?.[0]?.plain_text || '';
-      if (eventId) {
-        await excluirEventoEnsaioExterno(eventId);
-        console.log('[webhook-cancelamento-notion] evento removido do Calendar para reserva ' + reservaId);
-      }
+    const eventId = pageData.properties?.['Google Event ID']?.rich_text?.[0]?.plain_text || '';
+    if (eventId) {
+      await excluirEventoEnsaioExterno(eventId);
+      console.log('[webhook-cancelamento-notion] evento removido do Calendar: ' + eventId);
+    } else {
+      console.log('[webhook-cancelamento-notion] pagina sem Google Event ID, nada para remover do Calendar.');
+    }
+
+    const inicioStr = pageData.properties?.['Início']?.date?.start || '';
+    if (inicioStr) {
+      const dataStr = inicioStr.split('T')[0];
+      await expirarOfertaResidenteSeExistir(dataStr);
     }
   } catch (err) {
     console.error('[webhook-cancelamento-notion] erro:', err.message);
