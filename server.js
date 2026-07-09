@@ -1676,6 +1676,21 @@ app.post('/verificar-conflito', async (req, res) => {
   }
 });
 
+app.get('/residente-dia/:data', async (req, res) => {
+  const data = req.params.data;
+  if (!data) return res.status(400).json({ ok: false, error: 'data obrigatoria' });
+  try {
+    // Janela do dia inteiro (07h as 22h, horario de funcionamento da sala)
+    const inicioISO = data + 'T07:00:00-03:00';
+    const fimISO = data + 'T22:00:00-03:00';
+    const sobrepoe = await verificarSobreposicaoResidente(inicioISO, fimISO, RESIDENTE_CIA_PLA_CALENDAR);
+    res.json({ ok: true, ehResidente: sobrepoe, semana: getNumeroSemanaISO(data) });
+  } catch (err) {
+    console.error('[residente-dia] erro:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.post('/reservar-sala', async (req, res) => {
   const { projeto, coletivo, diretor, contatoNome, whatsapp, qtdPessoas, notaFiscal, tipoEnsaio, blocos, cpfCnpj } = req.body;
 
