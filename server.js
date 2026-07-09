@@ -1681,10 +1681,18 @@ app.get('/residente-dia/:data', async (req, res) => {
   if (!data) return res.status(400).json({ ok: false, error: 'data obrigatoria' });
   try {
     // Janela do dia inteiro (07h as 22h, horario de funcionamento da sala)
-    const inicioISO = data + 'T07:00:00-03:00';
-    const fimISO = data + 'T22:00:00-03:00';
-    const sobrepoe = await verificarSobreposicaoResidente(inicioISO, fimISO, RESIDENTE_CIA_PLA_CALENDAR);
-    res.json({ ok: true, ehResidente: sobrepoe, semana: getNumeroSemanaISO(data) });
+    const timeMinISO = data + 'T07:00:00-03:00';
+    const timeMaxISO = data + 'T22:00:00-03:00';
+    const intervalosRaw = await obterOcupacaoResidente(timeMinISO, timeMaxISO);
+    const intervalos = intervalosRaw.map(iv => {
+      const inicioBr = new Date(iv.start.getTime() - 3 * 60 * 60000);
+      const fimBr = new Date(iv.end.getTime() - 3 * 60 * 60000);
+      return {
+        inicio: inicioBr.toISOString().split('T')[1].slice(0, 5),
+        fim: fimBr.toISOString().split('T')[1].slice(0, 5),
+      };
+    });
+    res.json({ ok: true, ehResidente: intervalos.length > 0, intervalos, semana: getNumeroSemanaISO(data) });
   } catch (err) {
     console.error('[residente-dia] erro:', err.message);
     res.status(500).json({ ok: false, error: err.message });
