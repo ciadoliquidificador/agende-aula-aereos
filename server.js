@@ -578,6 +578,110 @@ app.post('/inscricao-commedia', async (req, res) => {
 });
 
 // ============================================================
+// PESSOAS — Cadastro compartilhado (reaproveita banco/token da Commedia)
+// ============================================================
+app.get('/pessoa/:cpf', async (req, res) => {
+  const cpfLimpo = (req.params.cpf || '').replace(/\D/g, '');
+  if (!cpfLimpo || cpfLimpo.length < 11) return res.json({ ok: true, encontrado: false });
+  try {
+    const r = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_COMMEDIA}/query`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN_COMMEDIA}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'CPF', rich_text: { equals: cpfLimpo } },
+        page_size: 1,
+        sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+      }),
+    });
+    const data = await r.json();
+    if (!data.results || data.results.length === 0) return res.json({ ok: true, encontrado: false });
+    const p = data.results[0].properties;
+    const pessoa = {
+      nomeCompleto: p['Nome Completo']?.title?.[0]?.plain_text || '',
+      nomeSocial: p['Nome Social']?.rich_text?.[0]?.plain_text || '',
+      rg: p['RG']?.rich_text?.[0]?.plain_text || '',
+      telefone: p['Telefone']?.phone_number || '',
+      email: p['Email']?.email || '',
+      cep: p['CEP']?.rich_text?.[0]?.plain_text || '',
+      rua: p['Rua']?.rich_text?.[0]?.plain_text || '',
+      numero: p['Número']?.rich_text?.[0]?.plain_text || '',
+      complemento: p['Complemento']?.rich_text?.[0]?.plain_text || '',
+      bairro: p['Bairro']?.rich_text?.[0]?.plain_text || '',
+      cidade: p['Cidade']?.rich_text?.[0]?.plain_text || '',
+      estado: p['Estado']?.rich_text?.[0]?.plain_text || '',
+    };
+    return res.json({ ok: true, encontrado: true, pessoa });
+  } catch (err) {
+    console.error('[pessoa] erro:', err.message);
+    return res.json({ ok: false, encontrado: false, erro: err.message });
+  }
+});
+
+// ============================================================
+// DANCAS BRASILEIRAS — Inscricao (usa o mesmo banco da Commedia)
+// ============================================================
+app.get('/vagas-dancas', async (req, res) => {
+  try {
+    const r = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_COMMEDIA}/query`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN_COMMEDIA}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { and: [
+        { property: 'Curso de Origem', select: { equals: 'Danças Brasileiras' } },
+        { property: 'Status', select: { does_not_equal: 'Cancelado' } },
+      ] } }),
+    });
+    const data = await r.json();
+    const ocupadas = data.results ? data.results.length : 0;
+    res.json({ ok: true, inscritos: ocupadas });
+  } catch (err) {
+    res.json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/inscricao-dancas', async (req, res) => {
+  const { nomeCompleto, nomeSocial, rg, cpf, telefone, email, rua, numero, complemento, bairro, cep, cidade, estado, formaPagamento, assinatura, observacoes } = req.body;
+  if (!nomeCompleto || !cpf || !telefone || !email || !formaPagamento || !assinatura) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
+  const cpfLimpo = cpf.replace(/\D/g, '');
+  if (cpfLimpo.length < 11) return res.status(400).json({ error: 'CPF inválido' });
+  const numLimpo = telefone.replace(/\D/g, '');
+  if (numLimpo.length < 11) return res.status(400).json({ error: 'Telefone inválido' });
+  try {
+    const notionResp = await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN_COMMEDIA}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent: { database_id: NOTION_DB_COMMEDIA }, properties: {
+        'Nome Completo':      { title:        [{ text: { content: nomeCompleto } }] },
+        'Nome Social':        { rich_text:    [{ text: { content: nomeSocial || '' } }] },
+        'CPF':                { rich_text:    [{ text: { content: cpfLimpo } }] },
+        'RG':                 { rich_text:    [{ text: { content: rg || '' } }] },
+        'Telefone':           { phone_number: telefone },
+        'Email':              { email:        email },
+        'CEP':                { rich_text:    [{ text: { content: cep || '' } }] },
+        'Rua':                { rich_text:    [{ text: { content: rua || '' } }] },
+        'Número':             { rich_text:    [{ text: { content: numero || '' } }] },
+        'Complemento':        { rich_text:    [{ text: { content: complemento || '' } }] },
+        'Bairro':             { rich_text:    [{ text: { content: bairro || '' } }] },
+        'Cidade':             { rich_text:    [{ text: { content: cidade || '' } }] },
+        'Estado':             { rich_text:    [{ text: { content: estado || '' } }] },
+        'Forma de Pagamento': { select:       { name: formaPagamento } },
+        'Status':             { select:       { name: 'Pendente' } },
+        'Assinatura':         { rich_text:    [{ text: { content: assinatura } }] },
+        'Observações':        { rich_text:    [{ text: { content: observacoes || '' } }] },
+        'Curso de Origem':    { select:       { name: 'Danças Brasileiras' } },
+      }}),
+    });
+    if (!notionResp.ok) { const err = await notionResp.json(); console.error('[dancas]', err); return res.status(500).json({ error: 'Erro Notion' }); }
+    const primeiroNome = nomeCompleto.split(' ')[0];
+    const isPix = formaPagamento.includes('Pix');
+    const msgAdmin = `💃 *Nova inscrição — Danças Brasileiras*\n\n👤 ${nomeCompleto}\n📱 ${telefone}\n📧 ${email}\n💳 ${formaPagamento}`;
+    const msgUser = `Olá, ${primeiroNome}! 💃\n\nSua inscrição no curso de *Danças Brasileiras* com Roberta Viana foi recebida!\n\n📅 De 05/08 a 16/12\n⏰ Quartas-feiras, 20h às 21h30\n\n${isPix ? 'Envie R$ 900,00 via Pix para *fabio@cialiquidificador.com.br* e mande o comprovante aqui.' : 'Acesse o link de pagamento parcelado para concluir sua inscrição.'}\n\nQualquer dúvida é só responder aqui! ✨`;
+    try { const adminId = await getOrCreateContactId('5511986899433'); if (adminId) await enviarWhatsApp('5511986899433', msgAdmin); } catch(e) {}
+    try { await enviarWhatsApp('55' + numLimpo, msgUser); } catch(e) {}
+    return res.json({ ok: true });
+  } catch (err) { console.error('[dancas]', err.message); return res.status(500).json({ error: 'Erro interno' }); }
+});
+
+// ============================================================
 // APP DO PRODUTOR — Relatórios de Apresentação
 // ============================================================
 const { google } = require('googleapis');
