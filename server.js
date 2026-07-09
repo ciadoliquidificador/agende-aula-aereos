@@ -1538,7 +1538,7 @@ app.post('/calcular-ensaio', async (req, res) => {
 
     const subtotal = resultado.subtotal;
     const totalComNota = notaFiscal ? Math.round(subtotal * 1.10 * 100) / 100 : subtotal;
-    const deposito = Math.round(totalComNota * 0.5 * 100) / 100;
+    const deposito = Math.round(totalComNota * 0.3 * 100) / 100;
 
     res.json({ ok: true, ...resultado, totalFinal: totalComNota, deposito });
   } catch (err) {
@@ -1575,7 +1575,7 @@ app.post('/reservar-sala', async (req, res) => {
 
     const subtotal = resultado.subtotal;
     const totalFinal = notaFiscal ? Math.round(subtotal * 1.10 * 100) / 100 : subtotal;
-    const deposito = Math.round(totalFinal * 0.5 * 100) / 100;
+    const deposito = Math.round(totalFinal * 0.3 * 100) / 100;
 
     const blocosResidentes = [];
     for (const b of blocos) {
