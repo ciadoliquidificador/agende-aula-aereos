@@ -2262,6 +2262,52 @@ setInterval(async () => {
 }, 15 * 60 * 1000);
 
 // ============================================================
+// WEBHOOK — Cancelamento disparado por Automation do Notion
+// (quando alguem muda o Status para "Cancelado" direto na tabela)
+// ============================================================
+app.post('/webhook-cancelamento-notion', async (req, res) => {
+  res.status(200).json({ ok: true }); // responde rapido, processa depois
+
+  try {
+    const body = req.body || {};
+    let pageId = body.pageId || body.page_id || null;
+    let reservaId = body.reservaId || body['Reserva ID'] || null;
+
+    if (pageId && !reservaId) {
+      const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+      });
+      const pageData = await rPage.json();
+      reservaId = pageData.properties?.['Reserva ID']?.rich_text?.[0]?.plain_text || null;
+    }
+
+    if (!reservaId) {
+      console.error('[webhook-cancelamento-notion] payload sem reservaId/pageId reconhecivel:', JSON.stringify(body).slice(0, 500));
+      return;
+    }
+
+    const rQuery = await fetch('https://api.notion.com/v1/databases/' + SALA_ENSAIO_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Reserva ID', rich_text: { equals: reservaId } }, page_size: 50 }),
+    });
+    const queryData = await rQuery.json();
+
+    for (const page of (queryData.results || [])) {
+      const status = page.properties?.Status?.select?.name || '';
+      if (status !== 'Cancelado') continue;
+      const eventId = page.properties?.['Google Event ID']?.rich_text?.[0]?.plain_text || '';
+      if (eventId) {
+        await excluirEventoEnsaioExterno(eventId);
+        console.log('[webhook-cancelamento-notion] evento removido do Calendar para reserva ' + reservaId);
+      }
+    }
+  } catch (err) {
+    console.error('[webhook-cancelamento-notion] erro:', err.message);
+  }
+});
+
+// ============================================================
 // GRUPOS RESIDENTES — Detecção dinâmica via Google Calendar
 // ============================================================
 const RESIDENTE_CIA_PLA_CALENDAR = 'ed190e635321c23ff3c66a1d478aa453398590a9cb97c215f3935580ba1f8480@group.calendar.google.com';
