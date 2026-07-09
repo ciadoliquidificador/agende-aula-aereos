@@ -1684,7 +1684,8 @@ app.get('/residente-dia/:data', async (req, res) => {
     const timeMinISO = data + 'T07:00:00-03:00';
     const timeMaxISO = data + 'T22:00:00-03:00';
     const intervalosRaw = await obterOcupacaoResidente(timeMinISO, timeMaxISO);
-    const intervalos = intervalosRaw.map(iv => {
+    const intervalosComBuffer = aplicarBufferIntervalos(intervalosRaw);
+    const intervalos = intervalosComBuffer.map(iv => {
       const inicioBr = new Date(iv.start.getTime() - 3 * 60 * 60000);
       const fimBr = new Date(iv.end.getTime() - 3 * 60 * 60000);
       return {
