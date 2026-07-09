@@ -2188,7 +2188,7 @@ async function contarRemarcacoesResidente(residente, mesStr, semanaStr) {
 
 async function registrarOfertaRemarcacao(residente, dataOriginal) {
   const mesStr = dataOriginal.slice(0, 7);
-  await fetch('https://api.notion.com/v1/pages', {
+  const resp = await fetch('https://api.notion.com/v1/pages', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -2202,7 +2202,88 @@ async function registrarOfertaRemarcacao(residente, dataOriginal) {
       },
     }),
   });
+  const data = await resp.json();
+  return data.id;
 }
+
+// ============================================================
+// REMARCACAO DIRETA DO RESIDENTE (Cia Pla) - sem fluxo de pagamento
+// ============================================================
+app.get('/remarcacao/:id', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + req.params.id, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    if (!r.ok) return res.json({ ok: false, erro: 'Oferta nao encontrada.' });
+    const page = await r.json();
+    const p = page.properties;
+    const status = p['Status']?.select?.name || '';
+    const residente = p['Residente']?.select?.name || '';
+    const dataOriginal = p['Data Original']?.date?.start || '';
+    const dataRemarcada = p['Data Remarcada']?.date?.start || '';
+    res.json({ ok: true, status, residente, dataOriginal, dataRemarcada });
+  } catch (err) {
+    console.error('[remarcacao] erro ao buscar oferta:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/confirmar-remarcacao', async (req, res) => {
+  const { ofertaId, data, inicio, fim } = req.body;
+  if (!ofertaId || !data || !inicio || !fim) return res.status(400).json({ ok: false, erro: 'Campos obrigatorios faltando.' });
+
+  try {
+    const rOferta = await fetch('https://api.notion.com/v1/pages/' + ofertaId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    if (!rOferta.ok) return res.json({ ok: false, erro: 'Oferta nao encontrada.' });
+    const oferta = await rOferta.json();
+    const statusAtual = oferta.properties['Status']?.select?.name || '';
+    if (statusAtual !== 'Oferecida') {
+      return res.json({ ok: false, erro: 'Essa remarcacao ja foi usada ou expirou. Fale com a equipe do espaco.' });
+    }
+
+    const inicioISO = data + 'T' + inicio + ':00-03:00';
+    const fimISO = data + 'T' + fim + ':00-03:00';
+
+    const disponibilidade = await verificarDisponibilidade(inicioISO, fimISO);
+    if (!disponibilidade.disponivel) {
+      return res.json({ ok: false, erro: 'Esse horario ja esta ocupado. Escolha outro.' });
+    }
+
+    const calendar = await getGoogleCalendarClient();
+    await calendar.events.insert({
+      calendarId: RESIDENTE_CIA_PLA_CALENDAR,
+      requestBody: {
+        summary: 'Cia Plá — Ensaio remarcado',
+        description: 'Remarcacao referente a oferta ' + ofertaId,
+        start: { dateTime: inicioISO },
+        end: { dateTime: fimISO },
+      },
+    });
+
+    await fetch('https://api.notion.com/v1/pages/' + ofertaId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: {
+        'Status': { select: { name: 'Remarcada' } },
+        'Data Remarcada': { date: { start: inicioISO } },
+      }}),
+    });
+
+    const dataFmt = data.split('-').reverse().join('/');
+    const msgConfirmacao = 'Prontinho! ✅\n\nSeu ensaio foi remarcado para ' + dataFmt + ', das ' + inicio + ' às ' + fim + '.';
+    try { await enviarWhatsApp(WHATSAPP_CIA_PLA, msgConfirmacao); } catch(e) {}
+    const msgInterna = '🔄 Cia Plá remarcou o ensaio para ' + dataFmt + ' (' + inicio + '-' + fim + ') — oferta ' + ofertaId;
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) {}
+    try { await enviarWhatsApp(WHATSAPP_CIA, msgInterna); } catch(e) {}
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[confirmar-remarcacao] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
 
 async function notificarResidenteSobreposicao(blocosAfetados) {
   for (const b of blocosAfetados) {
@@ -2212,14 +2293,15 @@ async function notificarResidenteSobreposicao(blocosAfetados) {
 
     const { totalMes, naMesmaSemana } = await contarRemarcacoesResidente('Cia Plá', mesStr, semanaStr);
 
-    await registrarOfertaRemarcacao('Cia Plá', b.data);
+    const ofertaId = await registrarOfertaRemarcacao('Cia Plá', b.data);
 
     const limiteAtingido = totalMes >= 4 || naMesmaSemana >= 1;
     const avisoLimite = limiteAtingido
       ? '\n\n⚠️ Atenção: o limite de remarcações do mês (4x, sendo só 1x por semana) já foi atingido ou está no limite. Fale com a gente para verificar.'
       : '\n\nVocês já usaram ' + totalMes + ' de 4 remarcações este mês.';
 
-    const msg = 'Olá! 🎭\n\nO horário de ensaio de vocês do dia ' + dataFmt + ' (' + b.inicio + ' às ' + b.fim + ') foi reservado por um cliente pagante, conforme nosso acordo.\n\nVocês podem remarcar essas horas em outro dia disponível este mês:\nhttps://agende-ensaio.ciadoliquidificador.com.br' + avisoLimite;
+    const linkRemarcacao = 'https://remarcar-residente.ciadoliquidificador.com.br?oferta=' + ofertaId;
+    const msg = 'Olá! 🎭\n\nO horário de ensaio de vocês do dia ' + dataFmt + ' (' + b.inicio + ' às ' + b.fim + ') foi reservado por um cliente pagante, conforme nosso acordo.\n\nVocês podem remarcar essas horas direto por aqui, sem passar por pagamento:\n' + linkRemarcacao + avisoLimite;
 
     try {
       await enviarWhatsAppComHorarioComercial(WHATSAPP_CIA_PLA, msg);
