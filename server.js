@@ -1669,7 +1669,7 @@ app.post('/verificar-conflito', async (req, res) => {
     const inicioISO = data + 'T' + inicio + ':00-03:00';
     const fimISO = data + 'T' + fim + ':00-03:00';
     const resultado = await verificarDisponibilidade(inicioISO, fimISO);
-    res.json({ ok: true, disponivel: resultado.disponivel });
+    res.json({ ok: true, disponivel: resultado.disponivel, ehResidente: !!resultado.ehResidente, semana: getNumeroSemanaISO(data) });
   } catch (err) {
     console.error('[sala-ensaio] verificar-conflito:', err.message);
     res.status(500).json({ ok: false, error: err.message });
