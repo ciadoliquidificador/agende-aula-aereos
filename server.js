@@ -1218,6 +1218,20 @@ app.get('/apresentacoes-hoje', async (req, res) => {
   }
 });
 
+async function nomeTituloDaPaginaRelatorio(pageId) {
+  try {
+    const rp = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    if (!rp.ok) return '';
+    const pd = await rp.json();
+    for (const key in (pd.properties || {})) {
+      if (pd.properties[key].type === 'title') return (pd.properties[key].title?.[0]?.plain_text || '').trim();
+    }
+    return '';
+  } catch (e) { return ''; }
+}
+
 app.post('/relatorio-apresentacao', async (req, res) => {
   const { notionPageId, local, localNome, horario, data, produtor, publico, intercorrencia, fotos } = req.body;
   if (!notionPageId || !produtor || publico === undefined) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
@@ -1230,9 +1244,20 @@ app.post('/relatorio-apresentacao', async (req, res) => {
     const nomePasta = `${data}_${localSlug}_${produtorSlug}`;
     const subpastaId = await criarOuObterSubpasta(msToken, nomePasta);
 
+    let trabalhoNome = '';
+    try {
+      const rPagina = await fetch('https://api.notion.com/v1/pages/' + notionPageId, {
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+      });
+      const paginaData = await rPagina.json();
+      const trabalhoRel = paginaData.properties?.['🎭 Trabalhos']?.relation || [];
+      if (trabalhoRel.length) trabalhoNome = await nomeTituloDaPaginaRelatorio(trabalhoRel[0].id);
+    } catch (e) { console.error('[produtor] erro ao buscar nome do trabalho:', e.message); }
+    const trabalhoSlug = slugify(trabalhoNome || 'apresentacao');
+
     const labelsFotos = ['inicio', 'meio', 'fim', 'publico'];
     const uploadPromises = fotosValidas.map((foto, i) => {
-      const filename = `${labelsFotos[i] || 'foto' + (i+1)}.jpg`;
+      const filename = `${data}_${trabalhoSlug}_${localSlug}_${produtorSlug}_${labelsFotos[i] || 'foto' + (i+1)}.jpg`;
       return uploadFotoParaPasta(msToken, subpastaId, foto, filename);
     });
     await Promise.all(uploadPromises);
