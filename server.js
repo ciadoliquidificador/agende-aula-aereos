@@ -277,6 +277,18 @@ setInterval(async () => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+app.post('/teste-agendamento-fila', async (req, res) => {
+  const { minutos } = req.body;
+  const min = parseInt(minutos, 10) || 3;
+  try {
+    const enviarEm = new Date(Date.now() + min * 60000).toISOString();
+    await agendarMensagemFila(WHATSAPP_FABIO, '🧪 Teste da FILA PROPRIA — se voce esta lendo isso ' + min + ' minuto(s) depois de pedir o teste, a fila esta funcionando! Agendado as ' + new Date().toISOString() + ' para ' + enviarEm, enviarEm);
+    res.json({ ok: true, agora: new Date().toISOString(), agendadoPara: enviarEm });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.post('/teste-agendamento-digisac', async (req, res) => {
   const { minutos } = req.body;
   const min = parseInt(minutos, 10) || 3;
