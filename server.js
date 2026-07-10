@@ -1040,7 +1040,7 @@ app.get('/debug-horario-comercial', async (req, res) => {
   }
 });
 
-app.get('/professores-sub', (req, res) => {app.get('/professores-sub', (req, res) => {
+app.get('/professores-sub', (req, res) => {
   res.json({ ok: true, professores: PROFESSORES_SUB });
 });
 
