@@ -1024,7 +1024,23 @@ async function agendarLembreteSub(numeroSubstituto, nomeSubstituto, professorFal
   }
 }
 
-app.get('/professores-sub', (req, res) => {
+app.get('/debug-horario-comercial', async (req, res) => {
+  try {
+    const agora = new Date();
+    const agendamento = await calcularProximoHorarioComercial();
+    res.json({
+      ok: true,
+      agora: agora.toISOString(),
+      agoraBrasilia: new Date(agora.getTime() - 3 * 60 * 60000).toISOString(),
+      dentroDoHorarioComercial: agendamento === null,
+      proximoEnvioAgendadoPara: agendamento ? agendamento.toISOString() : null,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/professores-sub', (req, res) => {app.get('/professores-sub', (req, res) => {
   res.json({ ok: true, professores: PROFESSORES_SUB });
 });
 
