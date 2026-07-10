@@ -209,16 +209,71 @@ async function calcularProximoHorarioComercial() {
 async function enviarWhatsAppComHorarioComercial(numero, texto) {
   const agendamento = await calcularProximoHorarioComercial();
   console.log('[horario-comercial] agora=' + new Date().toISOString() + ' agendamento=' + (agendamento ? agendamento.toISOString() : 'null (envio imediato)'));
-  const contactId = await getOrCreateContactId(numero);
-  if (!contactId) throw new Error('Contato nao encontrado');
-  const body = { text: texto, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot' };
-  if (agendamento) body.scheduledAt = agendamento.toISOString();
-  const response = await fetch(DIGISAC_BASE + '/messages', {
-    method: 'POST', headers: digisacHeaders, body: JSON.stringify(body),
-  });
-  if (!response.ok) { const t = await response.text(); throw new Error('Digisac ' + response.status + ': ' + t); }
-  return { agendado: !!agendamento };
+  if (agendamento) {
+    await agendarMensagemFila(numero, texto, agendamento.toISOString());
+    return { agendado: true };
+  }
+  await enviarWhatsApp(numero, texto);
+  return { agendado: false };
 }
+
+const FILA_MENSAGENS_DB = '633583f0-c5b0-4e4c-81a0-48fdbd3db891';
+
+async function agendarMensagemFila(numero, texto, enviarEmISO) {
+  await fetch('https://api.notion.com/v1/pages', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      parent: { database_id: FILA_MENSAGENS_DB },
+      properties: {
+        'Título': { title: [{ text: { content: numero + ' — ' + enviarEmISO } }] },
+        'Número': { rich_text: [{ text: { content: numero } }] },
+        'Texto': { rich_text: [{ text: { content: texto } }] },
+        'Enviar Em': { date: { start: enviarEmISO } },
+        'Enviado': { checkbox: false },
+      },
+    }),
+  });
+}
+
+setInterval(async () => {
+  try {
+    const agora = new Date().toISOString();
+    const r = await fetch('https://api.notion.com/v1/databases/' + FILA_MENSAGENS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Enviado', checkbox: { equals: false } },
+          { property: 'Enviar Em', date: { on_or_before: agora } },
+        ]},
+        page_size: 20,
+      }),
+    });
+    const d = await r.json();
+    for (const page of (d.results || [])) {
+      const numero = page.properties['Número']?.rich_text?.[0]?.plain_text || '';
+      const texto = page.properties['Texto']?.rich_text?.[0]?.plain_text || '';
+      try {
+        if (numero && texto) await enviarWhatsApp(numero, texto);
+        console.log('[fila-mensagens] enviada para ' + numero);
+      } catch (e) {
+        console.error('[fila-mensagens] erro ao enviar para ' + numero + ':', e.message);
+      }
+      try {
+        await fetch('https://api.notion.com/v1/pages/' + page.id, {
+          method: 'PATCH',
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ properties: { 'Enviado': { checkbox: true } } }),
+        });
+      } catch (e) {
+        console.error('[fila-mensagens] erro ao marcar como enviada:', e.message);
+      }
+    }
+  } catch (e) {
+    console.error('[fila-mensagens] erro ao verificar fila:', e.message);
+  }
+}, 60000);
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
@@ -344,14 +399,7 @@ app.post('/agendar-mensagem', async (req, res) => {
   try {
     const contactId = await getOrCreateContactId(numero);
     if (!contactId) return res.json({ ok: false, erro: 'Contato nao encontrado.' });
-    const response = await fetch(DIGISAC_BASE + '/messages', {
-      method: 'POST', headers: digisacHeaders,
-      body: JSON.stringify({
-        text: texto, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot',
-        scheduledAt: new Date(enviarEm).toISOString(),
-      }),
-    });
-    if (!response.ok) { const t = await response.text(); throw new Error('Digisac ' + response.status + ': ' + t); }
+    await agendarMensagemFila(numero, texto, new Date(enviarEm).toISOString());
     return res.json({ ok: true });
   } catch (err) {
     console.error('[agendar-mensagem] erro:', err.message);
