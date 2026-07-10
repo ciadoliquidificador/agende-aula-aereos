@@ -9,7 +9,8 @@
     "@notionhq/client": "^5.22.0",
     "express": "^4.18.2",
     "googleapis": "^173.0.0",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "pdfkit": "^0.19.1"
   },
   "engines": {
     "node": "18.x"

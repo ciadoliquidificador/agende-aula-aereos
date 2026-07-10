@@ -2164,6 +2164,233 @@ app.post('/calcular-ensaio', async (req, res) => {
   }
 });
 
+// ============================================================
+// CONTRATO ONLINE — Sala de Ensaio (clickwrap com trilha de auditoria)
+// ============================================================
+const CONTRATOS_SALA_DB = '9384a7a1-6356-401e-ac48-cb65eb43e68a';
+const VERSAO_TEXTO_CONTRATO = '2026-07-v1';
+
+function montarTextoContrato({ nome, rg, cpf, endereco, blocos, valorTotal, tipoEnsaio, aereos, tipoComprovacao, detalhesComprovacao, seguro, contatoEmergenciaNome, contatoEmergenciaTelefone }) {
+  const linhasDatas = blocos.map(b => {
+    const dataFmt = b.data.split('-').reverse().join('/');
+    return dataFmt + ' — ' + b.inicio + ' às ' + b.fim;
+  }).join('\n');
+
+  let clausulaAereos = '6.4. Não serão utilizados aparelhos aéreos (vigas, tecido, lira, trapézio, corda) nesta cessão.';
+  if (aereos) {
+    clausulaAereos = '6.4. O BENEFICIÁRIO declara que utilizará aparelhos aéreos e apresentou comprovação de aptidão na modalidade: ' + tipoComprovacao + '.\nDetalhes: ' + (detalhesComprovacao || '-');
+  }
+
+  return 'CONTRATO DE USO DO ESPAÇO LIQUIDIFICADOR\n' +
+    'Cessão onerosa e temporária de uso\n\n' +
+    '1. DAS PARTES\n\n' +
+    'CEDENTE: CRISTIANE SOCCI LEONEL ME, CNPJ 28.398.119/0001-83, nome fantasia Cia. do Liquidificador / Espaço Liquidificador, com sede na Rua Doutor Carvalho de Mendonça, 67, Campos Elíseos, CEP 01201-010, São Paulo/SP.\n\n' +
+    'BENEFICIÁRIO(A): ' + nome + ', RG nº ' + rg + ' e CPF nº ' + cpf + ', residente e domiciliado(a) à ' + endereco + '.\n\n' +
+    '2. DO OBJETO\n\n' +
+    '2.1. A CEDENTE cede ao BENEFICIÁRIO, de forma onerosa e temporária, o uso do espaço de ensaio, exclusivamente para os fins de ' + (tipoEnsaio || 'ensaio') + ', nas datas e horários abaixo.\n' +
+    '2.2. A presente cessão é pessoal e intransferível, não gerando ao BENEFICIÁRIO qualquer direito de posse, locação ou vínculo locatício, sendo vedada a sublocação, empréstimo ou cessão a terceiros.\n\n' +
+    '3. DAS DATAS E HORÁRIOS DE USO\n\n' + linhasDatas + '\n\n' +
+    '4. DO PREÇO E DA FORMA DE PAGAMENTO\n\n' +
+    '4.1. Pelo uso do espaço, o BENEFICIÁRIO pagará à CEDENTE o valor total de R$ ' + valorTotal.toFixed(2) + ', apurado conforme a tabela de valores vigente do Espaço Liquidificador.\n' +
+    '4.5. O pagamento será integral e antecipado (sinal de 30% para garantir a reserva, saldo até o início do uso), por PIX, com envio do comprovante pelo WhatsApp.\n\n' +
+    '5. DA RESPONSABILIDADE POR ACIDENTES\n\n' +
+    '5.1. O BENEFICIÁRIO reconhece que as atividades artísticas, físicas e circenses são executadas por sua própria conta, iniciativa e risco, declarando possuir a aptidão técnica necessária.\n' +
+    '5.2. O BENEFICIÁRIO responde pelos acidentes e lesões que decorram de sua própria conduta, do uso inadequado do espaço ou equipamentos, ou de atos de seus convidados.\n\n' +
+    '6. DOS DIREITOS E DEVERES DO BENEFICIÁRIO\n\n' +
+    '6.1. O BENEFICIÁRIO obriga-se a manter o espaço trancado durante ausências e devolver a chave imediatamente ao encerrar as atividades.\n' +
+    '6.2. Devolver o espaço limpo e em condições de uso, ressarcindo a CEDENTE por danos causados, ressalvado o desgaste natural.\n' +
+    '6.3. É vedado o acesso ao acervo da Cia. do Liquidificador.\n' +
+    clausulaAereos + '\n' +
+    '6.5. Respeitar a vizinhança, os níveis de ruído e os horários contratados. Vedada a realização de festas ou eventos comerciais sem autorização prévia e por escrito.\n\n' +
+    'SEGURO PESSOAL: ' + (seguro || 'Não informado') + '\n' +
+    'CONTATO DE EMERGÊNCIA: ' + (contatoEmergenciaNome || '-') + ' — ' + (contatoEmergenciaTelefone || '-') + '\n\n' +
+    '9. DA POLÍTICA DE CANCELAMENTO E REMARCAÇÃO\n\n' +
+    '9.1. Cancelamento com 48h ou mais de antecedência: direito à remarcação ou devolução do valor.\n' +
+    '9.2. Cancelamento entre 24h e 48h: retenção de 50% do valor.\n' +
+    '9.3. Cancelamento com menos de 24h ou não comparecimento: retenção integral do valor.\n\n' +
+    '10. DA PROTEÇÃO DE DADOS (LGPD)\n\n' +
+    '10.1. Os dados pessoais do BENEFICIÁRIO são tratados exclusivamente para a execução deste contrato e cumprimento de obrigações legais (art. 7º, II e V, Lei 13.709/2018), não sendo compartilhados com terceiros salvo exigência legal.\n\n' +
+    '12. DA ASSINATURA ELETRÔNICA\n\n' +
+    '12.1. As partes reconhecem a validade da assinatura eletrônica deste instrumento, nos termos do art. 10, §2º, da MP 2.200-2/2001.\n\n' +
+    '13. DO FORO\n\n' +
+    '13.1. Fica eleito o foro da comarca de São Paulo/SP.';
+}
+
+async function gerarPdfContrato(textoContrato, { nome, dataHoraISO, ip, dispositivo, assinaturaDigitada }) {
+  const PDFDocument = require('pdfkit');
+  const chunks = [];
+  const doc = new PDFDocument({ margin: 50 });
+  doc.on('data', (c) => chunks.push(c));
+  const fimPromise = new Promise((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+  doc.fontSize(9).text(textoContrato, { align: 'left' });
+  doc.moveDown(2);
+  doc.fontSize(9).text('--- ASSINATURA ELETRÔNICA ---');
+  doc.text('Assinado por: ' + assinaturaDigitada);
+  doc.text('Data/Hora: ' + dataHoraISO);
+  doc.text('IP: ' + ip);
+  doc.text('Dispositivo: ' + dispositivo);
+
+  doc.end();
+  return await fimPromise;
+}
+
+async function uploadBufferOneDrive(token, folderId, buffer, filename) {
+  const uploadUrl = 'https://graph.microsoft.com/v1.0/users/' + MS_USER + '/drive/items/' + folderId + ':/' + encodeURIComponent(filename) + ':/content';
+  const r = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/octet-stream' },
+    body: buffer,
+  });
+  if (!r.ok) { const t = await r.text(); throw new Error('Upload OneDrive: ' + t); }
+  return await r.json();
+}
+
+app.get('/contrato/:reservaId', async (req, res) => {
+  const { reservaId } = req.params;
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + SALA_ENSAIO_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Reserva ID', rich_text: { equals: reservaId } }, page_size: 50 }),
+    });
+    const d = await r.json();
+    const registros = d.results || [];
+    if (registros.length === 0) return res.json({ ok: false, erro: 'Reserva não encontrada.' });
+
+    const p0 = registros[0].properties;
+    const blocos = registros.map(page => {
+      const pp = page.properties;
+      const inicioISO = pp['Início']?.date?.start || '';
+      const fimISO = pp['Fim']?.date?.start || '';
+      return {
+        data: inicioISO.split('T')[0],
+        inicio: inicioISO ? new Date(inicioISO).toISOString().slice(11, 16) : '',
+        fim: fimISO ? new Date(fimISO).toISOString().slice(11, 16) : '',
+      };
+    });
+
+    res.json({
+      ok: true,
+      projeto: p0['Nome do Projeto']?.rich_text?.[0]?.plain_text || '',
+      contatoNome: p0['Contato']?.rich_text?.[0]?.plain_text || '',
+      whatsapp: p0['WhatsApp']?.rich_text?.[0]?.plain_text || '',
+      tipoEnsaio: p0['Tipo de Ensaio']?.select?.name || '',
+      valorTotal: p0['Valor Total']?.number || 0,
+      status: p0['Status']?.select?.name || '',
+      blocos,
+    });
+  } catch (err) {
+    console.error('[contrato] erro ao buscar reserva:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/contrato/:reservaId/aceitar', async (req, res) => {
+  const { reservaId } = req.params;
+  const {
+    nome, rg, cpf, endereco, aereos, tipoComprovacao, detalhesComprovacao, comprovanteArquivo, comprovanteNomeArquivo,
+    seguro, contatoEmergenciaNome, contatoEmergenciaTelefone, aceite, assinaturaDigitada, dispositivo,
+  } = req.body;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+
+  if (!nome || !rg || !cpf || !endereco || !aceite || !assinaturaDigitada || !contatoEmergenciaNome || !contatoEmergenciaTelefone) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  if (aereos && (!tipoComprovacao || tipoComprovacao === '' || (tipoComprovacao !== 'Autodeclaração' && !comprovanteArquivo))) {
+    return res.status(400).json({ ok: false, erro: 'Preencha a comprovação de aptidão para aéreos.' });
+  }
+
+  try {
+    const rReserva = await fetch('https://api.notion.com/v1/databases/' + SALA_ENSAIO_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Reserva ID', rich_text: { equals: reservaId } }, page_size: 50 }),
+    });
+    const dReserva = await rReserva.json();
+    const registros = dReserva.results || [];
+    if (registros.length === 0) return res.json({ ok: false, erro: 'Reserva não encontrada.' });
+
+    const p0 = registros[0].properties;
+    const blocos = registros.map(page => {
+      const pp = page.properties;
+      const inicioISO = pp['Início']?.date?.start || '';
+      const fimISO = pp['Fim']?.date?.start || '';
+      return { data: inicioISO.split('T')[0], inicio: new Date(inicioISO).toISOString().slice(11, 16), fim: new Date(fimISO).toISOString().slice(11, 16) };
+    });
+    const valorTotal = p0['Valor Total']?.number || 0;
+    const tipoEnsaio = p0['Tipo de Ensaio']?.select?.name || '';
+
+    const msToken = await getMicrosoftToken();
+    const nomePasta = 'Contratos-SalaEnsaio-' + reservaId;
+    const folderId = await criarOuObterSubpasta(msToken, nomePasta);
+
+    let linkComprovante = '';
+    if (comprovanteArquivo) {
+      const base64Clean = comprovanteArquivo.replace(/^data:.*;base64,/, '');
+      const buffer = Buffer.from(base64Clean, 'base64');
+      const nomeArquivo = comprovanteNomeArquivo || 'comprovante-aptidao';
+      const uploaded = await uploadBufferOneDrive(msToken, folderId, buffer, nomeArquivo);
+      linkComprovante = await criarLinkCompartilhamento(msToken, uploaded.id);
+    }
+
+    const dataHoraISO = new Date().toISOString();
+    const textoContrato = montarTextoContrato({
+      nome, rg, cpf, endereco, blocos, valorTotal, tipoEnsaio,
+      aereos, tipoComprovacao, detalhesComprovacao, seguro, contatoEmergenciaNome, contatoEmergenciaTelefone,
+    });
+
+    const pdfBuffer = await gerarPdfContrato(textoContrato, { nome, dataHoraISO, ip, dispositivo, assinaturaDigitada });
+    const pdfUploaded = await uploadBufferOneDrive(msToken, folderId, pdfBuffer, 'contrato-assinado-' + reservaId + '.pdf');
+    const linkPdf = await criarLinkCompartilhamento(msToken, pdfUploaded.id);
+
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: CONTRATOS_SALA_DB },
+        properties: {
+          'Título': { title: [{ text: { content: nome + ' — ' + reservaId } }] },
+          'Reserva ID': { rich_text: [{ text: { content: reservaId } }] },
+          'Nome Completo': { rich_text: [{ text: { content: nome } }] },
+          'RG': { rich_text: [{ text: { content: rg } }] },
+          'CPF': { rich_text: [{ text: { content: cpf.replace(/\D/g, '') } }] },
+          'Endereço': { rich_text: [{ text: { content: endereco } }] },
+          'Envolve Aéreos': { select: { name: aereos ? 'Sim' : 'Não' } },
+          'Tipo de Comprovação': { select: { name: aereos ? tipoComprovacao : 'Não aplicável' } },
+          'Detalhes da Comprovação': { rich_text: [{ text: { content: detalhesComprovacao || '' } }] },
+          'Link do Comprovante': { url: linkComprovante || null },
+          'Tem Seguro Pessoal': { select: { name: seguro || 'Não informado' } },
+          'Contato de Emergência': { rich_text: [{ text: { content: contatoEmergenciaNome } }] },
+          'Telefone de Emergência': { phone_number: contatoEmergenciaTelefone },
+          'Aceite Confirmado': { checkbox: true },
+          'Assinatura Digitada': { rich_text: [{ text: { content: assinaturaDigitada } }] },
+          'Data/Hora do Aceite': { date: { start: dataHoraISO } },
+          'IP': { rich_text: [{ text: { content: ip || '' } }] },
+          'Dispositivo': { rich_text: [{ text: { content: dispositivo || '' } }] },
+          'Versão do Texto': { rich_text: [{ text: { content: VERSAO_TEXTO_CONTRATO } }] },
+          'Link do PDF Gerado': { url: linkPdf || null },
+          'Status': { select: { name: 'Aceito' } },
+        },
+      }),
+    });
+
+    const primeiroNome = nome.split(' ')[0];
+    const numLimpo = (p0['WhatsApp']?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
+    const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
+    if (numBr) {
+      try { await enviarWhatsApp(numBr, 'Prontinho, ' + primeiroNome + '! ✅\n\nSeu contrato foi assinado com sucesso. Aqui está o PDF:\n' + linkPdf); } catch(e) {}
+    }
+    const msgInterna = '📜 Contrato assinado — Reserva ' + reservaId + ' (' + nome + ')\nPDF: ' + linkPdf;
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) {}
+
+    res.json({ ok: true, linkPdf });
+  } catch (err) {
+    console.error('[contrato] erro ao aceitar:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/verificar-conflito', async (req, res) => {
   const { data, inicio, fim } = req.body;
   if (!data || !inicio || !fim) return res.status(400).json({ error: 'data, inicio, fim obrigatorios' });
@@ -2407,7 +2634,8 @@ async function processarRespostaSalaEnsaio(numero, texto, tipo, ticketId, estado
   if (estado.estado === 'aguardando_confirmacao_ensaio') {
     if (t === '1' || t.includes('confirmar')) {
       await atualizarStatusReserva(estado.reservaId, 'Aguardando Comprovante');
-      await enviarWhatsApp(numero, 'Perfeito, ' + estado.nome + '! ✅\n\nAguardamos o comprovante do sinal (R$ ' + estado.deposito.toFixed(2) + ') por aqui — pode mandar a foto ou print do PIX.');
+      const linkContrato = 'https://contrato-ensaio.ciadoliquidificador.com.br?reserva=' + estado.reservaId;
+      await enviarWhatsApp(numero, 'Perfeito, ' + estado.nome + '! ✅\n\nAguardamos o comprovante do sinal (R$ ' + estado.deposito.toFixed(2) + ') por aqui — pode mandar a foto ou print do PIX.\n\nTambém precisamos que você preencha e assine o contrato de uso do espaço, é rapidinho:\n' + linkContrato);
       CONVERSAS_ESTADO[numero] = { ...estado, estado: 'aguardando_comprovante_imagem' };
       const msgInterna = '✅ Cliente confirmou intenção — Reserva ' + estado.reservaId + '. Aguardando comprovante de R$ ' + estado.deposito.toFixed(2) + '.';
       try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) {}
