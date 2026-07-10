@@ -729,6 +729,127 @@ function slugify(text) {
   return (text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '-').slice(0, 30);
 }
 
+// ============================================================
+// APRESENTACOES — Sincronizacao com Google Calendar de verdade
+// (disparado por Automation do Notion quando Data/Horario/Local mudam)
+// ============================================================
+const CALENDARIO_APRESENTACOES = 'SUBSTITUA_PELO_ID_DO_CALENDARIO'; // ex: algumacoisa@group.calendar.google.com
+
+app.post('/webhook-apresentacao-notion', async (req, res) => {
+  res.status(200).json({ ok: true }); // responde rapido, processa depois
+
+  try {
+    const body = req.body || {};
+    console.log('[webhook-apresentacao-notion] payload recebido:', JSON.stringify(body).slice(0, 500));
+
+    const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
+    if (!pageId) {
+      console.error('[webhook-apresentacao-notion] payload sem page id reconhecivel.');
+      return;
+    }
+
+    const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pageData = await rPage.json();
+    const p = pageData.properties || {};
+
+    const dataStr = p['Data da Apresentação']?.date?.start || '';
+    if (!dataStr) {
+      console.log('[webhook-apresentacao-notion] pagina sem Data da Apresentacao, ignorando.');
+      return;
+    }
+    const dataSimples = dataStr.split('T')[0];
+
+    const horarioTexto = p['Horário Apresentação']?.rich_text?.[0]?.plain_text || '';
+    const localTitle = p['LOCAL']?.title?.[0]?.plain_text || '';
+    const localPlace = p['Local']?.place || null;
+
+    async function nomeTituloDaPaginaRel(id) {
+      try {
+        const rp = await fetch('https://api.notion.com/v1/pages/' + id, {
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+        });
+        if (!rp.ok) return '';
+        const pd = await rp.json();
+        for (const key in (pd.properties || {})) {
+          if (pd.properties[key].type === 'title') {
+            return (pd.properties[key].title?.[0]?.plain_text || '').trim();
+          }
+        }
+        return '';
+      } catch (e) { return ''; }
+    }
+
+    const trabalhoRel = p['🎭 Trabalhos']?.relation || [];
+    const trabalhoNome = trabalhoRel.length ? await nomeTituloDaPaginaRel(trabalhoRel[0].id) : '';
+
+    function extrairHorarios(texto) {
+      const matches = [...(texto || '').matchAll(/(\d{1,2})h(\d{2})?/g)];
+      if (matches.length === 0) return null;
+      const toHHMM = (m) => (m[1].padStart(2, '0')) + ':' + (m[2] || '00');
+      return { inicio: toHHMM(matches[0]), fim: matches.length > 1 ? toHHMM(matches[1]) : null };
+    }
+    const horarios = extrairHorarios(horarioTexto);
+
+    let eventStart, eventEnd;
+    if (horarios) {
+      const inicioISO = dataSimples + 'T' + horarios.inicio + ':00-03:00';
+      eventStart = { dateTime: inicioISO };
+      if (horarios.fim) {
+        eventEnd = { dateTime: dataSimples + 'T' + horarios.fim + ':00-03:00' };
+      } else {
+        const fimDate = new Date(new Date(inicioISO).getTime() + 2 * 60 * 60000);
+        eventEnd = { dateTime: fimDate.toISOString() };
+      }
+    } else {
+      eventStart = { date: dataSimples };
+      const proximoDia = new Date(dataSimples + 'T00:00:00Z');
+      proximoDia.setUTCDate(proximoDia.getUTCDate() + 1);
+      eventEnd = { date: proximoDia.toISOString().split('T')[0] };
+    }
+
+    const nomeLocal = localPlace?.name || localTitle || 'Local a definir';
+    const enderecoLocal = localPlace?.address || '';
+    const summary = (trabalhoNome || 'Apresentação') + ' — ' + nomeLocal;
+    const description = 'Local: ' + nomeLocal + (enderecoLocal ? ' (' + enderecoLocal + ')' : '') +
+      (horarioTexto ? ('\nHorário: ' + horarioTexto) : '') +
+      '\nGerado automaticamente a partir do Notion.';
+
+    const calendar = await getGoogleCalendarClient();
+    const eventoExistenteId = p['Google Event ID']?.rich_text?.[0]?.plain_text || '';
+    const requestBody = { summary, description, start: eventStart, end: eventEnd };
+    if (enderecoLocal) requestBody.location = enderecoLocal;
+
+    let googleEventId = eventoExistenteId;
+    if (eventoExistenteId) {
+      try {
+        await calendar.events.update({ calendarId: CALENDARIO_APRESENTACOES, eventId: eventoExistenteId, requestBody });
+        console.log('[webhook-apresentacao-notion] evento atualizado: ' + eventoExistenteId);
+      } catch (e) {
+        console.error('[webhook-apresentacao-notion] erro ao atualizar, criando novo:', e.message);
+        const resp = await calendar.events.insert({ calendarId: CALENDARIO_APRESENTACOES, requestBody });
+        googleEventId = resp.data.id;
+      }
+    } else {
+      const resp = await calendar.events.insert({ calendarId: CALENDARIO_APRESENTACOES, requestBody });
+      googleEventId = resp.data.id;
+    }
+
+    if (googleEventId !== eventoExistenteId) {
+      await fetch('https://api.notion.com/v1/pages/' + pageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ properties: { 'Google Event ID': { rich_text: [{ text: { content: googleEventId } }] } } }),
+      });
+    }
+
+    console.log('[webhook-apresentacao-notion] concluido, evento: ' + googleEventId);
+  } catch (err) {
+    console.error('[webhook-apresentacao-notion] erro:', err.message);
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
