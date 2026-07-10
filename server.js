@@ -733,7 +733,7 @@ function slugify(text) {
 // APRESENTACOES — Sincronizacao com Google Calendar de verdade
 // (disparado por Automation do Notion quando Data/Horario/Local mudam)
 // ============================================================
-const CALENDARIO_APRESENTACOES = 'SUBSTITUA_PELO_ID_DO_CALENDARIO'; // ex: algumacoisa@group.calendar.google.com
+const CALENDARIO_APRESENTACOES = '2c8e893b7c567c33ccbcd272b996d7e732a506ec84485e22908e36ffdf1dc999@group.calendar.google.com'; // ex: algumacoisa@group.calendar.google.com
 
 app.post('/webhook-apresentacao-notion', async (req, res) => {
   res.status(200).json({ ok: true }); // responde rapido, processa depois
