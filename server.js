@@ -850,6 +850,121 @@ app.post('/webhook-apresentacao-notion', async (req, res) => {
   }
 });
 
+// ============================================================
+// APRESENTACOES — Notificacao de escalacao (Producao/Elenco/Tecnicos)
+// Dispara quando ELENCO, Producao Liqui, Tecnico de Som ou Tecnico de Luz sao definidos
+// ============================================================
+async function buscarDadosApresentacao(pageId) {
+  const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+  });
+  const pageData = await rPage.json();
+  const p = pageData.properties || {};
+
+  const dataStr = p['Data da Apresentação']?.date?.start || '';
+  const dataSimples = dataStr ? dataStr.split('T')[0] : '';
+  const dataFmt = dataSimples ? dataSimples.split('-').reverse().join('/') : '';
+  const horarioTexto = p['Horário Apresentação']?.rich_text?.[0]?.plain_text || '';
+  const localTitle = p['LOCAL']?.title?.[0]?.plain_text || '';
+  const localPlace = p['Local']?.place || null;
+  const nomeLocal = localPlace?.name || localTitle || 'Local a definir';
+  const enderecoLocal = localPlace?.address || '';
+  const localSaida = p['Local Saída']?.select?.name || '';
+  const horarioSaida = p['Horário de Saída']?.rich_text?.[0]?.plain_text || '';
+
+  let trabalhoNome = '';
+  const trabalhoRel = p['🎭 Trabalhos']?.relation || [];
+  if (trabalhoRel.length) {
+    try {
+      const rt = await fetch('https://api.notion.com/v1/pages/' + trabalhoRel[0].id, {
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+      });
+      const td = await rt.json();
+      for (const key in (td.properties || {})) {
+        if (td.properties[key].type === 'title') { trabalhoNome = (td.properties[key].title?.[0]?.plain_text || '').trim(); break; }
+      }
+    } catch (e) {}
+  }
+
+  const idsEnvolvidos = new Set();
+  ['Produção Liqui', 'ELENCO', 'TÉCNICO DE SOM', 'TÉCNICO DE LUZ'].forEach(campo => {
+    (p[campo]?.relation || []).forEach(rel => idsEnvolvidos.add(rel.id));
+  });
+
+  return { p, dataFmt, horarioTexto, nomeLocal, enderecoLocal, localSaida, horarioSaida, trabalhoNome, idsEnvolvidos };
+}
+
+async function notificarPessoasApresentacao(idsEnvolvidos, montarMensagem) {
+  for (const idPessoa of idsEnvolvidos) {
+    try {
+      const rPessoa = await fetch('https://api.notion.com/v1/pages/' + idPessoa, {
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+      });
+      const pessoaData = await rPessoa.json();
+      const pp = pessoaData.properties || {};
+      const nomePessoa = pp['Nome']?.title?.[0]?.plain_text || '';
+      const telefonePessoa = pp['Telefone']?.phone_number || '';
+      if (!telefonePessoa) continue;
+      const numLimpo = telefonePessoa.replace(/\D/g, '');
+      const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
+      const primeiroNome = (nomePessoa || '').split(' ')[0];
+      await enviarWhatsAppComHorarioComercial(numBr, montarMensagem(primeiroNome));
+    } catch (e) {
+      console.error('[apresentacoes] erro ao notificar pessoa ' + idPessoa + ':', e.message);
+    }
+  }
+}
+
+app.post('/webhook-apresentacao-escalacao', async (req, res) => {
+  res.status(200).json({ ok: true });
+  try {
+    const body = req.body || {};
+    const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
+    if (!pageId) { console.error('[webhook-apresentacao-escalacao] sem page id.'); return; }
+
+    const { dataFmt, horarioTexto, nomeLocal, enderecoLocal, trabalhoNome, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
+    if (!dataFmt) { console.log('[webhook-apresentacao-escalacao] sem data, ignorando.'); return; }
+
+    await notificarPessoasApresentacao(idsEnvolvidos, (primeiroNome) =>
+      'Olá, ' + primeiroNome + '! 🎭\n\nVocê está escalado(a) para a apresentação:\n\n🎬 ' + (trabalhoNome || 'Apresentação') +
+      '\n📅 ' + dataFmt + (horarioTexto ? ('\n⏰ ' + horarioTexto) : '') +
+      '\n📍 ' + nomeLocal + (enderecoLocal ? (' - ' + enderecoLocal) : '') +
+      '\n\nQualquer dúvida, é só chamar!'
+    );
+
+    console.log('[webhook-apresentacao-escalacao] concluido para pagina ' + pageId);
+  } catch (err) {
+    console.error('[webhook-apresentacao-escalacao] erro:', err.message);
+  }
+});
+
+// ============================================================
+// APRESENTACOES — Notificacao de saida
+// Dispara quando Local Saida ou Horario de Saida sao definidos
+// ============================================================
+app.post('/webhook-apresentacao-saida', async (req, res) => {
+  res.status(200).json({ ok: true });
+  try {
+    const body = req.body || {};
+    const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
+    if (!pageId) { console.error('[webhook-apresentacao-saida] sem page id.'); return; }
+
+    const { dataFmt, trabalhoNome, localSaida, horarioSaida, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
+    if (!localSaida && !horarioSaida) { console.log('[webhook-apresentacao-saida] sem local/horario de saida, ignorando.'); return; }
+
+    await notificarPessoasApresentacao(idsEnvolvidos, (primeiroNome) =>
+      'Olá, ' + primeiroNome + '! 🚐\n\nSaída definida para a apresentação ' + (trabalhoNome || '') + (dataFmt ? (' (' + dataFmt + ')') : '') + ':\n\n' +
+      (localSaida ? ('📍 Local de saída: ' + localSaida + '\n') : '') +
+      (horarioSaida ? ('⏰ Horário de saída: ' + horarioSaida + '\n') : '') +
+      '\nNos vemos lá!'
+    );
+
+    console.log('[webhook-apresentacao-saida] concluido para pagina ' + pageId);
+  } catch (err) {
+    console.error('[webhook-apresentacao-saida] erro:', err.message);
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
