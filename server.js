@@ -994,6 +994,36 @@ const PROFESSORES_SUB = {
 
 const SUBSTITUICOES_BROADCAST = {}; // broadcastId -> { professorFaltante, modalidade, turma, data, notionPageId, telefonesConsultados: [], recusas: [], resolvido: false }
 
+function horarioDaTurma(turmaNome) {
+  const m = (turmaNome || '').match(/(\d{1,2})h(\d{2})?/);
+  if (!m) return null;
+  return m[1].padStart(2, '0') + ':' + (m[2] || '00');
+}
+
+async function agendarLembreteSub(numeroSubstituto, nomeSubstituto, professorFaltante, turma, modalidade, data) {
+  try {
+    const horario = horarioDaTurma(turma);
+    if (!horario) return;
+    const aulaDate = new Date(data + 'T' + horario + ':00-03:00');
+    const horasAteAula = (aulaDate.getTime() - Date.now()) / (1000 * 60 * 60);
+    if (horasAteAula <= 24) return; // aula e hoje/amanha mesmo, sem tempo pro lembrete de 24h
+
+    const enviarLembreteEm = new Date(aulaDate.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const primeiroNome = (nomeSubstituto || '').split(' ')[0];
+    const dataFmt = data.split('-').reverse().join('/');
+    const msg = 'Olá, ' + primeiroNome + '! 🔔\n\nLembrete: amanhã você vai substituir ' + professorFaltante + ' na turma de ' + turma + ' (' + modalidade + ')!\n\n📅 ' + dataFmt + '\n🏠 Local: Espaço Liquidificador\n\nQualquer dúvida, chama a gente!';
+
+    const contactId = await getOrCreateContactId(numeroSubstituto);
+    if (!contactId) return;
+    await fetch(DIGISAC_BASE + '/messages', {
+      method: 'POST', headers: digisacHeaders,
+      body: JSON.stringify({ text: msg, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot', scheduledAt: enviarLembreteEm }),
+    });
+  } catch (e) {
+    console.error('[sub] erro ao agendar lembrete 24h:', e.message);
+  }
+}
+
 app.get('/professores-sub', (req, res) => {
   res.json({ ok: true, professores: PROFESSORES_SUB });
 });
@@ -1045,6 +1075,12 @@ app.post('/sub-resolvido', async (req, res) => {
       substituto: tipo === 'substituto_proprio' ? substituto : '',
       whatsappSubstituto: tipo === 'substituto_proprio' ? whatsappSubstituto : '',
     });
+
+    if (tipo === 'substituto_proprio' && whatsappSubstituto) {
+      const numLimpoSub = whatsappSubstituto.replace(/\D/g, '');
+      const numBrSub = numLimpoSub.length === 11 ? '55' + numLimpoSub : numLimpoSub;
+      agendarLembreteSub(numBrSub, substituto, professorFaltante, turma, modalidade, data).catch(()=>{});
+    }
 
     const dataFmt = data.split('-').reverse().join('/');
     let msgFabio;
@@ -1815,6 +1851,8 @@ app.post('/webhook-digisac', async (req, res) => {
         await enviarWhatsApp(numero, 'Show, muito obrigado(a)! ✅\n\nVocê está confirmado(a) na turma de ' + broadcast.turma + ' no dia ' + broadcast.dataFmt + '.');
         const msgFabio = '✅ *Substituição resolvida (broadcast)*\n\nProfessor: ' + broadcast.professorFaltante + '\nTurma: ' + broadcast.turma + ' (' + broadcast.modalidade + ')\nData: ' + broadcast.dataFmt + '\nSubstituto: ' + numero;
         try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
+        const nomeSubstitutoConfirmado = (PROFESSORES_SUB[broadcast.modalidade] || []).find(p => p.telefone === numero)?.nome || 'Professor(a)';
+        agendarLembreteSub(numero, nomeSubstitutoConfirmado, broadcast.professorFaltante, broadcast.turma, broadcast.modalidade, broadcast.data).catch(()=>{});
         broadcast.telefonesConsultados.forEach(tel => {
           if (tel !== numero && CONVERSAS_ESTADO[tel]?.estado === 'aguardando_resposta_sub' && CONVERSAS_ESTADO[tel]?.broadcastId === estado.broadcastId) {
             enviarWhatsApp(tel, 'Essa turma já foi coberta por outro professor. Obrigado por topar! 💛').catch(()=>{});
