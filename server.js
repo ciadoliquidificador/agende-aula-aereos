@@ -2634,7 +2634,7 @@ async function processarRespostaSalaEnsaio(numero, texto, tipo, ticketId, estado
   if (estado.estado === 'aguardando_confirmacao_ensaio') {
     if (t === '1' || t.includes('confirmar')) {
       await atualizarStatusReserva(estado.reservaId, 'Aguardando Comprovante');
-      const linkContrato = 'https://contrato-ensaio.ciadoliquidificador.com.br?reserva=' + estado.reservaId;
+      const linkContrato = 'https://agende-ensaio.ciadoliquidificador.com.br/contrato/?reserva=' + estado.reservaId;
       await enviarWhatsApp(numero, 'Perfeito, ' + estado.nome + '! ✅\n\nAguardamos o comprovante do sinal (R$ ' + estado.deposito.toFixed(2) + ') por aqui — pode mandar a foto ou print do PIX.\n\nTambém precisamos que você preencha e assine o contrato de uso do espaço, é rapidinho:\n' + linkContrato);
       CONVERSAS_ESTADO[numero] = { ...estado, estado: 'aguardando_comprovante_imagem' };
       const msgInterna = '✅ Cliente confirmou intenção — Reserva ' + estado.reservaId + '. Aguardando comprovante de R$ ' + estado.deposito.toFixed(2) + '.';
