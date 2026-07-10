@@ -965,6 +965,141 @@ app.post('/webhook-apresentacao-saida', async (req, res) => {
   }
 });
 
+// ============================================================
+// PROFESSOR SUB — Fluxo de substituicao de professor
+// ============================================================
+const SUBSTITUICOES_DB = 'ee9e1fb2089d4734926bb8a941a08b5e';
+
+const PROFESSORES_SUB = {
+  'Aéreos': [
+    { nome: 'Gabi', telefone: '5511961416621', turmas: ['Segunda 18h', 'Segunda 19h', 'Sexta 18h'] },
+    { nome: 'Talita', telefone: '5511989142791', turmas: ['Terça 8h', 'Terça 9h'] },
+    { nome: 'Gustra', telefone: '5511988485740', turmas: ['Quarta 18h', 'Quarta 19h'] },
+    { nome: 'Guilherme', telefone: '5511989538880', turmas: ['Quinta 8h'] },
+  ],
+  'Acrobacia': [
+    { nome: 'André', telefone: '5511981578744', turmas: ['Segunda 10h'] },
+    { nome: 'Renata', telefone: '5511987317741', turmas: ['Segunda 10h'] },
+  ],
+  'Circo Infantil': [
+    { nome: 'Titzi', telefone: '5511951780877', turmas: ['Terça 18h', 'Quarta 9h30'] },
+  ],
+  'Yoga': [
+    { nome: 'Giulia', telefone: '5512988222584', turmas: ['Quarta 7h', 'Quarta 8h', 'Sexta 7h', 'Sexta 8h'] },
+  ],
+  'Danças Brasileiras': [
+    { nome: 'Roberta', telefone: '5511971918173', turmas: ['Quarta 20h'] },
+  ],
+};
+
+const SUBSTITUICOES_BROADCAST = {}; // broadcastId -> { professorFaltante, modalidade, turma, data, notionPageId, telefonesConsultados: [], recusas: [], resolvido: false }
+
+app.get('/professores-sub', (req, res) => {
+  res.json({ ok: true, professores: PROFESSORES_SUB });
+});
+
+async function criarRegistroSubstituicao({ professorFaltante, modalidade, turma, data, status, substituto, whatsappSubstituto }) {
+  const resp = await fetch('https://api.notion.com/v1/pages', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      parent: { database_id: SUBSTITUICOES_DB },
+      properties: {
+        'Título': { title: [{ text: { content: professorFaltante + ' — ' + turma + ' (' + data + ')' } }] },
+        'Professor Titular': { rich_text: [{ text: { content: professorFaltante } }] },
+        'Modalidade': { select: { name: modalidade } },
+        'Turma': { rich_text: [{ text: { content: turma } }] },
+        'Data da Falta': { date: { start: data } },
+        'Status': { select: { name: status } },
+        'Substituto': { rich_text: [{ text: { content: substituto || '' } }] },
+        'WhatsApp Substituto': { phone_number: whatsappSubstituto || null },
+      },
+    }),
+  });
+  const d = await resp.json();
+  return d.id;
+}
+
+async function atualizarRegistroSubstituicao(pageId, { status, substituto, whatsappSubstituto }) {
+  const properties = {};
+  if (status) properties['Status'] = { select: { name: status } };
+  if (substituto !== undefined) properties['Substituto'] = { rich_text: [{ text: { content: substituto || '' } }] };
+  if (whatsappSubstituto !== undefined) properties['WhatsApp Substituto'] = { phone_number: whatsappSubstituto || null };
+  await fetch('https://api.notion.com/v1/pages/' + pageId, {
+    method: 'PATCH',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ properties }),
+  });
+}
+
+// Professor ja resolveu sozinho (substituto proprio) ou vai falar direto com o Fabio
+app.post('/sub-resolvido', async (req, res) => {
+  const { professorFaltante, modalidade, turma, data, tipo, substituto, whatsappSubstituto } = req.body;
+  if (!professorFaltante || !modalidade || !turma || !data || !tipo) {
+    return res.status(400).json({ ok: false, erro: 'Campos obrigatorios faltando.' });
+  }
+  try {
+    const status = tipo === 'substituto_proprio' ? 'Resolvido - Substituto Próprio' : 'Sem Substituto - Fábio Notificado';
+    const pageId = await criarRegistroSubstituicao({
+      professorFaltante, modalidade, turma, data, status,
+      substituto: tipo === 'substituto_proprio' ? substituto : '',
+      whatsappSubstituto: tipo === 'substituto_proprio' ? whatsappSubstituto : '',
+    });
+
+    const dataFmt = data.split('-').reverse().join('/');
+    let msgFabio;
+    if (tipo === 'substituto_proprio') {
+      msgFabio = '🔄 *Substituição resolvida*\n\nProfessor: ' + professorFaltante + '\nTurma: ' + turma + ' (' + modalidade + ')\nData: ' + dataFmt + '\nSubstituto: ' + substituto + (whatsappSubstituto ? ' (' + whatsappSubstituto + ')' : '');
+    } else {
+      msgFabio = '⚠️ *Preciso de ajuda com substituição*\n\nProfessor: ' + professorFaltante + '\nTurma: ' + turma + ' (' + modalidade + ')\nData: ' + dataFmt + '\n\nJá consultou os professores do espaço, ninguém pôde cobrir.';
+    }
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
+
+    res.json({ ok: true, pageId });
+  } catch (err) {
+    console.error('[sub-resolvido] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// Dispara pergunta pra todos os outros professores da modalidade
+app.post('/sub-broadcast', async (req, res) => {
+  const { professorFaltante, modalidade, turma, data } = req.body;
+  if (!professorFaltante || !modalidade || !turma || !data) {
+    return res.status(400).json({ ok: false, erro: 'Campos obrigatorios faltando.' });
+  }
+  try {
+    const listaModalidade = PROFESSORES_SUB[modalidade] || [];
+    const outros = listaModalidade.filter(p => p.nome !== professorFaltante);
+    if (outros.length === 0) {
+      return res.json({ ok: false, erro: 'Não há outros professores cadastrados nessa modalidade.' });
+    }
+
+    const pageId = await criarRegistroSubstituicao({
+      professorFaltante, modalidade, turma, data, status: 'Aguardando Confirmação',
+    });
+
+    const broadcastId = 'SUB-' + Date.now();
+    const dataFmt = data.split('-').reverse().join('/');
+    const msg = 'Olá! 🎪\n\n' + professorFaltante + ' vai faltar na turma de ' + turma + ' (' + modalidade + ') no dia ' + dataFmt + '.\n\nVocê pode cobrir essa aula?\n\nResponda *SIM* ou *NÃO*.';
+
+    SUBSTITUICOES_BROADCAST[broadcastId] = {
+      professorFaltante, modalidade, turma, data, dataFmt, notionPageId: pageId,
+      telefonesConsultados: outros.map(p => p.telefone), recusas: [], resolvido: false,
+    };
+
+    for (const prof of outros) {
+      CONVERSAS_ESTADO[prof.telefone] = { estado: 'aguardando_resposta_sub', broadcastId };
+      try { await enviarWhatsAppComHorarioComercial(prof.telefone, msg); } catch(e) {}
+    }
+
+    res.json({ ok: true, pageId, broadcastId });
+  } catch (err) {
+    console.error('[sub-broadcast] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
@@ -1659,6 +1794,47 @@ app.post('/webhook-digisac', async (req, res) => {
 
     if (estado.estado === 'aguardando_confirmacao_ensaio' || estado.estado === 'aguardando_comprovante_imagem') {
       await processarRespostaSalaEnsaio(numero, texto, tipoMsg, ticketId, estado);
+      return;
+    }
+
+    if (estado.estado === 'aguardando_resposta_sub') {
+      const broadcast = SUBSTITUICOES_BROADCAST[estado.broadcastId];
+      if (!broadcast || broadcast.resolvido) {
+        await enviarWhatsApp(numero, 'Essa substituição já foi resolvida por outro professor. Obrigado por responder! 💛');
+        delete CONVERSAS_ESTADO[numero];
+        return;
+      }
+      const resposta = interpretarSimNao(texto);
+      if (resposta === 'sim') {
+        broadcast.resolvido = true;
+        try {
+          await atualizarRegistroSubstituicao(broadcast.notionPageId, {
+            status: 'Resolvido - Confirmado por Broadcast', whatsappSubstituto: numero,
+          });
+        } catch(e) {}
+        await enviarWhatsApp(numero, 'Show, muito obrigado(a)! ✅\n\nVocê está confirmado(a) na turma de ' + broadcast.turma + ' no dia ' + broadcast.dataFmt + '.');
+        const msgFabio = '✅ *Substituição resolvida (broadcast)*\n\nProfessor: ' + broadcast.professorFaltante + '\nTurma: ' + broadcast.turma + ' (' + broadcast.modalidade + ')\nData: ' + broadcast.dataFmt + '\nSubstituto: ' + numero;
+        try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
+        broadcast.telefonesConsultados.forEach(tel => {
+          if (tel !== numero && CONVERSAS_ESTADO[tel]?.estado === 'aguardando_resposta_sub' && CONVERSAS_ESTADO[tel]?.broadcastId === estado.broadcastId) {
+            enviarWhatsApp(tel, 'Essa turma já foi coberta por outro professor. Obrigado por topar! 💛').catch(()=>{});
+            delete CONVERSAS_ESTADO[tel];
+          }
+        });
+        delete CONVERSAS_ESTADO[numero];
+      } else if (resposta === 'nao') {
+        if (!broadcast.recusas.includes(numero)) broadcast.recusas.push(numero);
+        delete CONVERSAS_ESTADO[numero];
+        if (broadcast.recusas.length >= broadcast.telefonesConsultados.length) {
+          try {
+            await atualizarRegistroSubstituicao(broadcast.notionPageId, { status: 'Sem Substituto - Fábio Notificado' });
+          } catch(e) {}
+          const msgFabio = '⚠️ *Ninguém pôde cobrir a substituição*\n\nProfessor: ' + broadcast.professorFaltante + '\nTurma: ' + broadcast.turma + ' (' + broadcast.modalidade + ')\nData: ' + broadcast.dataFmt;
+          try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
+        }
+      } else {
+        await enviarWhatsApp(numero, 'Desculpa, não entendi 🙏\n\nVocê pode cobrir essa aula? Responde *SIM* ou *NÃO*.');
+      }
       return;
     }
 
