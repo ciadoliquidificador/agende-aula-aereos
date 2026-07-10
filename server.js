@@ -222,6 +222,29 @@ async function enviarWhatsAppComHorarioComercial(numero, texto) {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+app.post('/teste-agendamento-digisac', async (req, res) => {
+  const { minutos } = req.body;
+  const min = parseInt(minutos, 10) || 3;
+  try {
+    const enviarEm = new Date(Date.now() + min * 60000).toISOString();
+    const contactId = await getOrCreateContactId(WHATSAPP_FABIO);
+    if (!contactId) return res.json({ ok: false, erro: 'Contato nao encontrado.' });
+    const response = await fetch(DIGISAC_BASE + '/messages', {
+      method: 'POST', headers: digisacHeaders,
+      body: JSON.stringify({
+        text: '🧪 Teste de agendamento — se voce esta lendo isso ' + min + ' minuto(s) depois de eu pedir o teste, o scheduledAt do Digisac esta funcionando! Enviado as ' + new Date().toISOString() + ', agendado para ' + enviarEm,
+        type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot',
+        scheduledAt: enviarEm,
+      }),
+    });
+    const data = await response.json();
+    res.json({ ok: response.ok, agora: new Date().toISOString(), agendadoPara: enviarEm, respostaDigisac: data });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
 app.get('/turmas', async (req, res) => {
   try {
     const response = await fetch(`https://api.notion.com/v1/databases/${ALUNAS_DB}/query`, {
