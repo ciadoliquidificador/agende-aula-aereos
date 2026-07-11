@@ -1267,6 +1267,119 @@ app.post('/sub-broadcast', async (req, res) => {
   }
 });
 
+// ============================================================
+// RESIDENCIA ARTISTICA 2026 — Inscricao do chamamento
+// ============================================================
+const RESIDENCIA_DB = 'a514d3c11a8340ffbc73fa30582f6296';
+
+app.post('/residencia/inscrever', async (req, res) => {
+  const {
+    nomeCivil, nomeSocial, email, telefone, rg, cpf, funcaoProjeto,
+    nomeColetivo, qtdIntegrantes, fichaTecnica,
+    nomeProjeto, linguagemArtistica, descricaoProjeto, justificativa,
+    datasPretendidas, previsaoApresentacao, contempladoLei, qualLei,
+    generoMulheres, generoHomens, generoTrans, generoNaoBinarias, generoNaoDeclarar,
+    racaNegras, racaAmarelas, racaIndigenas, racaBrancas, racaOutras, racaNaoDeclarar,
+    pcdQuantidade, pcdNaoDeclarar,
+    curriculoProponente, curriculoResponsavel, curriculoIntegrantes, propostaContrapartida,
+    materialArquivo, materialNomeArquivo,
+    termoAceito,
+  } = req.body;
+
+  if (!nomeCivil || !email || !telefone || !rg || !cpf || !funcaoProjeto || !nomeColetivo ||
+      !nomeProjeto || !linguagemArtistica || !descricaoProjeto || !justificativa || !datasPretendidas ||
+      !curriculoProponente || !curriculoResponsavel || !propostaContrapartida || !termoAceito) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+
+  try {
+    let linkMaterial = '';
+    if (materialArquivo) {
+      const msToken = await getMicrosoftToken();
+      const nomePasta = 'Residencia2026-' + slugify(nomeProjeto) + '-' + slugify(nomeColetivo);
+      const folderId = await criarOuObterSubpasta(msToken, nomePasta);
+      const base64Clean = materialArquivo.replace(/^data:.*;base64,/, '');
+      const buffer = Buffer.from(base64Clean, 'base64');
+      const nomeArquivo = materialNomeArquivo || 'material-complementar';
+      const uploadUrl = 'https://graph.microsoft.com/v1.0/users/' + MS_USER + '/drive/items/' + folderId + ':/' + encodeURIComponent(nomeArquivo) + ':/content';
+      const rUpload = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + msToken, 'Content-Type': 'application/octet-stream' },
+        body: buffer,
+      });
+      if (!rUpload.ok) { const t = await rUpload.text(); throw new Error('Upload OneDrive: ' + t); }
+      const uploaded = await rUpload.json();
+      linkMaterial = await criarLinkCompartilhamento(msToken, uploaded.id);
+    }
+
+    const numLimpo = (telefone || '').replace(/\D/g, '');
+    const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
+
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: RESIDENCIA_DB },
+        properties: {
+          'Título': { title: [{ text: { content: nomeProjeto + ' — ' + nomeColetivo } }] },
+          'Nome Civil': { rich_text: [{ text: { content: nomeCivil } }] },
+          'Nome Social': { rich_text: [{ text: { content: nomeSocial || '' } }] },
+          'Email': { email: email },
+          'Telefone': { phone_number: telefone },
+          'RG': { rich_text: [{ text: { content: rg } }] },
+          'CPF': { rich_text: [{ text: { content: (cpf || '').replace(/\D/g, '') } }] },
+          'Função no Projeto': { rich_text: [{ text: { content: funcaoProjeto } }] },
+          'Nome do Coletivo': { rich_text: [{ text: { content: nomeColetivo } }] },
+          'Quantidade de Integrantes': { number: qtdIntegrantes ? Number(qtdIntegrantes) : null },
+          'Ficha Técnica': { rich_text: [{ text: { content: fichaTecnica || '' } }] },
+          'Nome do Projeto': { rich_text: [{ text: { content: nomeProjeto } }] },
+          'Linguagem Artística': { select: { name: linguagemArtistica } },
+          'Descrição do Projeto': { rich_text: [{ text: { content: descricaoProjeto } }] },
+          'Justificativa / Carta de Intenção': { rich_text: [{ text: { content: justificativa } }] },
+          'Datas Pretendidas': { select: { name: datasPretendidas } },
+          'Previsão de Apresentação': { rich_text: [{ text: { content: previsaoApresentacao || '' } }] },
+          'Contemplado por Lei de Incentivo': { select: { name: contempladoLei || 'Não' } },
+          'Qual Lei de Incentivo': { rich_text: [{ text: { content: qualLei || '' } }] },
+          'Gênero - Mulheres': { number: generoNaoDeclarar ? null : Number(generoMulheres || 0) },
+          'Gênero - Homens': { number: generoNaoDeclarar ? null : Number(generoHomens || 0) },
+          'Gênero - Trans': { number: generoNaoDeclarar ? null : Number(generoTrans || 0) },
+          'Gênero - Não Binárias': { number: generoNaoDeclarar ? null : Number(generoNaoBinarias || 0) },
+          'Gênero - Prefiro Não Declarar': { checkbox: !!generoNaoDeclarar },
+          'Raça - Negras': { number: racaNaoDeclarar ? null : Number(racaNegras || 0) },
+          'Raça - Amarelas': { number: racaNaoDeclarar ? null : Number(racaAmarelas || 0) },
+          'Raça - Indígenas': { number: racaNaoDeclarar ? null : Number(racaIndigenas || 0) },
+          'Raça - Brancas': { number: racaNaoDeclarar ? null : Number(racaBrancas || 0) },
+          'Raça - Outras': { number: racaNaoDeclarar ? null : Number(racaOutras || 0) },
+          'Raça - Prefiro Não Declarar': { checkbox: !!racaNaoDeclarar },
+          'PCD - Quantidade': { number: pcdNaoDeclarar ? null : Number(pcdQuantidade || 0) },
+          'PCD - Prefiro Não Declarar': { checkbox: !!pcdNaoDeclarar },
+          'Currículo do Proponente': { rich_text: [{ text: { content: curriculoProponente } }] },
+          'Currículo do Responsável': { rich_text: [{ text: { content: curriculoResponsavel } }] },
+          'Currículo dos Integrantes': { rich_text: [{ text: { content: curriculoIntegrantes || '' } }] },
+          'Proposta de Contrapartida': { rich_text: [{ text: { content: propostaContrapartida } }] },
+          'Link Material Complementar': { url: linkMaterial || null },
+          'Termo Aceito': { checkbox: !!termoAceito },
+          'Status': { select: { name: 'Recebida' } },
+        },
+      }),
+    });
+
+    const primeiroNome = nomeCivil.split(' ')[0];
+    if (numBr) {
+      try {
+        await enviarWhatsApp(numBr, 'Olá, ' + primeiroNome + '! 🎪\n\nSua inscrição no *Chamamento de Residência Artística — Espaço Liquidificador (2º semestre 2026)* foi recebida com sucesso!\n\n📅 Projeto: ' + nomeProjeto + '\n👥 Coletivo: ' + nomeColetivo + '\n\nO resultado será divulgado em 08/08/2026 no Instagram @espacoliqui. Qualquer dúvida, escreva para residencia@cialiquidificador.com.br.');
+      } catch(e) {}
+    }
+    const msgInterna = '🎪 *Nova inscrição — Residência Artística 2026*\n\nProjeto: ' + nomeProjeto + '\nColetivo: ' + nomeColetivo + '\nResponsável: ' + nomeCivil + ' (' + telefone + ')\nDatas pretendidas: ' + datasPretendidas;
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) {}
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[residencia] erro ao inscrever:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
