@@ -1051,26 +1051,30 @@ app.post('/webhook-apresentacao-saida', async (req, res) => {
     const { p, dataFmt, trabalhoNome, localSaida, horarioSaida, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
     if (!localSaida && !horarioSaida) { console.log('[webhook-apresentacao-saida] sem local/horario de saida, ignorando.'); return; }
 
-    const jaNotificada = !!p['Saída Notificada']?.checkbox;
-    if (jaNotificada) {
-      console.log('[webhook-apresentacao-saida] ja notificada anteriormente, ignorando.');
+    const jaNotificadosStr = p['Saída Notificados']?.rich_text?.[0]?.plain_text || '';
+    const jaNotificados = new Set(jaNotificadosStr.split(',').map(s => s.trim()).filter(Boolean));
+    const novosIds = [...idsEnvolvidos].filter(id => !jaNotificados.has(id));
+
+    if (novosIds.length === 0) {
+      console.log('[webhook-apresentacao-saida] nenhuma pessoa nova para notificar.');
       return;
     }
 
-    await notificarPessoasApresentacao(idsEnvolvidos, (primeiroNome) =>
+    await notificarPessoasApresentacao(novosIds, (primeiroNome) =>
       'Olá, ' + primeiroNome + '! 🚐\n\nSaída definida para a apresentação ' + (trabalhoNome || '') + (dataFmt ? (' (' + dataFmt + ')') : '') + ':\n\n' +
       (localSaida ? ('📍 Local de saída: ' + localSaida + '\n') : '') +
       (horarioSaida ? ('⏰ Horário de saída: ' + horarioSaida + '\n') : '') +
       '\nNos vemos lá!'
     );
 
+    const todosNotificados = [...jaNotificados, ...novosIds];
     await fetch('https://api.notion.com/v1/pages/' + pageId, {
       method: 'PATCH',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { 'Saída Notificada': { checkbox: true } } }),
+      body: JSON.stringify({ properties: { 'Saída Notificados': { rich_text: [{ text: { content: todosNotificados.join(',') } }] } } }),
     });
 
-    console.log('[webhook-apresentacao-saida] concluido para pagina ' + pageId);
+    console.log('[webhook-apresentacao-saida] concluido para pagina ' + pageId + ', novos notificados: ' + novosIds.length);
   } catch (err) {
     console.error('[webhook-apresentacao-saida] erro:', err.message);
   }
