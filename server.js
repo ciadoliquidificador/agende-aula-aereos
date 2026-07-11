@@ -1005,17 +1005,33 @@ app.post('/webhook-apresentacao-escalacao', async (req, res) => {
     const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
     if (!pageId) { console.error('[webhook-apresentacao-escalacao] sem page id.'); return; }
 
-    const { dataFmt, horarioTexto, nomeLocal, enderecoLocal, trabalhoNome, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
+    const { p, dataFmt, horarioTexto, nomeLocal, enderecoLocal, trabalhoNome, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
     if (!dataFmt) { console.log('[webhook-apresentacao-escalacao] sem data, ignorando.'); return; }
 
-    await notificarPessoasApresentacao(idsEnvolvidos, (primeiroNome) =>
+    const jaNotificadosStr = p['Escalação Notificados']?.rich_text?.[0]?.plain_text || '';
+    const jaNotificados = new Set(jaNotificadosStr.split(',').map(s => s.trim()).filter(Boolean));
+    const novosIds = [...idsEnvolvidos].filter(id => !jaNotificados.has(id));
+
+    if (novosIds.length === 0) {
+      console.log('[webhook-apresentacao-escalacao] nenhuma pessoa nova para notificar.');
+      return;
+    }
+
+    await notificarPessoasApresentacao(novosIds, (primeiroNome) =>
       'Olá, ' + primeiroNome + '! 🎭\n\nVocê está escalado(a) para a apresentação:\n\n🎬 ' + (trabalhoNome || 'Apresentação') +
       '\n📅 ' + dataFmt + (horarioTexto ? ('\n⏰ ' + horarioTexto) : '') +
       '\n📍 ' + nomeLocal + (enderecoLocal ? (' - ' + enderecoLocal) : '') +
       '\n\nQualquer dúvida, é só chamar!'
     );
 
-    console.log('[webhook-apresentacao-escalacao] concluido para pagina ' + pageId);
+    const todosNotificados = [...jaNotificados, ...novosIds];
+    await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { 'Escalação Notificados': { rich_text: [{ text: { content: todosNotificados.join(',') } }] } } }),
+    });
+
+    console.log('[webhook-apresentacao-escalacao] concluido para pagina ' + pageId + ', novos notificados: ' + novosIds.length);
   } catch (err) {
     console.error('[webhook-apresentacao-escalacao] erro:', err.message);
   }
@@ -1032,8 +1048,14 @@ app.post('/webhook-apresentacao-saida', async (req, res) => {
     const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
     if (!pageId) { console.error('[webhook-apresentacao-saida] sem page id.'); return; }
 
-    const { dataFmt, trabalhoNome, localSaida, horarioSaida, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
+    const { p, dataFmt, trabalhoNome, localSaida, horarioSaida, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
     if (!localSaida && !horarioSaida) { console.log('[webhook-apresentacao-saida] sem local/horario de saida, ignorando.'); return; }
+
+    const jaNotificada = !!p['Saída Notificada']?.checkbox;
+    if (jaNotificada) {
+      console.log('[webhook-apresentacao-saida] ja notificada anteriormente, ignorando.');
+      return;
+    }
 
     await notificarPessoasApresentacao(idsEnvolvidos, (primeiroNome) =>
       'Olá, ' + primeiroNome + '! 🚐\n\nSaída definida para a apresentação ' + (trabalhoNome || '') + (dataFmt ? (' (' + dataFmt + ')') : '') + ':\n\n' +
@@ -1041,6 +1063,12 @@ app.post('/webhook-apresentacao-saida', async (req, res) => {
       (horarioSaida ? ('⏰ Horário de saída: ' + horarioSaida + '\n') : '') +
       '\nNos vemos lá!'
     );
+
+    await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { 'Saída Notificada': { checkbox: true } } }),
+    });
 
     console.log('[webhook-apresentacao-saida] concluido para pagina ' + pageId);
   } catch (err) {
