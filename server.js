@@ -1380,6 +1380,237 @@ app.post('/residencia/inscrever', async (req, res) => {
   }
 });
 
+// ============================================================
+// MATRICULA — Inscricao para cursos regulares (Yoga, Aereos, Acro, Infantil)
+// ============================================================
+const ALUNAS_DB = 'aee12f7f-8cb9-4ee2-80ba-1bcb06d9eda0';
+
+const MODALIDADES_MATRICULA = {
+  'Yoga': {
+    turmas: [
+      { nome: 'Quarta 7h', dia: 'Quarta', horario: '07:00', professor: 'Giulia', limite: 10 },
+      { nome: 'Quarta 8h', dia: 'Quarta', horario: '08:00', professor: 'Giulia', limite: 10 },
+      { nome: 'Sexta 7h', dia: 'Sexta', horario: '07:00', professor: 'Giulia', limite: 10 },
+      { nome: 'Sexta 8h', dia: 'Sexta', horario: '08:00', professor: 'Giulia', limite: 10 },
+    ],
+    permiteFrequenciaDupla: true,
+    precos: {
+      '1x semana': { Mensal: 180.00, Semestral: 162.00, Anual: 144.00 },
+      '2x semana': { Mensal: 285.00, Semestral: 256.50, Anual: 228.00 },
+    },
+  },
+  'Aéreos': {
+    turmas: [
+      { nome: 'Segunda 18h', dia: 'Segunda', horario: '18:00', professor: 'Gabi', limite: 5 },
+      { nome: 'Segunda 19h', dia: 'Segunda', horario: '19:00', professor: 'Gabi', limite: 5 },
+      { nome: 'Terça 8h', dia: 'Terça', horario: '08:00', professor: 'Talita', limite: 5 },
+      { nome: 'Terça 9h', dia: 'Terça', horario: '09:00', professor: 'Talita', limite: 5 },
+      { nome: 'Quarta 18h', dia: 'Quarta', horario: '18:00', professor: 'Gustra', limite: 5 },
+      { nome: 'Quarta 19h', dia: 'Quarta', horario: '19:00', professor: 'Gustra', limite: 5 },
+      { nome: 'Quinta 8h', dia: 'Quinta', horario: '08:00', professor: 'Guilherme', limite: 5 },
+      { nome: 'Sexta 18h', dia: 'Sexta', horario: '18:00', professor: 'Gabi', limite: 5 },
+    ],
+    permiteFrequenciaDupla: true,
+    precos: {
+      '1x semana': { Mensal: 255.00, Semestral: 230.00, Anual: 207.00 },
+      '2x semana': { Mensal: 395.00, Semestral: 355.00, Anual: 315.00 },
+    },
+  },
+  'Circo - Acrobacia': {
+    turmas: [
+      { nome: 'Segunda 10h', dia: 'Segunda', horario: '10:00', professor: 'André', limite: 20 },
+    ],
+    permiteFrequenciaDupla: false,
+    precos: {
+      '1x semana': { Mensal: 200.00 },
+    },
+  },
+  'Circo Infantil': {
+    turmas: [
+      { nome: 'Terça 18h', dia: 'Terça', horario: '18:00', professor: 'Titzi', limite: 10 },
+      { nome: 'Quarta 9h30', dia: 'Quarta', horario: '09:30', professor: 'Titzi', limite: 10 },
+    ],
+    permiteFrequenciaDupla: false,
+    precos: {
+      '1x semana': { Mensal: 215.00, Semestral: 195.00, Anual: 175.00 },
+    },
+  },
+};
+
+app.get('/modalidades-matricula', (req, res) => {
+  const resumo = {};
+  for (const [nome, dados] of Object.entries(MODALIDADES_MATRICULA)) {
+    resumo[nome] = { turmas: dados.turmas.map(t => t.nome), permiteFrequenciaDupla: dados.permiteFrequenciaDupla, precos: dados.precos };
+  }
+  res.json({ ok: true, modalidades: resumo });
+});
+
+app.get('/aluno/:cpf', async (req, res) => {
+  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 5 }),
+    });
+    const d = await r.json();
+    const resultados = d.results || [];
+    if (resultados.length === 0) return res.json({ ok: true, encontrado: false });
+
+    const p = resultados[0].properties;
+    res.json({
+      ok: true, encontrado: true,
+      nome: p['Nome']?.title?.[0]?.plain_text || '',
+      contato: p['Contato']?.phone_number || '',
+      contatoEmergenciaNome: p['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
+      contatoEmergenciaTelefone: p['Tel. Emergência']?.phone_number || '',
+    });
+  } catch (err) {
+    console.error('[aluno] erro ao buscar CPF:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.get('/vagas-modalidade/:modalidade', async (req, res) => {
+  const modalidade = decodeURIComponent(req.params.modalidade);
+  const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
+  if (!dadosModalidade) return res.status(400).json({ ok: false, erro: 'Modalidade não encontrada.' });
+
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Modalidade', select: { equals: modalidade } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: 200,
+      }),
+    });
+    const d = await r.json();
+    const ocupacaoPorTurma = {};
+    (d.results || []).forEach(page => {
+      const turma = page.properties['Turma']?.select?.name;
+      if (turma) ocupacaoPorTurma[turma] = (ocupacaoPorTurma[turma] || 0) + 1;
+    });
+
+    const turmas = dadosModalidade.turmas.map(t => {
+      const ocupadas = ocupacaoPorTurma[t.nome] || 0;
+      return { ...t, ocupadas, vagasRestantes: Math.max(0, t.limite - ocupadas) };
+    });
+
+    res.json({ ok: true, modalidade, turmas, precos: dadosModalidade.precos, permiteFrequenciaDupla: dadosModalidade.permiteFrequenciaDupla });
+  } catch (err) {
+    console.error('[vagas-modalidade] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/matricula/inscrever', async (req, res) => {
+  const {
+    nome, cpf, contato, contatoEmergenciaNome, contatoEmergenciaTelefone,
+    possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos,
+    condicaoSaude, qualCondicao, cirurgiasLesoes, detalhesCirurgias, liberadaAtividadeFisica,
+    modalidade, turmas, frequencia, plano, observacoes,
+  } = req.body;
+
+  if (!nome || !cpf || !contato || !contatoEmergenciaNome || !contatoEmergenciaTelefone ||
+      !modalidade || !turmas || !turmas.length || !frequencia || !plano) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+
+  const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
+  if (!dadosModalidade) return res.status(400).json({ ok: false, erro: 'Modalidade inválida.' });
+  const precoTabela = dadosModalidade.precos[frequencia];
+  if (!precoTabela || !precoTabela[plano]) return res.status(400).json({ ok: false, erro: 'Combinação de frequência/plano inválida.' });
+  const valorTotal = precoTabela[plano];
+  const valorPorTurma = Math.round((valorTotal / turmas.length) * 100) / 100;
+
+  try {
+    // Revalida vagas em tempo real antes de gravar (evita corrida entre duas inscricoes simultaneas)
+    const rCheck = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Modalidade', select: { equals: modalidade } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: 200,
+      }),
+    });
+    const dCheck = await rCheck.json();
+    const ocupacaoAtual = {};
+    (dCheck.results || []).forEach(page => {
+      const t = page.properties['Turma']?.select?.name;
+      if (t) ocupacaoAtual[t] = (ocupacaoAtual[t] || 0) + 1;
+    });
+    for (const nomeTurma of turmas) {
+      const infoTurma = dadosModalidade.turmas.find(t => t.nome === nomeTurma);
+      if (!infoTurma) return res.json({ ok: false, erro: 'Turma inválida: ' + nomeTurma });
+      const ocupadas = ocupacaoAtual[nomeTurma] || 0;
+      if (ocupadas >= infoTurma.limite) {
+        return res.json({ ok: false, erro: 'A turma ' + nomeTurma + ' acabou de lotar. Escolha outro horário.' });
+      }
+    }
+
+    for (const nomeTurma of turmas) {
+      const infoTurma = dadosModalidade.turmas.find(t => t.nome === nomeTurma);
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: ALUNAS_DB },
+          properties: {
+            'Nome': { title: [{ text: { content: nome } }] },
+            'CPF': { rich_text: [{ text: { content: cpf.replace(/\D/g, '') } }] },
+            'Contato': { phone_number: contato },
+            'Contato de Emergência': { rich_text: [{ text: { content: contatoEmergenciaNome } }] },
+            'Tel. Emergência': { phone_number: contatoEmergenciaTelefone },
+            'Possui alergias?': { select: { name: possuiAlergias || 'Não' } },
+            'Quais alergias?': { rich_text: [{ text: { content: quaisAlergias || '' } }] },
+            'Usa medicamentos?': { select: { name: usaMedicamentos || 'Não' } },
+            'Quais medicamentos?': { rich_text: [{ text: { content: quaisMedicamentos || '' } }] },
+            'Condição de saúde?': { select: { name: condicaoSaude || 'Não' } },
+            'Qual condição?': { rich_text: [{ text: { content: qualCondicao || '' } }] },
+            'Cirurgias ou lesões?': { select: { name: cirurgiasLesoes || 'Não' } },
+            'Detalhes cirurgias/lesões': { rich_text: [{ text: { content: detalhesCirurgias || '' } }] },
+            'Liberada p/ atividade física?': { select: { name: liberadaAtividadeFisica || 'Sim' } },
+            'Modalidade': { select: { name: modalidade } },
+            'Turma': { select: { name: nomeTurma } },
+            'Professor': { select: { name: infoTurma.professor } },
+            'Dia': { select: { name: infoTurma.dia } },
+            'Horário': { select: { name: infoTurma.horario } },
+            'Frequência': { select: { name: frequencia } },
+            'Plano': { select: { name: plano } },
+            'Valor': { number: valorPorTurma },
+            'Status': { select: { name: 'Ativa' } },
+            'Observações': { rich_text: [{ text: { content: observacoes || '' } }] },
+          },
+        }),
+      });
+    }
+
+    const primeiroNome = nome.split(' ')[0];
+    const numLimpo = contato.replace(/\D/g, '');
+    const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
+    const turmasTexto = turmas.join(' e ');
+    if (numBr) {
+      try {
+        await enviarWhatsApp(numBr, 'Olá, ' + primeiroNome + '! 🎉\n\nSua matrícula em *' + modalidade + '* (' + turmasTexto + ') foi registrada!\n\n💳 Plano ' + plano + ': R$ ' + valorTotal.toFixed(2) + '\n\nPara confirmar, faça o pagamento via Pix para:\nfabio@cialiquidificador.com.br\n\nMande o comprovante aqui pelo WhatsApp. Qualquer dúvida, é só chamar!');
+      } catch(e) {}
+    }
+    const msgInterna = '🎉 *Nova matrícula* — ' + modalidade + '\nAluno(a): ' + nome + ' (' + contato + ')\nTurma(s): ' + turmasTexto + '\nPlano: ' + plano + ' (' + frequencia + ') — R$ ' + valorTotal.toFixed(2);
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) {}
+
+    res.json({ ok: true, valorTotal });
+  } catch (err) {
+    console.error('[matricula] erro ao inscrever:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
