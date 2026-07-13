@@ -1411,7 +1411,7 @@ const MODALIDADES_MATRICULA = {
     permiteFrequenciaDupla: true,
     precos: {
       '1x semana': { Mensal: 255.00, Semestral: 230.00, Anual: 207.00 },
-      '2x semana': { Mensal: 395.00, Semestral: 355.00, Anual: 315.00 },
+      '2x semana': { Mensal: 365.00, Semestral: 330.00, Anual: 300.00 },
     },
   },
   'Circo - Acrobacia': {
@@ -1434,6 +1434,168 @@ const MODALIDADES_MATRICULA = {
     },
   },
 };
+
+const OBJETO_POR_MODALIDADE = {
+  'Yoga': 'A CONTRATADA ministra aulas regulares de yoga, em grupo, com uma hora de duração, abrangendo posturas (asanas), técnicas de respiração (pranayama) e relaxamento, adaptadas ao nível do(a) praticante.',
+  'Aéreos': 'A CONTRATADA ministra aulas regulares de circo aéreo, oferecendo aulas semanais em grupo com uma hora de duração. Em todos os planos, as(os) alunas(os) utilizam todos os aparelhos: Lira, Trapézio Fixo e Tecido.',
+  'Circo - Acrobacia': 'A CONTRATADA ministra aulas regulares de acrobacia de solo, em grupo, com uma hora de duração, abrangendo preparação física, elementos acrobáticos, equilíbrios e progressões conforme o nível do(a) aluno(a).',
+  'Circo Infantil': 'A CONTRATADA ministra aulas regulares de circo infantil, em grupo, destinadas a crianças na faixa etária de 4 a 10 anos, com uma hora de duração, abrangendo a iniciação às linguagens circenses (equilíbrio, acrobacia de solo, manipulação e aparelhos adaptados à idade), com abordagem lúdica e progressiva, sob supervisão técnica.',
+};
+
+const ANEXO_I_POR_MODALIDADE = {
+  'Yoga': (nome, rg, cpf) => `Eu, ${nome}, RG ${rg}, CPF ${cpf}, na condição de aluno(a) das atividades de yoga ministradas pela LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS (Espaço Liquidificador), declaro, para os devidos fins, que:
+
+1. Encontro-me em condições de saúde compatíveis com a prática das atividades e não possuo, até onde é de meu conhecimento, restrição médica que a impeça.
+2. Comprometo-me a informar à CONTRATADA, de forma tempestiva, qualquer condição de saúde, lesão, gestação, hipertensão (relevante para posturas invertidas), cirurgia ou restrição que possa afetar minha prática segura, bem como quaisquer alterações supervenientes.
+3. Comprometo-me a respeitar meus próprios limites físicos e a seguir as orientações técnicas transmitidas pelo(a) instrutor(a).
+4. Estou ciente de que a contratação de seguro de acidentes pessoais é recomendada, a título informativo, ficando a sua adesão a meu exclusivo critério.
+5. Autorizo o atendimento emergencial e o acionamento dos serviços de socorro em caso de necessidade durante as atividades.
+
+As informações de contato de emergência e as observações de saúde relevantes são prestadas pelo(a) CONTRATANTE no formulário de inscrição e integram este Termo.`,
+
+  'Aéreos': (nome, rg, cpf) => `Eu, ${nome}, RG ${rg}, CPF ${cpf}, na condição de aluno(a) das atividades de circo aéreo ministradas pela LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS (Espaço Liquidificador), declaro, para os devidos fins, que:
+
+1. Estou ciente de que as atividades de circo aéreo (Lira, Trapézio Fixo e Tecido) envolvem esforço físico intenso e riscos inerentes à prática, assumindo participar delas de forma consciente e voluntária.
+2. Encontro-me em condições de saúde compatíveis com a prática das atividades e não possuo, até onde é de meu conhecimento, restrição médica que a impeça.
+3. Comprometo-me a informar à CONTRATADA, de forma tempestiva, qualquer condição de saúde, lesão, gestação, cirurgia ou restrição que possa afetar minha prática segura, bem como quaisquer alterações supervenientes.
+4. Comprometo-me a seguir as orientações técnicas e as normas de segurança transmitidas pelos(as) instrutores(as), utilizando os aparelhos apenas com autorização e acompanhamento adequados ao meu nível.
+5. Estou ciente de que a contratação de seguro de acidentes pessoais é recomendada, a título informativo, ficando a sua adesão a meu exclusivo critério.
+6. Autorizo o atendimento emergencial e o acionamento dos serviços de socorro em caso de necessidade durante as atividades.
+
+As informações de contato de emergência e as observações de saúde relevantes são prestadas pelo(a) CONTRATANTE no formulário de inscrição e integram este Termo.`,
+
+  'Circo - Acrobacia': (nome, rg, cpf) => `Eu, ${nome}, RG ${rg}, CPF ${cpf}, na condição de aluno(a) das atividades de acrobacia de solo ministradas pela LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS (Espaço Liquidificador), declaro, para os devidos fins, que:
+
+1. Estou ciente de que as atividades de acrobacia de solo envolvem esforço físico intenso e riscos inerentes à prática, assumindo participar delas de forma consciente e voluntária.
+2. Encontro-me em condições de saúde compatíveis com a prática das atividades e não possuo, até onde é de meu conhecimento, restrição médica que a impeça.
+3. Comprometo-me a informar à CONTRATADA, de forma tempestiva, qualquer condição de saúde, lesão, gestação, cirurgia ou restrição que possa afetar minha prática segura, bem como quaisquer alterações supervenientes.
+4. Comprometo-me a seguir as orientações técnicas e as normas de segurança transmitidas pelos(as) instrutores(as), praticando os elementos acrobáticos apenas com autorização e acompanhamento adequados ao meu nível.
+5. Estou ciente de que a contratação de seguro de acidentes pessoais é recomendada, a título informativo, ficando a sua adesão a meu exclusivo critério.
+6. Autorizo o atendimento emergencial e o acionamento dos serviços de socorro em caso de necessidade durante as atividades.
+
+As informações de contato de emergência e as observações de saúde relevantes são prestadas pelo(a) CONTRATANTE no formulário de inscrição e integram este Termo.`,
+
+  'Circo Infantil': (nomeResp, rgResp, cpfResp, nomeCrianca, dataNascCrianca) => `Eu, ${nomeResp}, RG ${rgResp}, CPF ${cpfResp}, na condição de responsável legal por ${nomeCrianca}, nascido(a) em ${dataNascCrianca}, declaro, para os devidos fins, que:
+
+1. A criança está em condições de saúde compatíveis com a prática das atividades de circo infantil.
+2. Comprometo-me a informar à CONTRATADA qualquer condição, lesão ou restrição relevante à sua prática segura.
+3. Estou ciente de que as atividades circenses envolvem esforço físico e riscos inerentes, adaptados à faixa etária e conduzidos sob supervisão técnica.
+4. Autorizo o atendimento emergencial e o acionamento dos serviços de socorro em caso de necessidade.
+
+As informações de contato de emergência, autorizados a retirar a criança e as observações de saúde relevantes são prestadas pelo(a) responsável no formulário de inscrição e integram este Termo.`,
+};
+
+function montarTextoContratoMatricula(dados) {
+  const {
+    modalidade, plano, frequencia, turmas, valorMensal,
+    nome, rg, cpf, endereco,
+    nomeResponsavel, rgResponsavel, cpfResponsavel, nomeCrianca, dataNascCrianca,
+    dataValidade,
+  } = dados;
+
+  const ehInfantil = modalidade === 'Circo Infantil';
+  const nomeContratante = ehInfantil ? nomeResponsavel : nome;
+  const rgContratante = ehInfantil ? rgResponsavel : rg;
+  const cpfContratante = ehInfantil ? cpfResponsavel : cpf;
+
+  const objeto = OBJETO_POR_MODALIDADE[modalidade] || '';
+  const diaHorario = turmas.join(' e ');
+
+  const anexoI = ehInfantil
+    ? ANEXO_I_POR_MODALIDADE['Circo Infantil'](nomeResponsavel, rgResponsavel, cpfResponsavel, nomeCrianca, dataNascCrianca)
+    : ANEXO_I_POR_MODALIDADE[modalidade](nome, rg, cpf);
+
+  return `CONTRATO DE PRESTAÇÃO DE SERVIÇOS
+Modelo-base — aceite eletrônico
+
+DAS PARTES
+
+Pelo presente instrumento particular de contrato de prestação de serviços, a empresa sob denominação social de CRISTIANE SOCCI LEONEL ME – nome fantasia LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS, devidamente inscrita no CNPJ 28.398.119/0001-83, com sede nesta capital, na Rua Doutor Carvalho de Mendonça, 67 – Campos Elíseos – CEP 01201-010, São Paulo/SP, doravante denominada CONTRATADA; e, de outro lado, ${ehInfantil ? 'o(a) responsável legal' : 'o(a) aluno(a)'} ${nomeContratante}, portador(a) do RG ${rgContratante} e CPF ${cpfContratante}, domiciliado(a) à ${endereco}, doravante denominado(a) CONTRATANTE${ehInfantil ? `, na condição de responsável por ${nomeCrianca}` : ''}, têm entre si, livremente ajustado e acordado, o seguinte:
+
+CLÁUSULA PRIMEIRA – DO OBJETO
+
+${objeto}
+
+O(A) CONTRATANTE opta, por livre escolha, pelo seguinte plano:
+
+${plano}, ${frequencia} – ${diaHorario}.
+
+Totalizando o valor mensal de R$ ${valorMensal.toFixed(2)}, a ser pago até o 10º (décimo) dia do mês vigente.
+
+Validade: a partir de ${dataValidade}.
+
+CLÁUSULA SEGUNDA – CONDIÇÕES DE FÉRIAS / SUSPENSÃO DE PLANO
+
+No plano semestral, a(o) aluna(o) poderá solicitar a suspensão de 15 (quinze) dias de férias e, no plano anual, 30 (trinta) dias de férias. Este período será acrescentado ao final do plano.
+
+CLÁUSULA TERCEIRA – VALORES E FORMAS DE PAGAMENTO
+
+Os pagamentos deverão ser realizados via PIX ou transferência bancária. Em caso de ingresso do(a) aluno(a) no decorrer do mês, será calculado valor proporcional no mês de início. Haverá correção anual dos valores, acompanhando os índices inflacionários. Quaisquer alterações serão comunicadas pela CONTRATADA com a antecedência necessária.
+
+CLÁUSULA QUARTA – VENCIMENTOS E ATRASOS
+
+A data estabelecida para pagamento é até o dia 10 (dez) do mês vigente. Em caso de não pagamento no vencimento, o valor será acrescido de multa de 2% (dois por cento) e juros de mora de 0,33% (trinta e três centésimos por cento) ao dia, até a data da efetiva quitação. Persistindo o atraso, a CONTRATADA encaminhará a cobrança a escritório especializado.
+
+CLÁUSULA QUINTA – DESLIGAMENTO
+
+Ao final do período do plano escolhido, sem comunicação de continuidade, este contrato será considerado encerrado. Em caso de desistência, a CONTRATADA deverá ser comunicada com 30 (trinta) dias de antecedência. O abandono sem aviso prévio não será considerado desistência, permanecendo as cobranças até a efetiva comunicação. Em desistência em prazo inferior ao estipulado, o valor será recalculado com base no plano mensal.
+
+CLÁUSULA SEXTA – FERIADOS, RECESSOS, FALTAS E REPOSIÇÕES
+
+Não haverá reposição de aula em feriados nacionais, estaduais e municipais. Haverá recesso de fim de ano, conforme calendário informado pela CONTRATADA. A reposição de faltas será possível mediante solicitação por escrito com 2 (dois) dias úteis de antecedência, sujeita à disponibilidade de vagas. Máximo de 1 (uma) reposição mensal para 1x/semana, ou 2 (duas) para 2x/semana.
+
+CLÁUSULA SÉTIMA – SAÚDE, RESPONSABILIDADE E ASSUNÇÃO DE RISCO
+
+${ehInfantil ? 'As atividades envolvem esforço físico e riscos inerentes, adaptados à faixa etária. O(A) responsável legal declara que a criança está em condições de saúde compatíveis com a atividade, conforme o Termo de Responsabilidade constante do Anexo I.' : 'As atividades envolvem esforço físico e riscos inerentes à prática. O(A) CONTRATANTE declara estar em condições de saúde compatíveis com a atividade, conforme o Termo de Responsabilidade e Declaração de Aptidão constante do Anexo I.'} O(A) CONTRATANTE compromete-se a seguir as orientações dos(as) instrutores(as) e as normas de segurança do espaço.
+
+CLÁUSULA OITAVA – DA PROTEÇÃO DE DADOS PESSOAIS (LGPD)
+
+Para a execução deste contrato, a CONTRATADA coleta e trata dados pessoais do(a) CONTRATANTE${ehInfantil ? ' e da criança' : ''}, em conformidade com a Lei nº 13.709/2018 (LGPD), exclusivamente para cadastro, gestão do plano, comunicação, cobrança e prática segura das atividades.${ehInfantil ? ' O tratamento de dados da criança observa o art. 14 da LGPD, mediante o consentimento específico e destacado do responsável legal.' : ''} Os dados não serão comercializados nem compartilhados com terceiros, salvo obrigação legal. O(A) titular pode, a qualquer tempo, solicitar acesso, correção ou eliminação de dados.
+
+CLÁUSULA NONA – DO FORO
+
+As partes elegem o foro da Comarca da Capital do Estado de São Paulo, facultado ao(à) CONTRATANTE optar pelo foro de seu domicílio, nos termos do CDC.
+
+CLÁUSULA DÉCIMA – DO ACEITE ELETRÔNICO
+
+Este contrato e seu Anexo I são celebrados por meio eletrônico. O(A) CONTRATANTE declara ter tido acesso ao inteiro teor deste instrumento antes de manifestar sua concordância, mediante aceite eletrônico na ficha de inscrição, nos termos do art. 107 do Código Civil e da MP 2.200-2/2001. A autoria e a data são comprovadas pelo registro eletrônico que integra este contrato como prova de aceitação.
+
+ANEXO I — TERMO DE RESPONSABILIDADE E DECLARAÇÃO DE APTIDÃO
+
+${anexoI}`;
+}
+
+async function gerarPdfContratoMatricula(textoContrato, { assinaturaDigitada, dataHoraISO, ip, dispositivo, versao }) {
+  const PDFDocument = require('pdfkit');
+  const chunks = [];
+  const doc = new PDFDocument({ margin: 50 });
+  doc.on('data', (c) => chunks.push(c));
+  const fimPromise = new Promise((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+  doc.fontSize(9).text(textoContrato, { align: 'left' });
+  doc.moveDown(2);
+  doc.fontSize(9).text('--- REGISTRO DE ACEITE ELETRÔNICO ---');
+  doc.text('Assinado por: ' + assinaturaDigitada);
+  doc.text('Data/Hora: ' + dataHoraISO);
+  doc.text('IP: ' + ip);
+  doc.text('Dispositivo: ' + dispositivo);
+  doc.text('Versão do documento: ' + versao);
+
+  doc.end();
+  return await fimPromise;
+}
+
+app.post('/matricula/contrato-texto', (req, res) => {
+  try {
+    const texto = montarTextoContratoMatricula(req.body);
+    const crypto = require('crypto');
+    const versao = crypto.createHash('sha256').update(texto).digest('hex').slice(0, 16);
+    res.json({ ok: true, texto, versao });
+  } catch (err) {
+    console.error('[matricula] erro ao montar contrato:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
 
 app.get('/modalidades-matricula', (req, res) => {
   const resumo = {};
@@ -1507,15 +1669,29 @@ app.get('/vagas-modalidade/:modalidade', async (req, res) => {
 
 app.post('/matricula/inscrever', async (req, res) => {
   const {
-    nome, cpf, contato, contatoEmergenciaNome, contatoEmergenciaTelefone,
+    nome, cpf, rg, endereco, email, dataNascimento, contato, contatoEmergenciaNome, contatoEmergenciaTelefone,
     possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos,
     condicaoSaude, qualCondicao, cirurgiasLesoes, detalhesCirurgias, liberadaAtividadeFisica,
     modalidade, turmas, frequencia, plano, observacoes,
+    nomeResponsavel, rgResponsavel, cpfResponsavel, parentesco, autorizadosRetirar,
+    consentimentoDadosPessoais, consentimentoDadosSaude, consentimentoUsoImagem,
+    assinaturaDigitada, versaoContrato, dispositivo,
   } = req.body;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
 
-  if (!nome || !cpf || !contato || !contatoEmergenciaNome || !contatoEmergenciaTelefone ||
-      !modalidade || !turmas || !turmas.length || !frequencia || !plano) {
+  const ehInfantil = modalidade === 'Circo Infantil';
+
+  if (!cpf || !contato || !contatoEmergenciaNome || !contatoEmergenciaTelefone ||
+      !modalidade || !turmas || !turmas.length || !frequencia || !plano ||
+      !endereco || !email || !dataNascimento || !assinaturaDigitada ||
+      !consentimentoDadosPessoais || !consentimentoDadosSaude) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  if (ehInfantil && (!nomeResponsavel || !rgResponsavel || !cpfResponsavel || !nome)) {
+    return res.status(400).json({ ok: false, erro: 'Preencha os dados do responsável legal e da criança.' });
+  }
+  if (!ehInfantil && (!nome || !rg)) {
+    return res.status(400).json({ ok: false, erro: 'Preencha nome e RG.' });
   }
 
   const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
@@ -1553,6 +1729,34 @@ app.post('/matricula/inscrever', async (req, res) => {
       }
     }
 
+    // Monta e assina o contrato uma unica vez (vale para todas as turmas desta matricula)
+    const dataHoraAceiteISO = new Date().toISOString();
+    const dataValidadeFmt = new Date().toLocaleDateString('pt-BR');
+    const dataNascCriancaFmt = ehInfantil ? new Date(dataNascimento).toLocaleDateString('pt-BR') : '';
+    const textoContrato = montarTextoContratoMatricula({
+      modalidade, plano, frequencia, turmas, valorMensal: valorTotal,
+      nome, rg, cpf, endereco,
+      nomeResponsavel, rgResponsavel, cpfResponsavel,
+      nomeCrianca: ehInfantil ? nome : '', dataNascCrianca: dataNascCriancaFmt,
+      dataValidade: dataValidadeFmt,
+    });
+    const crypto = require('crypto');
+    const versaoCalculada = versaoContrato || crypto.createHash('sha256').update(textoContrato).digest('hex').slice(0, 16);
+
+    let linkContratoPdf = '';
+    try {
+      const pdfBuffer = await gerarPdfContratoMatricula(textoContrato, {
+        assinaturaDigitada, dataHoraISO: dataHoraAceiteISO, ip, dispositivo: dispositivo || '', versao: versaoCalculada,
+      });
+      const msToken = await getMicrosoftToken();
+      const nomePastaContrato = 'Matriculas-' + slugify(modalidade) + '-' + slugify(ehInfantil ? nomeResponsavel : nome);
+      const folderId = await criarOuObterSubpasta(msToken, nomePastaContrato);
+      const pdfUploaded = await uploadBufferOneDrive(msToken, folderId, pdfBuffer, 'contrato-' + Date.now() + '.pdf');
+      linkContratoPdf = await criarLinkCompartilhamento(msToken, pdfUploaded.id);
+    } catch (e) {
+      console.error('[matricula] erro ao gerar/subir PDF do contrato:', e.message);
+    }
+
     for (const nomeTurma of turmas) {
       const infoTurma = dadosModalidade.turmas.find(t => t.nome === nomeTurma);
       await fetch('https://api.notion.com/v1/pages', {
@@ -1562,7 +1766,11 @@ app.post('/matricula/inscrever', async (req, res) => {
           parent: { database_id: ALUNAS_DB },
           properties: {
             'Nome': { title: [{ text: { content: nome } }] },
-            'CPF': { rich_text: [{ text: { content: cpf.replace(/\D/g, '') } }] },
+            'CPF': { rich_text: [{ text: { content: (ehInfantil ? cpfResponsavel : cpf).replace(/\D/g, '') } }] },
+            'RG': { rich_text: [{ text: { content: rg || '' } }] },
+            'Data de Nascimento': { date: { start: dataNascimento } },
+            'Endereço': { rich_text: [{ text: { content: endereco } }] },
+            'Email': { email: email },
             'Contato': { phone_number: contato },
             'Contato de Emergência': { rich_text: [{ text: { content: contatoEmergenciaNome } }] },
             'Tel. Emergência': { phone_number: contatoEmergenciaTelefone },
@@ -1585,6 +1793,19 @@ app.post('/matricula/inscrever', async (req, res) => {
             'Valor': { number: valorPorTurma },
             'Status': { select: { name: 'Ativa' } },
             'Observações': { rich_text: [{ text: { content: observacoes || '' } }] },
+            'Nome do Responsável': { rich_text: [{ text: { content: ehInfantil ? nomeResponsavel : '' } }] },
+            'RG do Responsável': { rich_text: [{ text: { content: ehInfantil ? rgResponsavel : '' } }] },
+            'Parentesco': { rich_text: [{ text: { content: ehInfantil ? (parentesco || '') : '' } }] },
+            'Data de Nascimento da Criança': ehInfantil ? { date: { start: dataNascimento } } : { date: null },
+            'Autorizados a Retirar': { rich_text: [{ text: { content: ehInfantil ? (autorizadosRetirar || '') : '' } }] },
+            'Consentimento Dados Pessoais': { checkbox: !!consentimentoDadosPessoais },
+            'Consentimento Dados de Saúde': { checkbox: !!consentimentoDadosSaude },
+            'Consentimento Uso de Imagem': { checkbox: !!consentimentoUsoImagem },
+            'IP Aceite': { rich_text: [{ text: { content: ip } }] },
+            'User-Agent Aceite': { rich_text: [{ text: { content: dispositivo || '' } }] },
+            'Data/Hora Aceite Contrato': { date: { start: dataHoraAceiteISO } },
+            'Versão do Contrato': { rich_text: [{ text: { content: versaoCalculada } }] },
+            'Link do Contrato PDF': { url: linkContratoPdf || null },
           },
         }),
       });
