@@ -2103,6 +2103,7 @@ app.post('/registrar-presenca', async (req, res) => {
           try {
             if (exp.status === 'Presente') {
               await enviarWhatsAppComHorarioComercial(numeroAluna, msgComparecimento(exp.nome, modalidade));
+              CONVERSAS_ESTADO[numeroAluna] = { estado: 'aguardando_sim_nao_matricula', alunaId: exp.alunaId, nome: exp.nome, modalidade };
             } else {
               await enviarWhatsAppComHorarioComercial(numeroAluna, msgFalta(exp.nome, modalidade));
               CONVERSAS_ESTADO[numeroAluna] = { estado: 'aguardando_sim_nao', alunaId: exp.alunaId, nome: exp.nome, modalidade };
@@ -2370,6 +2371,20 @@ app.post('/webhook-digisac', async (req, res) => {
         }
       } else {
         await enviarWhatsApp(numero, 'Desculpa, não entendi 🙏\n\nVocê pode cobrir essa aula? Responde *SIM* ou *NÃO*.');
+      }
+      return;
+    }
+
+    if (estado.estado === 'aguardando_sim_nao_matricula') {
+      const respostaMatricula = interpretarSimNao(texto);
+      if (respostaMatricula === 'sim') {
+        await enviarWhatsApp(numero, 'Que ótimo! 🎉\n\nÉ só clicar no link abaixo pra fazer sua matrícula:\nhttps://matricula.ciadoliquidificador.com.br');
+        delete CONVERSAS_ESTADO[numero];
+      } else if (respostaMatricula === 'nao') {
+        await enviarWhatsApp(numero, msgMotivo());
+        CONVERSAS_ESTADO[numero] = { ...estado, estado: 'aguardando_motivo' };
+      } else {
+        await enviarWhatsApp(numero, msgNaoEntendiSimNao());
       }
       return;
     }
