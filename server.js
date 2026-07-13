@@ -1383,8 +1383,6 @@ app.post('/residencia/inscrever', async (req, res) => {
 // ============================================================
 // MATRICULA — Inscricao para cursos regulares (Yoga, Aereos, Acro, Infantil)
 // ============================================================
-const ALUNAS_DB = 'aee12f7f-8cb9-4ee2-80ba-1bcb06d9eda0';
-
 const MODALIDADES_MATRICULA = {
   'Yoga': {
     turmas: [
