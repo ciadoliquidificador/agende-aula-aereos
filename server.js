@@ -1624,6 +1624,10 @@ app.get('/aluno/:cpf', async (req, res) => {
       contato: p['Contato']?.phone_number || '',
       contatoEmergenciaNome: p['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
       contatoEmergenciaTelefone: p['Tel. Emergência']?.phone_number || '',
+      rg: p['RG']?.rich_text?.[0]?.plain_text || '',
+      endereco: p['Endereço']?.rich_text?.[0]?.plain_text || '',
+      email: p['Email']?.email || '',
+      dataNascimento: p['Data de Nascimento']?.date?.start || '',
     });
   } catch (err) {
     console.error('[aluno] erro ao buscar CPF:', err.message);
