@@ -1155,8 +1155,21 @@ app.get('/debug-horario-comercial', async (req, res) => {
   }
 });
 
+// Pool de possiveis substitutos por modalidade, quando difere de quem da aula normalmente
+// ali (ex: Circo Infantil so tem a Titzi como titular, mas qualquer professor de circo pode cobrir)
+const POOL_SUBSTITUTOS_SUB = {
+  'Circo Infantil': [
+    { nome: 'Gustra', telefone: '5511988485740' },
+    { nome: 'Guilherme', telefone: '5511989538880' },
+    { nome: 'Renata', telefone: '5511987317741' },
+    { nome: 'André', telefone: '5511981578744' },
+    { nome: 'Talita', telefone: '5511989142791' },
+    { nome: 'Gabi', telefone: '5511961416621' },
+  ],
+};
+
 app.get('/professores-sub', (req, res) => {
-  res.json({ ok: true, professores: PROFESSORES_SUB });
+  res.json({ ok: true, professores: PROFESSORES_SUB, poolSubstitutos: POOL_SUBSTITUTOS_SUB });
 });
 
 async function criarRegistroSubstituicao({ professorFaltante, modalidade, turma, data, status, substituto, whatsappSubstituto }) {
@@ -1236,8 +1249,9 @@ app.post('/sub-broadcast', async (req, res) => {
     return res.status(400).json({ ok: false, erro: 'Campos obrigatorios faltando.' });
   }
   try {
-    const listaModalidade = PROFESSORES_SUB[modalidade] || [];
-    const outros = listaModalidade.filter(p => p.nome !== professorFaltante);
+    const outros = POOL_SUBSTITUTOS_SUB[modalidade]
+      ? POOL_SUBSTITUTOS_SUB[modalidade].filter(p => p.nome !== professorFaltante)
+      : (PROFESSORES_SUB[modalidade] || []).filter(p => p.nome !== professorFaltante);
     if (outros.length === 0) {
       return res.json({ ok: false, erro: 'Não há outros professores cadastrados nessa modalidade.' });
     }
