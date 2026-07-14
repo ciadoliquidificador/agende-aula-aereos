@@ -359,6 +359,11 @@ app.post('/lembrete', async (req, res) => { const { numero, texto } = req.body; 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => console.log(`Proxy rodando na porta ${PORT}`));
 
+const LIMITES_TURMAS_AEREOS = {
+  "Segunda 18h": 5, "Segunda 19h": 5, "Sexta 18h": 5,
+  "Terça 8h": 5, "Terça 9h": 5, "Quarta 18h": 5, "Quarta 19h": 5, "Quinta 8h": 5,
+};
+
 const nomeParaId = {
   // Formato novo (padrão)
   "Segunda 18h": "t1",
@@ -380,6 +385,23 @@ const nomeParaId = {
   "Quinta 8h – Prof. Guilherme":   "t8",
 };
 
+async function contarAtivasNaTurma(modalidade, turmaNome) {
+  const r = await fetch(`https://api.notion.com/v1/databases/${ALUNAS_DB}/query`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { and: [
+        { property: 'Status', select: { equals: 'Ativa' } },
+        { property: 'Modalidade', select: { equals: modalidade } },
+        { property: 'Turma', select: { equals: turmaNome } },
+      ]},
+      page_size: 100,
+    }),
+  });
+  const d = await r.json();
+  return (d.results || []).length;
+}
+
 app.get('/vagas-ocupadas', async (req, res) => {
   try {
     const response = await fetch(`https://api.notion.com/v1/databases/${ALUNAS_DB}/query`, {
@@ -398,7 +420,16 @@ app.get('/vagas-ocupadas', async (req, res) => {
       const turmaId = nomeParaId[turma];
       return { turmaId, data };
     }).filter(v => v.turmaId && v.data);
-    return res.json({ ok: true, ocupadas });
+
+    // Turmas que ja estao no limite de alunas ATIVAS (matriculadas) ficam bloqueadas
+    // para aula experimental, independente do dia escolhido.
+    const turmasLotadas = [];
+    for (const [turmaNome, limite] of Object.entries(LIMITES_TURMAS_AEREOS)) {
+      const ativas = await contarAtivasNaTurma('Aéreos', turmaNome);
+      if (ativas >= limite) turmasLotadas.push(nomeParaId[turmaNome]);
+    }
+
+    return res.json({ ok: true, ocupadas, turmasLotadas });
   } catch (err) { return res.json({ ok: false, erro: err.message }); }
 });
 
@@ -476,7 +507,11 @@ app.get('/vagas-ocupadas-acro', async (req, res) => {
       const data = dataMatch ? dataMatch[1] : '';
       return { turmaId: 'a1', data };
     }).filter(v => v.data);
-    return res.json({ ok: true, ocupadas });
+
+    const ativasAcro = await contarAtivasNaTurma('Circo - Acrobacia', 'Segunda 10h');
+    const turmasLotadas = ativasAcro >= 20 ? ['a1'] : [];
+
+    return res.json({ ok: true, ocupadas, turmasLotadas });
   } catch (err) { return res.json({ ok: false, erro: err.message }); }
 });
 
@@ -513,44 +548,14 @@ app.get('/vagas-ocupadas-infantil', async (req, res) => {
       const turmaId = turma.includes('Terça') ? 'ci1' : turma.includes('Quarta') ? 'ci2' : '';
       return { turmaId, data: dataAula };
     }).filter(v => v.turmaId && v.data);
-    return res.json({ ok: true, ocupadas });
-  } catch (err) { return res.json({ ok: false, erro: err.message }); }
-});
 
-// ── Circo Infantil ────────────────────────────────────────────────────────────
-app.post('/inscricao-infantil', async (req, res) => {
-  try {
-    const { nome, telefone, turma, professor, dia, horario, data, tipo } = req.body;
-    if (!nome || !telefone || !turma) return res.json({ ok: false, erro: 'Campos obrigatórios: nome, telefone, turma.' });
-    const status = tipo === 'reposicao' ? 'Ativo' : 'Experimental';
-    const response = await fetch(`https://api.notion.com/v1/pages`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parent: { database_id: ALUNAS_DB }, properties: { Nome: { title: [{ text: { content: nome } }] }, Contato: { phone_number: telefone }, Turma: { select: { name: turma } }, Professor: { select: { name: 'Titzi' } }, Dia: { select: { name: dia || 'Terça' } }, Horário: { select: { name: horario || '18:00' } }, Modalidade: { select: { name: 'Circo Infantil' } }, Status: { select: { name: status } }, Observações: { rich_text: [{ text: { content: `Agendado para ${data || ''}` } }] } } }),
-    });
-    if (!response.ok) { const t = await response.text(); throw new Error(`Notion ${response.status}: ${t}`); }
-    return res.json({ ok: true });
-  } catch (err) { return res.json({ ok: false, erro: err.message }); }
-});
+    const ativasTerca = await contarAtivasNaTurma('Circo Infantil', 'Terça 18h');
+    const ativasQuarta = await contarAtivasNaTurma('Circo Infantil', 'Quarta 9h30');
+    const turmasLotadas = [];
+    if (ativasTerca >= 10) turmasLotadas.push('ci1');
+    if (ativasQuarta >= 10) turmasLotadas.push('ci2');
 
-app.get('/vagas-ocupadas-infantil', async (req, res) => {
-  try {
-    const response = await fetch(`https://api.notion.com/v1/databases/${ALUNAS_DB}/query`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filter: { and: [{ property: 'Status', select: { equals: 'Experimental' } }, { property: 'Modalidade', select: { equals: 'Circo Infantil' } }] }, page_size: 100 }),
-    });
-    if (!response.ok) { const t = await response.text(); throw new Error(`Notion ${response.status}: ${t}`); }
-    const data = await response.json();
-    const ocupadas = data.results.map(p => {
-      const obs = p.properties.Observações?.rich_text?.[0]?.plain_text || '';
-      const turma = p.properties.Turma?.select?.name || '';
-      const dataMatch = obs.match(/(\d{4}-\d{2}-\d{2})/);
-      const dataAula = dataMatch ? dataMatch[1] : '';
-      const turmaId = turma.includes('Terça') ? 'ci1' : turma.includes('Quarta') ? 'ci2' : '';
-      return { turmaId, data: dataAula };
-    }).filter(v => v.turmaId && v.data);
-    return res.json({ ok: true, ocupadas });
+    return res.json({ ok: true, ocupadas, turmasLotadas });
   } catch (err) { return res.json({ ok: false, erro: err.message }); }
 });
 
