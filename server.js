@@ -1966,6 +1966,70 @@ app.get('/portal/feriados/:nome', async (req, res) => {
   }
 });
 
+const VALOR_AULA_PROFESSOR = {
+  'Gustra': 80,
+  'Titzi': 80,
+  'Guilherme': 80,
+};
+
+app.get('/portal/rendimento/:nome', async (req, res) => {
+  const nome = decodeURIComponent(req.params.nome);
+  const valorAula = VALOR_AULA_PROFESSOR[nome];
+  if (!valorAula) return res.json({ ok: true, disponivel: false });
+
+  try {
+    const turmas = turmasDoProfessor(nome);
+    if (turmas.length === 0) return res.json({ ok: true, disponivel: false });
+
+    const hoje = new Date();
+    const ano = hoje.getFullYear();
+    const mes = hoje.getMonth();
+    const ultimoDia = new Date(ano, mes + 1, 0).getDate();
+    const nomesDias = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
+    const rDecisoes = await fetch('https://api.notion.com/v1/databases/' + DECISOES_FERIADO_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Professor', rich_text: { equals: nome } }, page_size: 100 }),
+    });
+    const dDecisoes = await rDecisoes.json();
+    const decisaoPorData = {};
+    (dDecisoes.results || []).forEach(p => {
+      const data = p.properties['Data do Feriado']?.date?.start;
+      const decisao = p.properties['Decisão']?.select?.name;
+      if (data) decisaoPorData[data] = decisao;
+    });
+
+    const feriadosDoAno = await getFeriadosDoAno(ano);
+
+    let totalAulas = 0;
+    const detalhes = [];
+
+    for (const turma of turmas) {
+      let contagem = 0;
+      for (let dia = 1; dia <= ultimoDia; dia++) {
+        const dataObj = new Date(ano, mes, dia);
+        const diaSemanaNome = nomesDias[dataObj.getDay()];
+        if (diaSemanaNome !== turma.dia) continue;
+        const dataStr = ano + '-' + String(mes + 1).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
+        if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
+        contagem++;
+      }
+      totalAulas += contagem;
+      detalhes.push({ modalidade: turma.modalidade, turma: turma.nome, aulas: contagem });
+    }
+
+    res.json({
+      ok: true, disponivel: true, valorAula, totalAulas,
+      totalPrevisto: totalAulas * valorAula, detalhes,
+      mesAno: (mes + 1) + '/' + ano,
+    });
+  } catch (err) {
+    console.error('[portal] erro ao calcular rendimento:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/portal/feriado-resposta', async (req, res) => {
   const { nome, data, decisao } = req.body;
   if (!nome || !data || !decisao) return res.status(400).json({ ok: false, erro: 'Campos obrigatórios faltando.' });
