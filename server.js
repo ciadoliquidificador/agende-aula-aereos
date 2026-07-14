@@ -1867,6 +1867,127 @@ app.post('/matricula/inscrever', async (req, res) => {
   }
 });
 
+// ============================================================
+// PORTAL PROFESSORES — Login por CPF, Minhas Turmas, Feriados
+// ============================================================
+const DECISOES_FERIADO_DB = 'ef0e4140-26a0-4829-bf68-7a24e4ba7618';
+
+const PROFESSORES_PORTAL = [
+  { nome: 'Gabi', cpf: '22946806855', telefone: '5511961416621' },
+  { nome: 'Talita', cpf: '48458176831', telefone: '5511989142791' },
+  { nome: 'Gustra', cpf: '45486626851', telefone: '5511988485740' },
+  { nome: 'Guilherme', cpf: '', telefone: '5511989538880' },
+  { nome: 'André', cpf: '36268818814', telefone: '5511981578744' },
+  { nome: 'Renata', cpf: '', telefone: '5511987317741' },
+  { nome: 'Titzi', cpf: '30814279830', telefone: '5511951780877' },
+  { nome: 'Giulia', cpf: '51310549826', telefone: '5512988222584' },
+  { nome: 'Roberta', cpf: '21811238882', telefone: '5511971918173' },
+];
+
+app.get('/portal/login/:cpf', (req, res) => {
+  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  const prof = PROFESSORES_PORTAL.find(p => p.cpf && p.cpf === cpfLimpo);
+  if (!prof) return res.json({ ok: false, erro: 'CPF não encontrado. Fale com o Fábio.' });
+  res.json({ ok: true, nome: prof.nome, telefone: prof.telefone });
+});
+
+function turmasDoProfessor(nome) {
+  const encontradas = [];
+  for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
+    dados.turmas.forEach(t => {
+      const ehDoProfessor = t.professor === nome || (nome === 'Renata' && t.professor === 'André' && modalidade === 'Circo - Acrobacia');
+      if (ehDoProfessor) encontradas.push({ modalidade, ...t });
+    });
+  }
+  return encontradas;
+}
+
+app.get('/portal/turmas/:nome', async (req, res) => {
+  const nome = decodeURIComponent(req.params.nome);
+  try {
+    const turmasEncontradas = turmasDoProfessor(nome);
+    const resultado = [];
+    for (const t of turmasEncontradas) {
+      const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { and: [
+            { property: 'Modalidade', select: { equals: t.modalidade } },
+            { property: 'Turma', select: { equals: t.nome } },
+            { property: 'Status', select: { equals: 'Ativa' } },
+          ]},
+          page_size: 200,
+        }),
+      });
+      const d = await r.json();
+      resultado.push({ modalidade: t.modalidade, turma: t.nome, dia: t.dia, horario: t.horario, alunasAtivas: (d.results || []).length, limite: t.limite });
+    }
+    res.json({ ok: true, turmas: resultado });
+  } catch (err) {
+    console.error('[portal] erro ao buscar turmas:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.get('/portal/feriados/:nome', async (req, res) => {
+  const nome = decodeURIComponent(req.params.nome);
+  try {
+    const diasDoProfessor = new Set(turmasDoProfessor(nome).map(t => t.dia));
+    if (diasDoProfessor.size === 0) return res.json({ ok: true, feriados: [] });
+
+    const hoje = new Date();
+    const anoAtual = hoje.getFullYear();
+    const feriadosAno = await getFeriadosDoAno(anoAtual);
+    const feriadosProxAno = hoje.getMonth() >= 9 ? await getFeriadosDoAno(anoAtual + 1) : new Set();
+    const todosFeriados = new Set([...feriadosAno, ...feriadosProxAno]);
+
+    const nomesDias = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+    const em90dias = new Date(hoje.getTime() + 90 * 24 * 60 * 60000);
+    const resultado = [];
+
+    todosFeriados.forEach(dataStr => {
+      const data = new Date(dataStr + 'T12:00:00-03:00');
+      if (data < hoje || data > em90dias) return;
+      const diaSemana = nomesDias[data.getDay()];
+      if (diasDoProfessor.has(diaSemana)) resultado.push({ data: dataStr, diaSemana });
+    });
+
+    resultado.sort((a, b) => a.data.localeCompare(b.data));
+    res.json({ ok: true, feriados: resultado });
+  } catch (err) {
+    console.error('[portal] erro ao buscar feriados:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal/feriado-resposta', async (req, res) => {
+  const { nome, data, decisao } = req.body;
+  if (!nome || !data || !decisao) return res.status(400).json({ ok: false, erro: 'Campos obrigatórios faltando.' });
+  try {
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: DECISOES_FERIADO_DB },
+        properties: {
+          'Título': { title: [{ text: { content: nome + ' — ' + data } }] },
+          'Professor': { rich_text: [{ text: { content: nome } }] },
+          'Data do Feriado': { date: { start: data } },
+          'Decisão': { select: { name: decisao } },
+        },
+      }),
+    });
+    const dataFmt = data.split('-').reverse().join('/');
+    const msgFabio = '🗓️ *Decisão de feriado* — ' + nome + '\nData: ' + dataFmt + '\nDecisão: ' + decisao;
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal] erro ao salvar decisao:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
