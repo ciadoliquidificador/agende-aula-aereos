@@ -2057,6 +2057,78 @@ app.post('/portal/feriado-resposta', async (req, res) => {
   }
 });
 
+// ============================================================
+// PROPOSTA APROVADA -> cria Apresentacao automaticamente
+// ============================================================
+const PROPOSTAS_DB = '2c6c45031f73804f8f90e6e7439d7e1c';
+const APRESENTACOES_DB_PARA_WEBHOOK_PROPOSTA = '2b9c45031f7380828d34f47353b066e7';
+
+app.post('/webhook-proposta-aprovada', async (req, res) => {
+  res.status(200).json({ ok: true });
+  try {
+    const body = req.body || {};
+    const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
+    if (!pageId) { console.error('[webhook-proposta-aprovada] sem page id.'); return; }
+
+    const rProposta = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const proposta = await rProposta.json();
+    const p = proposta.properties;
+
+    const status = p['Status']?.status?.name;
+    if (status !== 'Aprovado - Aguardando contrato') {
+      console.log('[webhook-proposta-aprovada] status nao e Aprovado, ignorando: ' + status);
+      return;
+    }
+
+    // Ja existe Apresentacao vinculada? Evita duplicar se o automation disparar de novo
+    const jaTemApresentacao = (p['🍿 Apresentação']?.relation || []).length > 0;
+    if (jaTemApresentacao) {
+      console.log('[webhook-proposta-aprovada] ja tem apresentacao vinculada, ignorando.');
+      return;
+    }
+
+    const localApresentacao = p['Local de Apresentação']?.rich_text?.[0]?.plain_text || 'Apresentação sem local definido';
+    const dataApresentacao = p['Data']?.date?.start || null;
+    const trabalhosIds = (p['🎭 Trabalhos']?.relation || []).map(r => r.id);
+    const integrantesIds = (p['Integrantes']?.relation || []).map(r => r.id);
+
+    const propsNovaApresentacao = {
+      'LOCAL': { title: [{ text: { content: localApresentacao } }] },
+      '📋 Proposta': { relation: [{ id: pageId }] },
+    };
+    if (dataApresentacao) propsNovaApresentacao['Data da Apresentação'] = { date: { start: dataApresentacao } };
+    if (trabalhosIds.length) propsNovaApresentacao['🎭 Trabalhos'] = { relation: trabalhosIds.map(id => ({ id })) };
+    if (integrantesIds.length) propsNovaApresentacao['ELENCO'] = { relation: integrantesIds.map(id => ({ id })) };
+
+    const rCriar = await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: APRESENTACOES_DB_PARA_WEBHOOK_PROPOSTA },
+        properties: propsNovaApresentacao,
+      }),
+    });
+    if (!rCriar.ok) { const t = await rCriar.text(); throw new Error('Notion criar apresentacao: ' + t); }
+    const novaApresentacao = await rCriar.json();
+
+    // Liga de volta a Proposta na nova Apresentacao
+    await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { '🍿 Apresentação': { relation: [{ id: novaApresentacao.id }] } } }),
+    });
+
+    const msgFabio = '🎉 *Proposta aprovada — Apresentação criada automaticamente*\n\nLocal: ' + localApresentacao + (dataApresentacao ? ('\nData: ' + dataApresentacao.split('-').reverse().join('/')) : '\nData: (não definida)');
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
+
+    console.log('[webhook-proposta-aprovada] apresentacao criada: ' + novaApresentacao.id);
+  } catch (err) {
+    console.error('[webhook-proposta-aprovada] erro:', err.message);
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
