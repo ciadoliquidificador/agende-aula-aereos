@@ -2083,21 +2083,26 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     }
 
     // Ja existe Apresentacao vinculada? Evita duplicar se o automation disparar de novo
-    const jaTemApresentacao = (p['🍿 Apresentação']?.relation || []).length > 0;
+    const jaTemApresentacao = (p['LOCAL']?.relation || []).length > 0;
     if (jaTemApresentacao) {
       console.log('[webhook-proposta-aprovada] ja tem apresentacao vinculada, ignorando.');
       return;
     }
 
-    const localApresentacao = p['Local de Apresentação']?.rich_text?.[0]?.plain_text || 'Apresentação sem local definido';
+    const enderecoProp = p['Endereço'] || null; // tipo "place" - repassado como veio, sem remontar a estrutura
+    const nomeLocalDoEndereco = enderecoProp?.place?.name || '';
+    const contratanteNomes = (p['Contratante']?.multi_select || []).map(o => o.name);
+    const tituloApresentacao = nomeLocalDoEndereco || contratanteNomes.join(', ') || 'Apresentação sem local definido';
+
     const dataApresentacao = p['Data']?.date?.start || null;
     const trabalhosIds = (p['🎭 Trabalhos']?.relation || []).map(r => r.id);
     const integrantesIds = (p['Integrantes']?.relation || []).map(r => r.id);
 
     const propsNovaApresentacao = {
-      'LOCAL': { title: [{ text: { content: localApresentacao } }] },
+      'LOCAL': { title: [{ text: { content: tituloApresentacao } }] },
       '📋 Proposta': { relation: [{ id: pageId }] },
     };
+    if (enderecoProp?.place) propsNovaApresentacao['Endereço'] = { place: enderecoProp.place };
     if (dataApresentacao) propsNovaApresentacao['Data da Apresentação'] = { date: { start: dataApresentacao } };
     if (trabalhosIds.length) propsNovaApresentacao['🎭 Trabalhos'] = { relation: trabalhosIds.map(id => ({ id })) };
     if (integrantesIds.length) propsNovaApresentacao['ELENCO'] = { relation: integrantesIds.map(id => ({ id })) };
@@ -2117,10 +2122,10 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     await fetch('https://api.notion.com/v1/pages/' + pageId, {
       method: 'PATCH',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { '🍿 Apresentação': { relation: [{ id: novaApresentacao.id }] } } }),
+      body: JSON.stringify({ properties: { 'LOCAL': { relation: [{ id: novaApresentacao.id }] } } }),
     });
 
-    const msgFabio = '🎉 *Proposta aprovada — Apresentação criada automaticamente*\n\nLocal: ' + localApresentacao + (dataApresentacao ? ('\nData: ' + dataApresentacao.split('-').reverse().join('/')) : '\nData: (não definida)');
+    const msgFabio = '🎉 *Proposta aprovada — Apresentação criada automaticamente*\n\nLocal: ' + tituloApresentacao + (dataApresentacao ? ('\nData: ' + dataApresentacao.split('-').reverse().join('/')) : '\nData: (não definida)');
     try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
 
     console.log('[webhook-proposta-aprovada] apresentacao criada: ' + novaApresentacao.id);
