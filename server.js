@@ -2082,9 +2082,15 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
       return;
     }
 
-    // Ja existe Apresentacao vinculada? Evita duplicar se o automation disparar de novo
-    const jaTemApresentacao = (p['LOCAL']?.relation || []).length > 0;
-    if (jaTemApresentacao) {
+    // Ja existe Apresentacao vinculada? Evita duplicar se o automation disparar de novo.
+    // Consulta direto na planilha de Apresentacoes (a Proposta nao guarda mais esse link).
+    const rCheckExistente = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_DB_PARA_WEBHOOK_PROPOSTA + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: '📋 Proposta', relation: { contains: pageId } }, page_size: 1 }),
+    });
+    const dCheckExistente = await rCheckExistente.json();
+    if ((dCheckExistente.results || []).length > 0) {
       console.log('[webhook-proposta-aprovada] ja tem apresentacao vinculada, ignorando.');
       return;
     }
@@ -2117,13 +2123,6 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     });
     if (!rCriar.ok) { const t = await rCriar.text(); throw new Error('Notion criar apresentacao: ' + t); }
     const novaApresentacao = await rCriar.json();
-
-    // Liga de volta a Proposta na nova Apresentacao
-    await fetch('https://api.notion.com/v1/pages/' + pageId, {
-      method: 'PATCH',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { 'LOCAL': { relation: [{ id: novaApresentacao.id }] } } }),
-    });
 
     const msgFabio = '🎉 *Proposta aprovada — Apresentação criada automaticamente*\n\nLocal: ' + tituloApresentacao + (dataApresentacao ? ('\nData: ' + dataApresentacao.split('-').reverse().join('/')) : '\nData: (não definida)');
     try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
