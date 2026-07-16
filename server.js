@@ -2134,7 +2134,9 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
 });
 
 // ============================================================
-// CONTRATOS DE DOCENCIA — PF-RPA / PJ-MEI / PJ-ME
+// CONTRATOS DE DOCENCIA — PF-RPA / PJ-MEI / PJ-ME (v2)
+// Modelo de remuneracao ramificado pela titularidade: hora/aula OU percentual.
+// Dados completos do prestador persistidos como JSON, para regeneracao fiel do texto.
 // ============================================================
 const CONTRATOS_PROF_DB = 'f1b934a8100143019ac7f5f877c405f1';
 
@@ -2148,202 +2150,263 @@ function calcularIdade(dataNascISO) {
   return idade;
 }
 
+// Biblioteca de clausulas comuns, texto integral (nao resumido)
+function clausulasComuns345(parteContratada) {
+  return `CLÁUSULA 3ª — FORMA DE EXECUÇÃO E AUTONOMIA
+3.1. A/O ${parteContratada} organiza livremente a condução técnica e pedagógica de suas aulas, não estando sujeito(a) a registro de ponto, ordens de serviço ou fiscalização de método de trabalho por parte da CONTRATANTE.
+3.2. A CONTRATANTE limita-se a disponibilizar espaço e equipamentos adequados e seguros, cabendo-lhe apenas a organização operacional (reserva de sala, comunicação com alunos, agenda geral do espaço), sem qualquer ingerência sobre o conteúdo pedagógico.
+3.3. A/O ${parteContratada} pode recusar datas propostas e sugerir remanejamentos de agenda, sem que isso configure penalidade, advertência ou qualquer forma de sanção disciplinar.
+
+CLÁUSULA 4ª — LOCAL DE PRESTAÇÃO DOS SERVIÇOS
+4.1. Os serviços serão prestados nas dependências do Espaço Liquidificador, situado na Rua Dr. Carvalho de Mendonça, 67, Campos Elíseos, São Paulo/SP, podendo as partes acordar, excepcionalmente, outro local de comum acordo.
+
+CLÁUSULA 5ª — AGENDA DE AULAS
+5.1. As aulas serão ministradas conforme agenda pactuada de comum acordo entre as partes (Anexo I deste instrumento).
+5.2. A agenda constitui estimativa de escopo do serviço contratado, não configurando jornada de trabalho nem obrigação de disponibilidade contínua; alterações de agenda podem ser feitas por simples acordo entre as partes.
+5.3. A impossibilidade eventual de ministrar determinada aula deverá ser comunicada com a antecedência possível nas circunstâncias, sem que isso caracterize falta disciplinar ou indício de subordinação.`;
+}
+
+function clausula9(parteContratada) {
+  return `CLÁUSULA 9ª — OBRIGAÇÕES DA CONTRATANTE
+A CONTRATANTE obriga-se a: a) disponibilizar espaço e equipamentos em condições adequadas e seguras de uso; b) efetuar o pagamento devido contra a respectiva nota fiscal ou recibo, nos prazos pactuados; c) fornecer as informações operacionais necessárias à boa condução das aulas (calendário de feriados, ocorrências relevantes no espaço); d) manter a manutenção preventiva e corretiva das instalações e equipamentos.`;
+}
+
+function clausula10(parteContratada) {
+  return `CLÁUSULA 10ª — SEGURANÇA E RESPONSABILIDADE CIVIL
+10.1. A CONTRATANTE responde pela segurança estrutural do espaço e pela integridade e manutenção dos equipamentos disponibilizados.
+10.2. A/O ${parteContratada} responde pela adequação técnica e pedagógica da condução das aulas, e por eventuais danos decorrentes de conduta própria ou de eventual substituto por ela/ele indicado.
+10.3. A responsabilidade por qualquer incidente será apurada conforme sua causa real: defeito estrutural ou de equipamento imputa-se à CONTRATANTE; falha de conduta técnica imputa-se à/ao ${parteContratada}. Fica vedada qualquer renúncia genérica de direitos por qualquer das partes.`;
+}
+
+function clausula11(parteContratada) {
+  return `CLÁUSULA 11ª — NÃO-EXCLUSIVIDADE E INDEPENDÊNCIA ECONÔMICA
+11.1. O presente contrato não implica exclusividade, sendo livre à/ao ${parteContratada} prestar serviços de mesma natureza a quaisquer terceiros, concorrentes ou não da CONTRATANTE.
+11.2. A/O ${parteContratada} declara exercer atividade autônoma e independente, possuir outras fontes de receita, e que a presente prestação de serviços tem caráter acessório em sua atividade econômica.
+11.3. As partes reconhecem expressamente a inexistência de dependência econômica entre si.`;
+}
+
+function clausula12(parteContratada) {
+  return `CLÁUSULA 12ª — PROPRIEDADE INTELECTUAL
+12.1. O método, a metodologia e o material didático desenvolvidos pela/pelo ${parteContratada} permanecem de sua exclusiva titularidade, sendo autorizado à CONTRATANTE seu uso restrito à realização das aulas objeto deste contrato, e apenas durante a vigência contratual.`;
+}
+
+function clausula13(parteContratada, publicoMenor) {
+  return `CLÁUSULA 13ª — PROTEÇÃO DE DADOS PESSOAIS (LGPD)
+13.1. As partes observarão a Lei nº 13.709/2018 (LGPD) em todo o tratamento de dados pessoais relacionado à execução deste contrato.
+13.2. Quanto aos dados dos alunos, a CONTRATANTE figura como controladora, e a/o ${parteContratada} trata tais dados apenas na medida necessária à ministração das aulas, observando sigilo e confidencialidade.
+13.3. Os dados pessoais da/do titular da parte CONTRATADA são tratados pela CONTRATANTE para fins de execução contratual e cumprimento de obrigações legais.${publicoMenor ? '\n13.4. Havendo alunos menores de idade nas turmas, o tratamento de seus dados observará o disposto no art. 14 da LGPD, conforme detalhado na Cláusula 14-A deste contrato.' : ''}`;
+}
+
+function clausula14(parteContratada) {
+  return `CLÁUSULA 14ª — CONFIDENCIALIDADE
+14.1. As partes comprometem-se a manter sigilo sobre quaisquer informações confidenciais a que tenham acesso em razão deste contrato, obrigação que subsiste mesmo após o término da relação contratual.`;
+}
+
+function clausula16() {
+  return `CLÁUSULA 16ª — DISPOSIÇÕES GERAIS
+16.1. Qualquer alteração deste contrato somente terá validade se formalizada por escrito, mediante termo aditivo assinado por ambas as partes.
+16.2. A tolerância de qualquer das partes quanto ao descumprimento de qualquer cláusula não implicará novação, renúncia ou alteração do pactuado, podendo a parte exigir o cumprimento a qualquer tempo.
+16.3. As partes atuam como entes independentes, respondendo cada qual, com exclusividade, por suas próprias obrigações legais, fiscais, previdenciárias e trabalhistas, inexistindo solidariedade entre elas.
+16.4. A eventual nulidade de qualquer cláusula não prejudicará as demais, que permanecerão em vigor, comprometendo-se as partes a substituir a disposição afetada por outra de efeito equivalente.`;
+}
+
+function clausula17() {
+  return `CLÁUSULA 17ª — FORO
+17.1. As partes elegem o foro da Comarca de São Paulo/SP para dirimir quaisquer controvérsias oriundas deste contrato.`;
+}
+
 function montarTextoContratoProfessor(d) {
   const {
-    trilha, modalidadeLabel, formato, valorHora, periodicidade, prazoQuitacao,
+    trilha, modalidadeLabel, titularidade, formato, valorHora, periodicidade, prazoQuitacao,
     substituicao, compensacaoCancelamento, compensacaoHoras, compensacaoPct,
     vigencia, vigenciaInicio, vigenciaFim, avisoPrevioDias, publicoMenor,
     dataNascimento, repLegNome, repLegCpf, repLegParentesco,
-    nome, nacionalidade, estadoCivil, rg, cpf, nitPis, endereco,
+    nome, nomeSocial, nacionalidade, estadoCivil, rg, cpf, nitPis, endereco,
     razaoSocial, cnpj, ocupacao, titularNome, titularCpf,
     cnae, repLegal, repCpf,
+    contatoEmergenciaNome, contatoEmergenciaTelefone,
+    pctProfessor, pctEspaco, baseCalculo, quemFatura,
   } = d;
+
+  // Titularidade == professor traz alunos: nao gera contrato de docencia
+  if (titularidade === 'Professor traz alunos') {
+    return { bloqueado: true, motivo: 'Neste modelo, o(a) professor(a) utiliza o espaço mediante aluguel (cessão onerosa de uso), e não um contrato de docência. Utilize o instrumento de Cessão Onerosa de Uso para este caso.' };
+  }
 
   const idadePrestador = calcularIdade(dataNascimento);
   const ehPrestadorMenor = idadePrestador !== null && idadePrestador < 18;
   const ehOficina = formato === 'Oficina com prazo';
   const ehPF = trilha === 'PF-RPA';
   const ehMEI = trilha === 'PJ-MEI';
+  const ehPercentual = titularidade === 'Misto';
   const parteContratada = ehPF ? 'CONTRATADO(A)' : 'CONTRATADA';
+  const docFiscal = ehPF ? 'RPA' : 'NFS-e';
+  const nomeExibicaoPrestador = ehPF ? (nomeSocial || nome) : (nomeSocial || razaoSocial);
 
   let titulo, qualificacao;
   if (ehMEI) {
     titulo = 'CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE DOCÊNCIA\nRegime: prestação de serviços entre pessoas jurídicas — CONTRATADA constituída como Microempreendedor Individual (MEI)';
-    qualificacao = `CONTRATADA: ${razaoSocial}, microempreendedor individual inscrito no CNPJ nº ${cnpj}, sede na ${endereco}, atuando na ocupação de ${ocupacao}, representada por seu(sua) titular ${titularNome}, CPF nº ${titularCpf}, doravante CONTRATADA.`;
+    qualificacao = `CONTRATADA: ${razaoSocial}${nomeSocial ? ' ("' + nomeSocial + '")' : ''}, microempreendedor individual inscrito no CNPJ nº ${cnpj}, sede na ${endereco}, atuando na ocupação de ${ocupacao}, representada por seu(sua) titular ${titularNome}, CPF nº ${titularCpf}, doravante CONTRATADA.`;
   } else if (trilha === 'PJ-ME') {
     titulo = 'CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE DOCÊNCIA\nRegime: prestação de serviços entre pessoas jurídicas — CONTRATADA constituída como Microempresa (ME)';
-    qualificacao = `CONTRATADA: ${razaoSocial}, microempresa inscrita no CNPJ nº ${cnpj}, sede na ${endereco}, CNAE ${cnae}, representada por seu(sua) sócio(a)/administrador(a) ${repLegal}, CPF nº ${repCpf}, doravante CONTRATADA.`;
+    qualificacao = `CONTRATADA: ${razaoSocial}${nomeSocial ? ' ("' + nomeSocial + '")' : ''}, microempresa inscrita no CNPJ nº ${cnpj}, sede na ${endereco}, CNAE ${cnae}, representada por seu(sua) sócio(a)/administrador(a) ${repLegal}, CPF nº ${repCpf}, doravante CONTRATADA.`;
   } else {
     titulo = 'CONTRATO DE PRESTAÇÃO DE SERVIÇOS AUTÔNOMOS DE DOCÊNCIA\nRegime: prestação de serviços autônomos por pessoa física (RPA)';
-    qualificacao = `CONTRATADO(A): ${nome}, ${nacionalidade || ''}, ${estadoCivil || ''}, RG nº ${rg}, CPF nº ${cpf}, inscrito(a) no INSS como contribuinte individual sob NIT/PIS nº ${nitPis || ''}, residente na ${endereco}, doravante CONTRATADO(A).`;
+    qualificacao = `CONTRATADO(A): ${nome}${nomeSocial ? ' ("' + nomeSocial + '")' : ''}, ${nacionalidade || ''}, ${estadoCivil || ''}, RG nº ${rg}, CPF nº ${cpf}, inscrito(a) no INSS como contribuinte individual sob NIT/PIS nº ${nitPis || ''}, residente na ${endereco}, doravante CONTRATADO(A).`;
   }
 
   const clausula1 = `CLÁUSULA 1ª — OBJETO
-1.1. Prestação${ehPF ? ' de serviços autônomos de docência' : (', pela CONTRATADA, de serviços de docência')} na modalidade ${modalidadeLabel}, nas dependências do Espaço Liquidificador.${ehOficina ? ' Oferta estruturada como OFICINA, de prazo definido.' : ''}
-1.2. Serviços prestados com plena autonomia técnica, pedagógica e metodológica, cabendo à/ao ${parteContratada} o conteúdo, o plano de aula e a condução, sem ingerência quanto ao modo de execução.`;
+1.1. Prestação${ehPF ? ' de serviços autônomos de docência' : (', pela CONTRATADA, de serviços de docência')} na modalidade ${modalidadeLabel}, nas dependências do Espaço Liquidificador.${ehOficina ? ' A presente oferta está estruturada como OFICINA, de prazo determinado.' : ''}
+1.2. Os serviços serão prestados com plena autonomia técnica, pedagógica e metodológica, cabendo exclusivamente à/ao ${parteContratada} definir o conteúdo, o plano de aula e a condução das atividades, sem qualquer ingerência da CONTRATANTE quanto ao modo de execução.`;
 
   const clausula2 = ehPF
     ? `CLÁUSULA 2ª — NATUREZA AUTÔNOMA DA RELAÇÃO
-2.1. Relação civil de prestação de serviços autônomos, sem vínculo empregatício (art. 442-B da CLT; arts. 593 e seguintes do Código Civil).
-2.2. Execução por conta própria, sem subordinação, sem controle de jornada, sem poder disciplinar, sem exclusividade.
-2.3. O(A) CONTRATADO(A) assume seus próprios tributos e contribuições.`
+2.1. O presente instrumento estabelece relação civil de prestação de serviços autônomos, sem qualquer vínculo empregatício entre as partes, nos termos do art. 442-B da CLT e dos arts. 593 e seguintes do Código Civil.
+2.2. Os serviços são executados por conta própria da/do CONTRATADO(A), sem subordinação jurídica, sem controle de jornada, sem sujeição a poder disciplinar da CONTRATANTE, e sem exclusividade.
+2.3. A/O CONTRATADO(A) assume integralmente seus próprios tributos, contribuições previdenciárias e obrigações fiscais decorrentes desta prestação de serviços.`
     : `CLÁUSULA 2ª — NATUREZA DA RELAÇÃO
-2.1. Relação civil de prestação de serviços entre pessoas jurídicas independentes, sem vínculo empregatício, societário ou de subordinação (art. 442-B da CLT; arts. 593 e seguintes do Código Civil).
-2.2. A CONTRATADA executa por sua conta e risco, sem subordinação, sem controle de jornada, sem poder disciplinar e sem exclusividade.
-2.3. Cada parte responde por suas próprias obrigações legais, fiscais e previdenciárias.`;
+2.1. O presente instrumento estabelece relação civil de prestação de serviços entre pessoas jurídicas independentes, sem qualquer vínculo empregatício, societário ou de subordinação entre as partes, nos termos do art. 442-B da CLT e dos arts. 593 e seguintes do Código Civil.
+2.2. A CONTRATADA executa os serviços por sua própria conta e risco, sem subordinação jurídica à CONTRATANTE, sem controle de jornada, sem sujeição a poder disciplinar, e sem exclusividade.
+2.3. Cada parte responde exclusivamente por suas próprias obrigações legais, fiscais, previdenciárias e trabalhistas, inexistindo solidariedade entre elas.`;
 
-  const clausula3a5 = `CLÁUSULA 3ª — FORMA DE EXECUÇÃO E AUTONOMIA
-3.1. A/O ${parteContratada} organiza livremente a condução técnica e pedagógica, sem registro de ponto, ordens de serviço ou fiscalização de método.
-3.2. A CONTRATANTE disponibiliza espaço e equipamentos adequados e seguros, limitando-se à organização operacional (reserva de sala, comunicação com alunos, agenda geral).
-3.3. A/O ${parteContratada} pode recusar datas e propor remanejamentos, sem penalidade.
-
-CLÁUSULA 4ª — LOCAL
-4.1. Rua Dr. Carvalho de Mendonça, 67, Campos Elíseos, São Paulo/SP, ou outro local acordado.
-
-CLÁUSULA 5ª — AGENDA
-5.1. Aulas conforme agenda pactuada de comum acordo (Anexo I).
-5.2. A agenda é estimativa de escopo, não jornada; alterações por simples acordo.
-5.3. Impossibilidade de aula comunicada com a antecedência possível, sem caracterizar falta ou subordinação.`;
+  const clausulas3a5 = clausulasComuns345(parteContratada);
 
   let clausula6 = '';
   if (substituicao !== 'Não Permitida') {
-    const docFiscal = ehPF ? 'RPA' : 'NFS-e';
     const varianteAviso = substituicao === 'Livre'
-      ? 'independe de autorização prévia, bastando comunicação com antecedência razoável'
-      : 'depende de aviso prévio à CONTRATANTE';
+      ? 'independe de autorização prévia da CONTRATANTE, bastando comunicação com antecedência razoável'
+      : 'depende de aviso prévio à CONTRATANTE, com antecedência razoável';
     clausula6 = `CLÁUSULA 6ª — FACULDADE DE SUBSTITUIÇÃO
-6.1. É facultado à/ao ${parteContratada}, quando lhe convier, fazer-se substituir por (a) profissional que já preste serviços ao Espaço na mesma modalidade ou (b) profissional externo habilitado.
+6.1. É facultado à/ao ${parteContratada}, sempre que lhe convier, fazer-se substituir na ministração das aulas por (a) profissional que já preste serviços ao Espaço na mesma modalidade, ou (b) profissional externo devidamente habilitado.
 6.2. A substituição ${varianteAviso}.
-6.3. A/O ${parteContratada} garante a habilitação e aptidão do(a) substituto(a), respondendo por sua idoneidade técnica. Em modalidades de risco, o(a) substituto(a) deve atender ao padrão de aptidão documentado.
-6.4. A remuneração é devida a quem efetivamente ministrar, mediante emissão do respectivo ${docFiscal}.
-6.5. A ampla substituição evidencia a inexistência de pessoalidade.`;
+6.3. A/O ${parteContratada} garante a habilitação técnica e a aptidão do(a) substituto(a) indicado(a), respondendo por sua idoneidade. Em modalidades de risco, o(a) substituto(a) deverá atender ao mesmo padrão de aptidão documentado exigido neste contrato.
+6.4. A remuneração correspondente é devida a quem efetivamente ministrar a aula, mediante emissão do respectivo ${docFiscal} por essa pessoa.
+6.5. A ampla faculdade de substituição ora prevista evidencia a inexistência de pessoalidade na prestação dos serviços.`;
   }
 
   const compensacaoTexto = compensacaoCancelamento
-    ? `7.6. Cancelamento por iniciativa exclusiva da CONTRATANTE com menos de ${compensacaoHoras}h de antecedência: devido ${compensacaoPct}% da hora/aula.`
+    ? `\n7.6. Em caso de cancelamento por iniciativa exclusiva da CONTRATANTE com antecedência inferior a ${compensacaoHoras} horas do horário previsto, será devido à/ao ${parteContratada} o equivalente a ${compensacaoPct}% do valor da hora/aula cancelada.`
     : '';
 
   let clausula7;
-  if (ehPF) {
+  if (ehPercentual) {
+    const baseCalculoLabel = baseCalculo === 'bruta' ? 'receita bruta' : 'receita líquida';
+    const alertaBaseBruta = baseCalculo === 'bruta'
+      ? '\n7.2-A. Ficam as partes cientes de que, ao se adotar a receita bruta como base de cálculo, a margem líquida efetiva da CONTRATANTE tende a ficar abaixo do percentual nominal a ela atribuído, uma vez que os tributos incidentes sobre a fatia repassada à/ao CONTRATADO(A) permanecem a cargo da CONTRATANTE.'
+      : '';
+    const faturamentoTexto = quemFatura === 'professor'
+      ? `O faturamento perante o aluno pagante é realizado diretamente pela/pelo própria/próprio ${parteContratada}, que repassa à CONTRATANTE o percentual de ${pctEspaco}% correspondente.`
+      : `A CONTRATANTE responsabiliza-se pela matrícula, cobrança e faturamento dos alunos pagantes, apurando e repassando à/ao ${parteContratada} o percentual devido.`;
+    const retencaoPorTrilha = ehPF
+      ? `Sobre o valor do repasse recebido pela/pelo CONTRATADO(A) incidem as retenções legais aplicáveis ao contribuinte individual (INSS 11%, até o teto, e IRRF conforme tabela progressiva quando aplicável), cabendo à CONTRATANTE, ainda, o recolhimento da contribuição patronal (20%) sobre tal remuneração.`
+      : ehMEI
+      ? `O repasse é pago contra emissão de NFS-e pela CONTRATADA, sem retenção previdenciária patronal, por se tratar de MEI em atividade de docência, ressalvada obrigação legal superveniente.`
+      : `Sobre o repasse incidem as retenções tributárias aplicáveis (ISS, IR, CSLL, PIS, COFINS, INSS quando aplicável) conforme o regime tributário da CONTRATADA e a legislação municipal vigente, cabendo à CONTRATADA validar tais retenções junto à sua contabilidade.`;
+    clausula7 = `CLÁUSULA 7ª — REMUNERAÇÃO POR REPASSE PERCENTUAL
+7.1. A título de repasse pela prestação dos serviços de docência, a/o ${parteContratada} receberá ${pctProfessor}% (${pctProfessor} por cento) da ${baseCalculoLabel} arrecadada com as turmas objeto deste contrato, cabendo à CONTRATANTE os ${pctEspaco}% (${pctEspaco} por cento) remanescentes.
+7.2. Para os fins desta cláusula, ${baseCalculoLabel} corresponde ao valor arrecadado dos alunos pagantes das turmas, deduzidos os tributos incidentes e as taxas de meios de pagamento aplicáveis.${alertaBaseBruta}
+7.3. ${faturamentoTexto} A apuração e o repasse ocorrerão com periodicidade ${periodicidade}, mediante emissão do respectivo ${docFiscal} pela/pelo ${parteContratada} sobre o valor do repasse devido, quitado em ${prazoQuitacao}.
+7.4. O repasse ora previsto é estritamente variável e proporcional à arrecadação efetiva das turmas, inexistindo qualquer valor fixo garantido, assumindo a/o ${parteContratada} o risco da variação da receita conforme a adesão dos alunos.
+7.5. ${retencaoPorTrilha}${compensacaoTexto}`;
+  } else if (ehPF) {
     clausula7 = `CLÁUSULA 7ª — REMUNERAÇÃO
-7.1. R$ ${valorHora} por hora/aula efetivamente ministrada (valor Bruto).
-7.2. Remuneração estritamente variável; sem valor fixo e sem pagamento de aula não ministrada (ressalvada a cláusula 7.6).
-7.3. Pagamento ${periodicidade}, mediante apuração e emissão de RPA pelo(a) CONTRATADO(A), quitado em ${prazoQuitacao}.
-7.4. Incidem as retenções legais do contribuinte individual: INSS (11%, até o teto), IRRF (tabela progressiva quando aplicável) e ISS conforme o município; a CONTRATANTE recolhe ainda a contribuição patronal (20%) sobre a remuneração de contribuintes individuais.
-7.5. O(A) CONTRATADO(A) mantém regular sua condição de contribuinte individual.
-${compensacaoTexto}`.trim();
+7.1. A/O CONTRATADO(A) receberá R$ ${valorHora} (valor Bruto) por hora/aula efetivamente ministrada.
+7.2. A remuneração é estritamente variável, não havendo valor fixo garantido nem pagamento de aula não ministrada, ressalvada a hipótese da cláusula 7.6.
+7.3. O pagamento será efetuado com periodicidade ${periodicidade}, mediante apuração das horas/aula ministradas e emissão de RPA pela/pelo CONTRATADO(A), quitado em ${prazoQuitacao}.
+7.4. Incidem sobre a remuneração as retenções legais aplicáveis ao contribuinte individual: INSS (11%, até o teto), IRRF (conforme tabela progressiva, quando aplicável) e ISS conforme a legislação municipal; a CONTRATANTE recolhe, ainda, a contribuição patronal (20%) incidente sobre a remuneração de contribuintes individuais.
+7.5. A/O CONTRATADO(A) obriga-se a manter regular sua condição de contribuinte individual perante o INSS.${compensacaoTexto}`;
   } else if (ehMEI) {
     clausula7 = `CLÁUSULA 7ª — PREÇO E PAGAMENTO
-7.1. R$ ${valorHora} por hora/aula efetivamente ministrada.
-7.2. Remuneração estritamente variável; sem valor fixo e sem pagamento de aula não ministrada (ressalvada a cláusula 7.6).
-7.3. Pagamento ${periodicidade}, mediante apuração das horas/aula e emissão de NFS-e pela CONTRATADA, quitado em ${prazoQuitacao}.
-7.4. Pagamento contra nota fiscal, sem retenção previdenciária patronal, por se tratar de MEI em atividade de docência, ressalvada obrigação legal superveniente.
-7.5. A CONTRATADA é a única responsável por seus tributos (DAS-MEI), mantendo regular sua condição.
-${compensacaoTexto}`.trim();
+7.1. A CONTRATADA receberá R$ ${valorHora} por hora/aula efetivamente ministrada.
+7.2. A remuneração é estritamente variável, não havendo valor fixo garantido nem pagamento de aula não ministrada, ressalvada a hipótese da cláusula 7.6.
+7.3. O pagamento será efetuado com periodicidade ${periodicidade}, mediante apuração das horas/aula e emissão de NFS-e pela CONTRATADA, quitado em ${prazoQuitacao}.
+7.4. O pagamento é realizado contra nota fiscal, sem retenção previdenciária patronal, por se tratar de MEI em atividade de docência, ressalvada obrigação legal superveniente que venha a determinar o contrário.
+7.5. A CONTRATADA é a única responsável pelo recolhimento de seus tributos (DAS-MEI), obrigando-se a manter regular sua condição de microempreendedora individual.${compensacaoTexto}`;
   } else {
     clausula7 = `CLÁUSULA 7ª — PREÇO E PAGAMENTO
-7.1. R$ ${valorHora} por hora/aula efetivamente ministrada.
-7.2. Remuneração estritamente variável (ressalvada a cláusula 7.6).
-7.3. Pagamento ${periodicidade}, mediante NFS-e, quitado em ${prazoQuitacao}.
-7.4. Retenções tributárias (ISS, IR, CSLL, PIS, COFINS, INSS quando aplicável) conforme o regime tributário da CONTRATADA e a legislação municipal — a validar com a contabilidade.
-7.5. A CONTRATADA responde integralmente por seus tributos e por manter sua regularidade fiscal.
-${compensacaoTexto}`.trim();
+7.1. A CONTRATADA receberá R$ ${valorHora} por hora/aula efetivamente ministrada.
+7.2. A remuneração é estritamente variável, ressalvada a hipótese da cláusula 7.6.
+7.3. O pagamento será efetuado com periodicidade ${periodicidade}, mediante emissão de NFS-e, quitado em ${prazoQuitacao}.
+7.4. Incidem sobre a remuneração as retenções tributárias aplicáveis (ISS, IR, CSLL, PIS, COFINS, INSS quando aplicável), conforme o regime tributário da CONTRATADA e a legislação municipal vigente, competindo à CONTRATADA validar tais retenções junto à sua contabilidade.
+7.5. A CONTRATADA responde integralmente por seus tributos e pela manutenção de sua regularidade fiscal e societária.${compensacaoTexto}`;
   }
 
   const clausula8 = ehPF
     ? `CLÁUSULA 8ª — OBRIGAÇÕES DO(A) CONTRATADO(A)
-a) prestar com zelo; b) emitir RPA; c) manter inscrição como contribuinte individual; d) suportar seus tributos; e) zelar por equipamentos; f) observar normas de segurança; g) comunicar impossibilidade de aula.`
+São obrigações da/do CONTRATADO(A): a) prestar os serviços com zelo, diligência e responsabilidade pedagógica; b) emitir RPA correspondente a cada pagamento recebido; c) manter regular sua inscrição como contribuinte individual perante o INSS; d) responder por seus próprios tributos e contribuições; e) zelar pela conservação dos equipamentos e do espaço físico durante o uso; f) observar as normas de segurança do Espaço Liquidificador; g) comunicar à CONTRATANTE, com a antecedência possível, a impossibilidade de ministrar determinada aula.`
     : ehMEI
     ? `CLÁUSULA 8ª — OBRIGAÇÕES DA CONTRATADA
-a) prestar com zelo e responsabilidade pedagógica; b) emitir NFS-e; c) manter regular a condição de MEI (DAS, limite de faturamento, ocupação compatível); d) responsabilizar-se por seus tributos; e) zelar por equipamentos e espaço; f) observar as normas de segurança; g) comunicar impossibilidade de aula.`
+São obrigações da CONTRATADA: a) prestar os serviços com zelo e responsabilidade pedagógica; b) emitir NFS-e correspondente a cada pagamento recebido; c) manter regular sua condição de MEI, incluindo o recolhimento do DAS, a observância do limite de faturamento anual e a compatibilidade da ocupação registrada com a atividade de docência; d) responsabilizar-se integralmente por seus tributos; e) zelar pela conservação dos equipamentos e do espaço; f) observar as normas de segurança do Espaço; g) comunicar à CONTRATANTE, com a antecedência possível, a impossibilidade de ministrar determinada aula.`
     : `CLÁUSULA 8ª — OBRIGAÇÕES DA CONTRATADA
-a) prestar com zelo; b) emitir NFS-e; c) manter regularidade fiscal e societária da ME e CNAE compatível; d) responsabilizar-se por tributos e por seus prepostos; e) zelar por equipamentos; f) observar normas de segurança; g) comunicar impossibilidade de aula.`;
-
-  const clausula9a14 = `CLÁUSULA 9ª — OBRIGAÇÕES DA CONTRATANTE
-a) disponibilizar espaço/equipamentos seguros; b) pagar contra nota/recibo; c) fornecer informações operacionais; d) manter manutenção das instalações.
-
-CLÁUSULA 10 — SEGURANÇA E RESPONSABILIDADE
-10.1. A CONTRATANTE responde pela segurança estrutural e pela integridade/manutenção dos equipamentos.
-10.2. A/O ${parteContratada} responde pela adequação técnica/pedagógica e por danos de conduta própria ou de seus substitutos.
-10.3. Responsabilidade apurada pela causa real (defeito estrutural → CONTRATANTE; conduta técnica → ${parteContratada}); vedada renúncia genérica de direitos.
-
-CLÁUSULA 11 — NÃO-EXCLUSIVIDADE E INDEPENDÊNCIA ECONÔMICA
-11.1. Sem exclusividade; a/o ${parteContratada} é livre para prestar serviços a terceiros.
-11.2. A/O ${parteContratada} declara atividade autônoma, com outras fontes de receita e caráter acessório desta prestação.
-11.3. Reconhecida a inexistência de dependência econômica.
-
-CLÁUSULA 12 — PROPRIEDADE INTELECTUAL
-12.1. Método e material didático permanecem de titularidade da/do ${parteContratada}; uso pela CONTRATANTE restrito às aulas e à vigência.
-
-CLÁUSULA 13 — PROTEÇÃO DE DADOS (LGPD)
-13.1. Observância da Lei 13.709/2018.
-13.2. Dados dos alunos: CONTRATANTE é controladora; ${parteContratada} trata apenas para ministrar as aulas, com confidencialidade.
-13.3. Dados da/do titular da ${parteContratada} tratados para execução contratual e obrigações legais.${publicoMenor ? '\n13.4. Dados de crianças tratados conforme LGPD art. 14, com participação do responsável legal do(a) aluno(a).' : ''}
-
-CLÁUSULA 14 — CONFIDENCIALIDADE
-14.1. Sigilo sobre informações confidenciais, subsistente após o término.`;
+São obrigações da CONTRATADA: a) prestar os serviços com zelo e responsabilidade pedagógica; b) emitir NFS-e correspondente a cada pagamento recebido; c) manter regularidade fiscal e societária da microempresa, bem como CNAE compatível com a atividade de docência; d) responsabilizar-se por seus tributos e pelos atos de seus prepostos; e) zelar pela conservação dos equipamentos e do espaço; f) observar as normas de segurança do Espaço; g) comunicar à CONTRATANTE, com a antecedência possível, a impossibilidade de ministrar determinada aula.`;
 
   const clausulaProtecaoCrianca = publicoMenor
-    ? `\n\nCLÁUSULA 14-A — PROTEÇÃO À CRIANÇA (TURMAS COM MENORES)
-Em turmas com menores, a/o ${parteContratada} atua como OPERADOR dos dados dos alunos (CONTRATANTE = CONTROLADORA), tratando-os só para a finalidade das aulas e no melhor interesse da criança (LGPD art. 14). Vedado coletar, compartilhar ou divulgar imagens ou dados de alunos menores sem autorização da CONTRATANTE e do responsável legal do aluno. Observância do Estatuto da Criança e do Adolescente (Lei 8.069/90): não permanecer a sós com aluno menor fora do horário de aula; comunicar de imediato qualquer indício de risco ou abuso (art. 13 do ECA). A CONTRATANTE poderá exigir certidão de antecedentes criminais.`
+    ? `\n\nCLÁUSULA 14-A — PROTEÇÃO À CRIANÇA (TURMAS COM ALUNOS MENORES)
+Em turmas que incluam alunos menores de idade, a/o ${parteContratada} atua como OPERADORA(OR) dos dados pessoais desses alunos, figurando a CONTRATANTE como CONTROLADORA, tratando tais dados exclusivamente para a finalidade das aulas e sempre no melhor interesse da criança, nos termos do art. 14 da LGPD. É vedado à/ao ${parteContratada} coletar, compartilhar ou divulgar imagens ou dados de alunos menores sem autorização expressa da CONTRATANTE e do responsável legal do aluno. A/O ${parteContratada} observará, ainda, o Estatuto da Criança e do Adolescente (Lei nº 8.069/90), comprometendo-se a não permanecer a sós com aluno menor fora do horário e do ambiente de aula, e a comunicar de imediato à CONTRATANTE qualquer indício de risco ou abuso, nos termos do art. 13 do ECA. Fica facultado à CONTRATANTE exigir, a seu critério, a apresentação de certidão de antecedentes criminais.`
     : '';
 
-  const vigenciaVariante = vigencia === 'Determinada' ? ` Vigência de ${vigenciaInicio} a ${vigenciaFim}.` : '';
-  const clausula15 = `CLÁUSULA 15 — VIGÊNCIA E RESCISÃO
-15.1. Vigência por prazo indeterminado a partir da assinatura.${vigenciaVariante}
-15.2. Rescisão imotivada por qualquer parte, com ${avisoPrevioDias} dias de aviso escrito, sem multa.
-15.3. Aulas agendadas no aviso prévio são realizadas e remuneradas.
-15.4. Sem verbas trabalhistas, por inexistir vínculo.`;
+  const vigenciaVariante = vigencia === 'Determinada' ? ` O presente contrato vigorará de ${vigenciaInicio} a ${vigenciaFim}.` : '';
+  const clausula15 = `CLÁUSULA 15ª — VIGÊNCIA E RESCISÃO
+15.1. O presente contrato vigorará por prazo indeterminado a partir de sua assinatura.${vigenciaVariante}
+15.2. Qualquer das partes poderá rescindir este contrato imotivadamente, mediante aviso prévio escrito de ${avisoPrevioDias} dias, sem incidência de multa.
+15.3. As aulas já agendadas dentro do período de aviso prévio serão normalmente realizadas e remuneradas.
+15.4. Não são devidas quaisquer verbas de natureza trabalhista em razão da rescisão, por inexistir vínculo empregatício entre as partes.`;
 
   const clausulaPrestadorMenor = ehPrestadorMenor
     ? `\n\nCLÁUSULA 15-A — PRESTADOR(A) MENOR DE IDADE
-Sendo o(a) CONTRATADO(A) menor de 18 anos, o presente contrato é ${idadePrestador >= 16 ? 'assistido' : 'representado'} por seu(sua) representante legal ${repLegNome}, na condição de ${repLegParentesco}, CPF nº ${repLegCpf}, que assina conjuntamente este instrumento e declara ciência e concordância com todos os seus termos.`
+Sendo a/o CONTRATADO(A) menor de 18 (dezoito) anos, o presente contrato é ${idadePrestador >= 16 ? 'assistido' : 'representado'} por seu(sua) representante legal, ${repLegNome}, na condição de ${repLegParentesco}, CPF nº ${repLegCpf}, que assina conjuntamente este instrumento e declara sua ciência e concordância com a integralidade de seus termos.`
     : '';
 
-  const clausula16e17 = `CLÁUSULA 16 — DISPOSIÇÕES GERAIS
-16.1. Alterações só por aditivo escrito. 16.2. Tolerância não implica novação. 16.3. Partes independentes. 16.4. Nulidade parcial não prejudica o restante.
-
-CLÁUSULA 17 — FORO
-17.1. Comarca de São Paulo/SP.`;
-
   const assinaturaContratada = ehPF
-    ? `CONTRATADO(A): ${nome} — CPF ${cpf}`
+    ? `CONTRATADO(A): ${nome}${nomeSocial ? ' ("' + nomeSocial + '")' : ''} — CPF ${cpf}`
     : ehMEI
-    ? `CONTRATADA: ${razaoSocial} — CNPJ ${cnpj} — Rep.: ${titularNome}`
-    : `CONTRATADA: ${razaoSocial} — CNPJ ${cnpj} — Rep.: ${repLegal}`;
+    ? `CONTRATADA: ${razaoSocial}${nomeSocial ? ' ("' + nomeSocial + '")' : ''} — CNPJ ${cnpj} — Rep.: ${titularNome}`
+    : `CONTRATADA: ${razaoSocial}${nomeSocial ? ' ("' + nomeSocial + '")' : ''} — CNPJ ${cnpj} — Rep.: ${repLegal}`;
   const assinaturaRepLegal = ehPrestadorMenor ? `\nRepresentante legal: ${repLegNome} — CPF ${repLegCpf} (${repLegParentesco})` : '';
 
   const corpo = `${titulo}
 
 QUALIFICAÇÃO DAS PARTES
-CONTRATANTE: LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS, empresa individual inscrita no CNPJ nº 28.398.119/0001-83, sede na Rua Dr. Carvalho de Mendonça, 67, Campos Elíseos, São Paulo/SP, atuando sob o nome operacional Espaço Liquidificador, representada por sua titular Cristiane Socci Leonel, CPF nº 321.132.368-69, doravante CONTRATANTE.
+CONTRATANTE: LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS, empresa individual inscrita no CNPJ nº 28.398.119/0001-83, com sede na Rua Dr. Carvalho de Mendonça, 67, Campos Elíseos, São Paulo/SP, atuando sob o nome operacional Espaço Liquidificador, representada por sua titular Cristiane Socci Leonel, CPF nº 321.132.368-69, doravante CONTRATANTE.
 
 ${qualificacao}
 
-Regem-se pelos arts. 593 e seguintes do Código Civil${ehMEI ? ' e pela LC 123/2006' : ''}.
+As partes regem-se pelos arts. 593 e seguintes do Código Civil${ehMEI ? ', bem como pela Lei Complementar nº 123/2006' : ''}.
 
 ${clausula1}
 
 ${clausula2}
 
-${clausula3a5}${clausula6 ? '\n\n' + clausula6 : ''}
+${clausulas3a5}${clausula6 ? '\n\n' + clausula6 : ''}
 
 ${clausula7}
 
 ${clausula8}
 
-${clausula9a14}${clausulaProtecaoCrianca}
+${clausula9(parteContratada)}
+
+${clausula10(parteContratada)}
+
+${clausula11(parteContratada)}
+
+${clausula12(parteContratada)}
+
+${clausula13(parteContratada, publicoMenor)}
+
+${clausula14(parteContratada)}${clausulaProtecaoCrianca}
 
 ${clausula15}${clausulaPrestadorMenor}
 
-${clausula16e17}
+${clausula16()}
+
+${clausula17()}
 
 ASSINATURAS
 CONTRATANTE: LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS — CNPJ 28.398.119/0001-83 — Rep.: Cristiane Socci Leonel
 ${assinaturaContratada}${assinaturaRepLegal}
 Testemunhas: 1) __________ 2) __________`;
 
-  return { corpo, ehPrestadorMenor, idadePrestador };
+  return { corpo, ehPrestadorMenor, idadePrestador, bloqueado: false };
 }
 
 function montarAnexoIIItens() {
@@ -2357,11 +2420,12 @@ function montarAnexoIIItens() {
 app.post('/contrato-professor/texto', (req, res) => {
   try {
     const resultado = montarTextoContratoProfessor(req.body);
+    if (resultado.bloqueado) return res.json({ ok: true, bloqueado: true, motivo: resultado.motivo });
     const ehRisco = req.body.modalidade === 'Circo Aéreo' || req.body.modalidade === 'Acrobática';
     const crypto = require('crypto');
     const versao = crypto.createHash('sha256').update(resultado.corpo).digest('hex').slice(0, 16);
     res.json({
-      ok: true,
+      ok: true, bloqueado: false,
       texto: resultado.corpo,
       ehPrestadorMenor: resultado.ehPrestadorMenor,
       idadePrestador: resultado.idadePrestador,
@@ -2381,7 +2445,10 @@ function gerarTokenAcesso() {
 app.post('/contrato-professor/criar', async (req, res) => {
   const d = req.body || {};
   if (!d.trilha || !d.modalidade || !d.professorTelefone || !d.valorHora) {
-    return res.status(400).json({ ok: false, erro: 'Preencha trilha, modalidade, telefone e valor da hora/aula.' });
+    return res.status(400).json({ ok: false, erro: 'Preencha trilha, modalidade, telefone e valor.' });
+  }
+  if (d.titularidade === 'Professor traz alunos') {
+    return res.json({ ok: true, bloqueado: true, motivo: 'Neste modelo, o(a) professor(a) utiliza o espaço mediante aluguel (cessão onerosa de uso), e não um contrato de docência. Utilize o instrumento de Cessão Onerosa de Uso para este caso.' });
   }
   try {
     const idadePrestador = calcularIdade(d.dataNascimento);
@@ -2389,44 +2456,30 @@ app.post('/contrato-professor/criar', async (req, res) => {
     if (ehPrestadorMenor && (!d.repLegNome || !d.repLegCpf)) {
       return res.status(400).json({ ok: false, erro: 'Prestador menor de 18 anos exige nome e CPF do representante legal.' });
     }
+    if (d.titularidade === 'Misto') {
+      const soma = Number(d.pctProfessor || 0) + Number(d.pctEspaco || 0);
+      if (soma !== 100) return res.status(400).json({ ok: false, erro: 'A soma dos percentuais (professor + espaço) deve ser 100%.' });
+    }
 
     const token = gerarTokenAcesso();
-    const nomeExibicao = d.trilha === 'PF-RPA' ? (d.nome || '') : (d.razaoSocial || '');
+    const nomeExibicao = d.nomeSocial || (d.trilha === 'PF-RPA' ? (d.nome || '') : (d.razaoSocial || ''));
     const riscoAlto = d.trilha === 'PF-RPA' && d.titularidade === 'Espaço matricula/cobra' && d.formato === 'Regulares contínuas';
+    const cpfCnpj = (d.trilha === 'PF-RPA' ? d.cpf : d.cnpj) || '';
 
     const props = {
       'Título': { title: [{ text: { content: nomeExibicao + ' — ' + d.modalidade } }] },
       'Professor': { rich_text: [{ text: { content: nomeExibicao } }] },
-      'CPF/CNPJ': { rich_text: [{ text: { content: (d.trilha === 'PF-RPA' ? d.cpf : d.cnpj) || '' } }] },
+      'CPF/CNPJ': { rich_text: [{ text: { content: cpfCnpj } }] },
       'Trilha': { select: { name: d.trilha } },
       'Modalidade': { select: { name: d.modalidade } },
       'Titularidade dos Alunos': { select: { name: d.titularidade } },
       'Formato': { select: { name: d.formato } },
       'Valor Hora/Aula': { number: Number(d.valorHora) },
-      'Base do Valor': { select: { name: d.trilha === 'PF-RPA' ? 'Bruto' : (d.baseValor || 'Bruto') } },
-      'Periodicidade': { select: { name: d.periodicidade } },
-      'Prazo de Quitação': { rich_text: [{ text: { content: d.prazoQuitacao || '' } }] },
-      'Substituição': { select: { name: d.substituicao } },
-      'Compensação Cancelamento': { checkbox: !!d.compensacaoCancelamento },
-      'Compensação Horas': { number: d.compensacaoCancelamento ? Number(d.compensacaoHoras || 0) : null },
-      'Compensação Percentual': { number: d.compensacaoCancelamento ? Number(d.compensacaoPct || 0) : null },
-      'Vigência': { select: { name: d.vigencia } },
-      'Aviso Prévio Dias': { number: Number(d.avisoPrevioDias || 30) },
-      'Contato de Emergência': { rich_text: [{ text: { content: d.contatoEmergencia || '' } }] },
-      'Data de Nascimento': d.dataNascimento ? { date: { start: d.dataNascimento } } : { date: null },
-      'Público Menor': { checkbox: !!d.publicoMenor },
-      'Nome Representante Legal': { rich_text: [{ text: { content: ehPrestadorMenor ? (d.repLegNome || '') : '' } }] },
-      'CPF Representante Legal': { rich_text: [{ text: { content: ehPrestadorMenor ? (d.repLegCpf || '') : '' } }] },
-      'Parentesco Representante Legal': { rich_text: [{ text: { content: ehPrestadorMenor ? (d.repLegParentesco || '') : '' } }] },
-      'Contato Representante Legal': { rich_text: [{ text: { content: ehPrestadorMenor ? (d.repLegContato || '') : '' } }] },
-      'Alerta Risco Alto': { checkbox: !!riscoAlto },
       'Status': { select: { name: 'Aguardando Aceite' } },
       'Token de Acesso': { rich_text: [{ text: { content: token } }] },
+      'Alerta Risco Alto': { checkbox: !!riscoAlto },
+      'Dados JSON': { rich_text: [{ text: { content: JSON.stringify(d).slice(0, 1900) } }] },
     };
-    if (d.vigencia === 'Determinada') {
-      props['Vigência Início'] = { date: { start: d.vigenciaInicio } };
-      props['Vigência Fim'] = { date: { start: d.vigenciaFim } };
-    }
 
     const rCriar = await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
@@ -2434,7 +2487,6 @@ app.post('/contrato-professor/criar', async (req, res) => {
       body: JSON.stringify({ parent: { database_id: CONTRATOS_PROF_DB }, properties: props }),
     });
     if (!rCriar.ok) { const t = await rCriar.text(); throw new Error('Notion: ' + t); }
-    const pagina = await rCriar.json();
 
     const numLimpo = (d.professorTelefone || '').replace(/\D/g, '');
     const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
@@ -2445,10 +2497,10 @@ app.post('/contrato-professor/criar', async (req, res) => {
       } catch(e) {}
     }
     if (riscoAlto) {
-      try { await enviarWhatsApp(WHATSAPP_FABIO, '⚠️ *Alerta de risco alto* — contrato de ' + nomeExibicao + ' (PF, Espaço matricula/cobra, aulas contínuas). Configuração de maior risco de vínculo empregatício. Considere a trilha PJ.'); } catch(e) {}
+      try { await enviarWhatsApp(WHATSAPP_FABIO, '⚠️ *Alerta de risco alto* — contrato de ' + nomeExibicao + ' (PF, Espaço matricula/cobra, aulas contínuas). Considere a trilha PJ.'); } catch(e) {}
     }
 
-    res.json({ ok: true, token, link: linkContrato, alertaRiscoAlto: riscoAlto });
+    res.json({ ok: true, bloqueado: false, token, link: linkContrato, alertaRiscoAlto: riscoAlto });
   } catch (err) {
     console.error('[contrato-professor/criar] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
@@ -2466,32 +2518,10 @@ app.get('/contrato-professor/rascunho/:token', async (req, res) => {
     const pagina = (dResp.results || [])[0];
     if (!pagina) return res.json({ ok: false, erro: 'Contrato não encontrado.' });
     const p = pagina.properties;
-    res.json({
-      ok: true,
-      pageId: pagina.id,
-      status: p['Status']?.select?.name,
-      professor: p['Professor']?.rich_text?.[0]?.plain_text || '',
-      trilha: p['Trilha']?.select?.name,
-      modalidade: p['Modalidade']?.select?.name,
-      titularidade: p['Titularidade dos Alunos']?.select?.name,
-      formato: p['Formato']?.select?.name,
-      valorHora: p['Valor Hora/Aula']?.number,
-      baseValor: p['Base do Valor']?.select?.name,
-      periodicidade: p['Periodicidade']?.select?.name,
-      prazoQuitacao: p['Prazo de Quitação']?.rich_text?.[0]?.plain_text || '',
-      substituicao: p['Substituição']?.select?.name,
-      compensacaoCancelamento: !!p['Compensação Cancelamento']?.checkbox,
-      compensacaoHoras: p['Compensação Horas']?.number,
-      compensacaoPct: p['Compensação Percentual']?.number,
-      vigencia: p['Vigência']?.select?.name,
-      vigenciaInicio: p['Vigência Início']?.date?.start,
-      vigenciaFim: p['Vigência Fim']?.date?.start,
-      avisoPrevioDias: p['Aviso Prévio Dias']?.number,
-      contatoEmergencia: p['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
-      dataNascimento: p['Data de Nascimento']?.date?.start || '',
-      publicoMenor: !!p['Público Menor']?.checkbox,
-      cpfCnpj: p['CPF/CNPJ']?.rich_text?.[0]?.plain_text || '',
-    });
+    const jsonBruto = p['Dados JSON']?.rich_text?.[0]?.plain_text || '{}';
+    let dadosCompletos = {};
+    try { dadosCompletos = JSON.parse(jsonBruto); } catch(e) {}
+    res.json({ ok: true, pageId: pagina.id, status: p['Status']?.select?.name, dadosCompletos });
   } catch (err) {
     console.error('[contrato-professor/rascunho] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
@@ -2499,7 +2529,7 @@ app.get('/contrato-professor/rascunho/:token', async (req, res) => {
 });
 
 app.post('/contrato-professor/aceitar', async (req, res) => {
-  const { token, dadosCompletos, assinaturaDigitada, anexoIIAceites, consentimentoLgpd, consentimentoRepLegal, versaoContrato, dispositivo } = req.body;
+  const { token, assinaturaDigitada, anexoIIAceites, consentimentoLgpd, consentimentoRepLegal, versaoContrato, dispositivo } = req.body;
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
 
   if (!token || !assinaturaDigitada || !consentimentoLgpd) {
@@ -2515,7 +2545,11 @@ app.post('/contrato-professor/aceitar', async (req, res) => {
     const pagina = (dResp.results || [])[0];
     if (!pagina) return res.status(404).json({ ok: false, erro: 'Contrato não encontrado.' });
 
+    const jsonBruto = pagina.properties['Dados JSON']?.rich_text?.[0]?.plain_text || '{}';
+    const dadosCompletos = JSON.parse(jsonBruto);
+
     const resultado = montarTextoContratoProfessor(dadosCompletos);
+    if (resultado.bloqueado) return res.status(400).json({ ok: false, erro: resultado.motivo });
     if (resultado.ehPrestadorMenor && !consentimentoRepLegal) {
       return res.status(400).json({ ok: false, erro: 'É necessário o consentimento do representante legal.' });
     }
