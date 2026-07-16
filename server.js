@@ -2087,7 +2087,7 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     const rCheckExistente = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_DB_PARA_WEBHOOK_PROPOSTA + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filter: { property: '📋 Proposta', relation: { contains: pageId } }, page_size: 1 }),
+      body: JSON.stringify({ filter: { property: 'Proposta', relation: { contains: pageId } }, page_size: 1 }),
     });
     const dCheckExistente = await rCheckExistente.json();
     if ((dCheckExistente.results || []).length > 0) {
@@ -2096,9 +2096,9 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     }
 
     const enderecoProp = p['Endereço'] || null; // tipo "place" - repassado como veio, sem remontar a estrutura
-    const nomeLocalDoEndereco = enderecoProp?.place?.name || '';
+    const tituloDaProposta = p['Local']?.title?.[0]?.plain_text || '';
     const contratanteNomes = (p['Contratante']?.multi_select || []).map(o => o.name);
-    const tituloApresentacao = nomeLocalDoEndereco || contratanteNomes.join(', ') || 'Apresentação sem local definido';
+    const tituloApresentacao = tituloDaProposta || contratanteNomes.join(', ') || 'Apresentação sem local definido';
 
     const dataApresentacao = p['Data']?.date?.start || null;
     const trabalhosIds = (p['🎭 Trabalhos']?.relation || []).map(r => r.id);
@@ -2106,7 +2106,7 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
 
     const propsNovaApresentacao = {
       'LOCAL': { title: [{ text: { content: tituloApresentacao } }] },
-      '📋 Proposta': { relation: [{ id: pageId }] },
+      'Proposta': { relation: [{ id: pageId }] },
     };
     if (enderecoProp?.place) propsNovaApresentacao['Endereço'] = { place: enderecoProp.place };
     if (dataApresentacao) propsNovaApresentacao['Data da Apresentação'] = { date: { start: dataApresentacao } };
