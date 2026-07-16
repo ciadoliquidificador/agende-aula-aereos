@@ -1334,7 +1334,7 @@ app.post('/residencia/inscrever', async (req, res) => {
     const numLimpo = (telefone || '').replace(/\D/g, '');
     const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
 
-    await fetch('https://api.notion.com/v1/pages', {
+    const rNotion = await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1386,6 +1386,12 @@ app.post('/residencia/inscrever', async (req, res) => {
         },
       }),
     });
+
+    if (!rNotion.ok) {
+      const corpoErro = await rNotion.text();
+      console.error('[residencia] ERRO ao gravar no Notion:', rNotion.status, corpoErro);
+      throw new Error('Falha ao gravar a inscrição no Notion: ' + corpoErro);
+    }
 
     const primeiroNome = nomeCivil.split(' ')[0];
     if (numBr) {
