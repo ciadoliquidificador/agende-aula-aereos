@@ -2215,6 +2215,13 @@ function clausula17() {
 17.1. As partes elegem o foro da Comarca de São Paulo/SP para dirimir quaisquer controvérsias oriundas deste contrato.`;
 }
 
+function anexoIAgenda(agenda) {
+  return `ANEXO I — AGENDA DE AULAS
+Integra este contrato a seguinte agenda, pactuada de comum acordo entre as partes, conforme referida na Cláusula 5ª:
+
+${agenda && agenda.trim() ? agenda.trim() : 'A ser detalhada e formalizada por escrito entre as partes, podendo ser ajustada a qualquer tempo mediante simples acordo, sem necessidade de aditivo contratual.'}`;
+}
+
 function montarTextoContratoProfessor(d) {
   const {
     trilha, modalidadeLabel, titularidade, formato, valorHora, periodicidade, prazoQuitacao,
@@ -2226,6 +2233,7 @@ function montarTextoContratoProfessor(d) {
     cnae, repLegal, repCpf,
     contatoEmergenciaNome, contatoEmergenciaTelefone,
     pctProfessor, pctEspaco, baseCalculo, quemFatura,
+    agenda,
   } = d;
 
   // Titularidade == professor traz alunos: nao gera contrato de docencia
@@ -2400,6 +2408,8 @@ ${clausula15}${clausulaPrestadorMenor}
 ${clausula16()}
 
 ${clausula17()}
+
+${anexoIAgenda(agenda)}
 
 ASSINATURAS
 CONTRATANTE: LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS — CNPJ 28.398.119/0001-83 — Rep.: Cristiane Socci Leonel
