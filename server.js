@@ -2624,6 +2624,364 @@ app.post('/contrato-professor/aceitar', async (req, res) => {
   }
 });
 
+const ADITIVOS_DB = '9b35319a73854e318cd9efc6497bfb0e';
+
+const CAMPOS_ADITAVEIS_LABELS = {
+  valorHora: 'Cláusula 7.1 (valor da hora/aula)',
+  agenda: 'Anexo I (agenda)',
+  pctProfessor: 'Cláusula 7.1 (percentual do(a) professor(a))',
+  pctEspaco: 'Cláusula 7.1 (percentual do Espaço)',
+  baseCalculo: 'Cláusula 7.2 (base de cálculo do repasse)',
+  quemFatura: 'Cláusula 7.3 (quem fatura o aluno pagante)',
+  periodicidade: 'Cláusula 7.3 (periodicidade de pagamento)',
+  prazoQuitacao: 'Cláusula 7.3 (prazo de quitação)',
+  avisoPrevioDias: 'Cláusula 15.2 (aviso prévio de rescisão)',
+  compensacaoCancelamento: 'Cláusula 7.6 (compensação por cancelamento)',
+  compensacaoHoras: 'Cláusula 7.6 (horas de antecedência da compensação)',
+  compensacaoPct: 'Cláusula 7.6 (percentual da compensação)',
+  vigencia: 'Cláusula 15.1 (vigência)',
+  vigenciaInicio: 'Cláusula 15.1 (início da vigência)',
+  vigenciaFim: 'Cláusula 15.1 (fim da vigência)',
+  substituicao: 'Cláusula 6ª (faculdade de substituição)',
+  formato: 'Cláusula 1.1 (formato da oferta)',
+  modalidade: 'Cláusula 1.1 (modalidade) — atenção: pode alterar anexos de aptidão ou proteção à criança',
+  publicoMenor: 'Cláusula 14-A (proteção à criança)',
+};
+
+const CAMPOS_BLOQUEADOS_ADITIVO = ['trilha', 'titularidade'];
+
+async function buscarAditivosDoContrato(contratoId) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + ADITIVOS_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { and: [
+        { property: 'Contrato Original', relation: { contains: contratoId } },
+        { property: 'Status', select: { equals: 'Aceito' } },
+      ]},
+      page_size: 100,
+    }),
+  });
+  const d = await r.json();
+  const aditivos = (d.results || []).map(p => {
+    const props = p.properties;
+    let alteracoes = [];
+    try { alteracoes = JSON.parse(props['Alterações JSON']?.rich_text?.[0]?.plain_text || '[]'); } catch(e) {}
+    return { numero: props['Número']?.number || 0, alteracoes };
+  });
+  aditivos.sort((a, b) => a.numero - b.numero);
+  return aditivos;
+}
+
+function aplicarAlteracoes(estadoBase, alteracoes) {
+  const novoEstado = { ...estadoBase };
+  alteracoes.forEach(alt => { novoEstado[alt.campo] = alt.valorNovo; });
+  return novoEstado;
+}
+
+app.get('/contrato-professor/listar-assinados', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + CONTRATOS_PROF_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Status', select: { equals: 'Aceito' } }, page_size: 100 }),
+    });
+    const d = await r.json();
+    const contratos = (d.results || []).map(p => ({
+      pageId: p.id,
+      professor: p.properties['Professor']?.rich_text?.[0]?.plain_text || '',
+      modalidade: p.properties['Modalidade']?.select?.name || '',
+      trilha: p.properties['Trilha']?.select?.name || '',
+    }));
+    res.json({ ok: true, contratos });
+  } catch (err) {
+    console.error('[aditivo/listar-assinados] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.get('/contrato-professor/estado-vigente/:pageId', async (req, res) => {
+  try {
+    const rOriginal = await fetch('https://api.notion.com/v1/pages/' + req.params.pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const original = await rOriginal.json();
+    if (!original.properties) return res.json({ ok: false, erro: 'Contrato não encontrado.' });
+    if (original.properties['Status']?.select?.name !== 'Aceito') {
+      return res.json({ ok: false, erro: 'Só é possível aditar contratos já assinados.' });
+    }
+
+    const dadosOriginais = JSON.parse(original.properties['Dados JSON']?.rich_text?.[0]?.plain_text || '{}');
+    const aditivosAnteriores = await buscarAditivosDoContrato(req.params.pageId);
+    let estadoVigente = { ...dadosOriginais };
+    aditivosAnteriores.forEach(ad => { estadoVigente = aplicarAlteracoes(estadoVigente, ad.alteracoes); });
+
+    res.json({
+      ok: true,
+      pageId: req.params.pageId,
+      professor: original.properties['Professor']?.rich_text?.[0]?.plain_text || '',
+      cpfCnpj: original.properties['CPF/CNPJ']?.rich_text?.[0]?.plain_text || '',
+      proximoNumero: aditivosAnteriores.length + 1,
+      estadoVigente,
+    });
+  } catch (err) {
+    console.error('[aditivo/estado-vigente] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/contrato-professor/aditivo/criar', async (req, res) => {
+  const { contratoOriginalId, campos, dataEfeito } = req.body;
+  if (!contratoOriginalId || !campos || !dataEfeito) {
+    return res.status(400).json({ ok: false, erro: 'Preencha os campos obrigatórios.' });
+  }
+  const camposBloqueadosEnviados = Object.keys(campos).filter(c => CAMPOS_BLOQUEADOS_ADITIVO.includes(c));
+  if (camposBloqueadosEnviados.length > 0) {
+    return res.status(400).json({ ok: false, erro: 'Mudança de tipo de prestador (PF/MEI/ME) ou de modelo de remuneração (titularidade) exige um contrato NOVO, não um aditivo.' });
+  }
+
+  try {
+    const rOriginal = await fetch('https://api.notion.com/v1/pages/' + contratoOriginalId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const original = await rOriginal.json();
+    if (!original.properties) return res.status(404).json({ ok: false, erro: 'Contrato não encontrado.' });
+    if (original.properties['Status']?.select?.name !== 'Aceito') {
+      return res.status(400).json({ ok: false, erro: 'Só é possível aditar contratos já assinados.' });
+    }
+
+    const dadosOriginais = JSON.parse(original.properties['Dados JSON']?.rich_text?.[0]?.plain_text || '{}');
+    const aditivosAnteriores = await buscarAditivosDoContrato(contratoOriginalId);
+    let estadoVigente = { ...dadosOriginais };
+    aditivosAnteriores.forEach(ad => { estadoVigente = aplicarAlteracoes(estadoVigente, ad.alteracoes); });
+
+    if ('pctProfessor' in campos || 'pctEspaco' in campos) {
+      const novoPctProf = Number('pctProfessor' in campos ? campos.pctProfessor : estadoVigente.pctProfessor);
+      const novoPctEsp = Number('pctEspaco' in campos ? campos.pctEspaco : estadoVigente.pctEspaco);
+      if (novoPctProf + novoPctEsp !== 100) {
+        return res.status(400).json({ ok: false, erro: 'A soma dos percentuais deve ser 100%.' });
+      }
+    }
+
+    const alteracoes = Object.entries(campos)
+      .filter(([campo, novoValor]) => String(estadoVigente[campo] ?? '') !== String(novoValor))
+      .map(([campo, novoValor]) => ({
+        campo,
+        referenciaClausula: CAMPOS_ADITAVEIS_LABELS[campo] || campo,
+        valorAnterior: estadoVigente[campo] ?? '(não definido)',
+        valorNovo: novoValor,
+      }));
+
+    if (alteracoes.length === 0) {
+      return res.status(400).json({ ok: false, erro: 'Nenhuma alteração real foi detectada em relação ao estado vigente.' });
+    }
+
+    const numero = aditivosAnteriores.length + 1;
+    const token = require('crypto').randomBytes(16).toString('hex');
+    const professor = original.properties['Professor']?.rich_text?.[0]?.plain_text || '';
+    const cpfCnpj = original.properties['CPF/CNPJ']?.rich_text?.[0]?.plain_text || '';
+
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: ADITIVOS_DB },
+        properties: {
+          'Título': { title: [{ text: { content: professor + ' — ' + numero + 'º Aditivo' } }] },
+          'Contrato Original': { relation: [{ id: contratoOriginalId }] },
+          'CPF/CNPJ Contrato': { rich_text: [{ text: { content: cpfCnpj } }] },
+          'Número': { number: numero },
+          'Data de Efeito': { date: { start: dataEfeito } },
+          'Alterações JSON': { rich_text: [{ text: { content: JSON.stringify(alteracoes).slice(0, 1900) } }] },
+          'Status': { select: { name: 'Aguardando Aceite' } },
+          'Token de Acesso': { rich_text: [{ text: { content: token } }] },
+        },
+      }),
+    });
+
+    const telefone = (dadosOriginais.professorTelefone || '').replace(/\D/g, '');
+    const numBr = telefone.length === 11 ? '55' + telefone : telefone;
+    const linkAditivo = 'https://contratos-professores.ciadoliquidificador.com.br/aditivo/?token=' + token;
+    if (numBr) {
+      try {
+        await enviarWhatsApp(numBr, 'Olá, ' + (professor.split(' ')[0] || '') + '! 📎\n\nHá um Termo Aditivo (nº ' + numero + ') ao seu contrato de docência aguardando sua revisão e aceite:\n\n' + linkAditivo + '\n\nQualquer dúvida, é só chamar.');
+      } catch(e) {}
+    }
+
+    res.json({ ok: true, numero, token, link: linkAditivo, alteracoes });
+  } catch (err) {
+    console.error('[aditivo/criar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+function montarTextoTermoAditivo(dados) {
+  const { professor, numero, dataOriginalFmt, alteracoes, dataEfeitoFmt, dataAssinaturaFmt, contratoOriginalId } = dados;
+  const listaAlteracoes = alteracoes.map(a =>
+    '• ' + a.referenciaClausula + ' — De: ' + a.valorAnterior + '  →  Para: ' + a.valorNovo
+  ).join('\n');
+
+  return `TERMO ADITIVO Nº ${numero} AO CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE DOCÊNCIA
+
+Referência: contrato firmado em ${dataOriginalFmt} (ID ${contratoOriginalId}).
+
+PARTES: CONTRATANTE — LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS, CNPJ nº 28.398.119/0001-83, representada por sua titular Cristiane Socci Leonel, CPF nº 321.132.368-69; e CONTRATADO(A) — ${professor}, conforme qualificação constante do contrato original acima referenciado.
+
+Considerando que as partes desejam, de comum acordo, alterar termos do contrato acima identificado, firmam o presente Termo Aditivo:
+
+CLÁUSULA 1ª — DAS ALTERAÇÕES
+Ficam alteradas as seguintes disposições:
+${listaAlteracoes}
+
+CLÁUSULA 2ª — DA VIGÊNCIA DAS ALTERAÇÕES
+2.1. As alterações ora pactuadas produzem efeitos a partir de ${dataEfeitoFmt}.
+
+CLÁUSULA 3ª — DA RATIFICAÇÃO
+3.1. Ficam ratificadas e inalteradas todas as demais cláusulas e condições do contrato original, que permanece em pleno vigor no que não conflitar com o presente Termo Aditivo.
+
+São Paulo, ${dataAssinaturaFmt}.
+
+ASSINATURAS
+CONTRATANTE: LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS — Rep.: Cristiane Socci Leonel
+CONTRATADO(A): ${professor}
+Testemunhas: 1) __________ 2) __________`;
+}
+
+app.get('/contrato-professor/aditivo/rascunho/:token', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ADITIVOS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Token de Acesso', rich_text: { equals: req.params.token } }, page_size: 1 }),
+    });
+    const dResp = await r.json();
+    const pagina = (dResp.results || [])[0];
+    if (!pagina) return res.json({ ok: false, erro: 'Termo aditivo não encontrado.' });
+
+    const contratoRel = pagina.properties['Contrato Original']?.relation?.[0]?.id;
+    const rOriginal = await fetch('https://api.notion.com/v1/pages/' + contratoRel, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const original = await rOriginal.json();
+    const professor = original.properties['Professor']?.rich_text?.[0]?.plain_text || '';
+    const dataOriginalISO = original.created_time ? original.created_time.split('T')[0] : '';
+
+    let alteracoes = [];
+    try { alteracoes = JSON.parse(pagina.properties['Alterações JSON']?.rich_text?.[0]?.plain_text || '[]'); } catch(e) {}
+    const numero = pagina.properties['Número']?.number || 0;
+    const dataEfeitoISO = pagina.properties['Data de Efeito']?.date?.start || '';
+
+    const texto = montarTextoTermoAditivo({
+      professor, numero,
+      dataOriginalFmt: dataOriginalISO ? dataOriginalISO.split('-').reverse().join('/') : '(data não disponível)',
+      alteracoes,
+      dataEfeitoFmt: dataEfeitoISO ? dataEfeitoISO.split('-').reverse().join('/') : '(a definir)',
+      dataAssinaturaFmt: new Date().toLocaleDateString('pt-BR'),
+      contratoOriginalId: contratoRel,
+    });
+
+    res.json({ ok: true, pageId: pagina.id, professor, numero, alteracoes, texto });
+  } catch (err) {
+    console.error('[aditivo/rascunho] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/contrato-professor/aditivo/aceitar', async (req, res) => {
+  const { token, assinaturaDigitada, consentimentoLgpd, dispositivo } = req.body;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+
+  if (!token || !assinaturaDigitada || !consentimentoLgpd) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ADITIVOS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Token de Acesso', rich_text: { equals: token } }, page_size: 1 }),
+    });
+    const dResp = await r.json();
+    const pagina = (dResp.results || [])[0];
+    if (!pagina) return res.status(404).json({ ok: false, erro: 'Termo aditivo não encontrado.' });
+
+    const contratoRel = pagina.properties['Contrato Original']?.relation?.[0]?.id;
+    const rOriginal = await fetch('https://api.notion.com/v1/pages/' + contratoRel, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const original = await rOriginal.json();
+    const professor = original.properties['Professor']?.rich_text?.[0]?.plain_text || '';
+    const dataOriginalISO = original.created_time ? original.created_time.split('T')[0] : '';
+
+    let alteracoes = [];
+    try { alteracoes = JSON.parse(pagina.properties['Alterações JSON']?.rich_text?.[0]?.plain_text || '[]'); } catch(e) {}
+    const numero = pagina.properties['Número']?.number || 0;
+    const dataEfeitoISO = pagina.properties['Data de Efeito']?.date?.start || '';
+
+    const dataHoraISO = new Date().toISOString();
+    const texto = montarTextoTermoAditivo({
+      professor, numero,
+      dataOriginalFmt: dataOriginalISO ? dataOriginalISO.split('-').reverse().join('/') : '(data não disponível)',
+      alteracoes,
+      dataEfeitoFmt: dataEfeitoISO ? dataEfeitoISO.split('-').reverse().join('/') : '(a definir)',
+      dataAssinaturaFmt: new Date().toLocaleDateString('pt-BR'),
+      contratoOriginalId: contratoRel,
+    });
+
+    const crypto = require('crypto');
+    const versaoCalculada = crypto.createHash('sha256').update(texto).digest('hex').slice(0, 16);
+
+    let linkPdf = '';
+    try {
+      const PDFDocument = require('pdfkit');
+      const chunks = [];
+      const doc = new PDFDocument({ margin: 50 });
+      doc.on('data', c => chunks.push(c));
+      const fim = new Promise(resolve => doc.on('end', () => resolve(Buffer.concat(chunks))));
+      doc.fontSize(9).text(texto);
+      doc.moveDown(2);
+      doc.fontSize(9).text('--- REGISTRO DE ACEITE ELETRÔNICO ---');
+      doc.text('Assinado por: ' + assinaturaDigitada);
+      doc.text('Data/Hora: ' + dataHoraISO);
+      doc.text('IP: ' + ip);
+      doc.text('Dispositivo: ' + (dispositivo || ''));
+      doc.text('Versão do documento: ' + versaoCalculada);
+      doc.end();
+      const pdfBuffer = await fim;
+
+      const msToken = await getMicrosoftToken();
+      const nomePasta = 'Aditivos-Contratos-Professores-' + slugify(professor);
+      const folderId = await criarOuObterSubpasta(msToken, nomePasta);
+      const pdfUploaded = await uploadBufferOneDrive(msToken, folderId, pdfBuffer, 'aditivo-' + numero + '-' + Date.now() + '.pdf');
+      linkPdf = await criarLinkCompartilhamento(msToken, pdfUploaded.id);
+    } catch (e) {
+      console.error('[aditivo/aceitar] erro ao gerar/subir PDF:', e.message);
+    }
+
+    await fetch('https://api.notion.com/v1/pages/' + pagina.id, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Status': { select: { name: 'Aceito' } },
+          'Assinatura Digitada': { rich_text: [{ text: { content: assinaturaDigitada } }] },
+          'IP Aceite': { rich_text: [{ text: { content: ip } }] },
+          'User-Agent Aceite': { rich_text: [{ text: { content: dispositivo || '' } }] },
+          'Data/Hora Aceite': { date: { start: dataHoraISO } },
+          'Versão do Documento': { rich_text: [{ text: { content: versaoCalculada } }] },
+          'Link do PDF': { url: linkPdf || null },
+        },
+      }),
+    });
+
+    try { await enviarWhatsApp(WHATSAPP_FABIO, '✅ *Termo Aditivo aceito* — ' + professor + ' (nº ' + numero + ')'); } catch(e) {}
+
+    res.json({ ok: true, linkPdf });
+  } catch (err) {
+    console.error('[aditivo/aceitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.get('/contrato-professor/meu/:cpfCnpj', async (req, res) => {
   try {
     const r = await fetch('https://api.notion.com/v1/databases/' + CONTRATOS_PROF_DB + '/query', {
