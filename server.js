@@ -1893,6 +1893,7 @@ const PROFESSORES_PORTAL = [
   { nome: 'Titzi', cpf: '30814279830', telefone: '5511951780877' },
   { nome: 'Giulia', cpf: '51310549826', telefone: '5512988222584' },
   { nome: 'Roberta', cpf: '21811238882', telefone: '5511971918173' },
+  { nome: 'Fábio', cpf: '21529074851', telefone: WHATSAPP_FABIO },
 ];
 
 app.post('/portal/login/solicitar', async (req, res) => {
