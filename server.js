@@ -1950,11 +1950,19 @@ app.post('/portal/login/verificar', async (req, res) => {
   try {
     const prof = await buscarProfessorPorCpf(cpfLimpo);
     if (!prof) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
-    res.json({ ok: true, nome: prof.nome, telefone: prof.telefone, endereco: prof.endereco, email: prof.email });
+    const dadosLogin = { nome: prof.nome, telefone: prof.telefone, endereco: prof.endereco, email: prof.email };
+    const sessionToken = criarSessao('prof_' + cpfLimpo, dadosLogin);
+    res.json({ ok: true, ...dadosLogin, sessionToken });
   } catch (err) {
     console.error('[portal/login/verificar] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
   }
+});
+
+app.post('/portal/sessao/verificar', (req, res) => {
+  const dados = verificarSessao(req.body.sessionToken);
+  if (!dados) return res.json({ ok: false, erro: 'Sessão expirada.' });
+  res.json({ ok: true, ...dados });
 });
 
 app.post('/portal/atualizar-cadastro', async (req, res) => {
@@ -3161,11 +3169,19 @@ app.post('/portal-aluna/login/verificar', async (req, res) => {
   try {
     const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
     if (matriculas.length === 0) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
-    res.json({ ok: true, nome: matriculas[0].nome, contato: matriculas[0].contato, matriculas });
+    const dadosLogin = { nome: matriculas[0].nome, contato: matriculas[0].contato, matriculas };
+    const sessionToken = criarSessao('aluna_' + cpfLimpo, dadosLogin);
+    res.json({ ok: true, ...dadosLogin, sessionToken });
   } catch (err) {
     console.error('[portal-aluna/login/verificar] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
   }
+});
+
+app.post('/portal-aluna/sessao/verificar', (req, res) => {
+  const dados = verificarSessao(req.body.sessionToken);
+  if (!dados) return res.json({ ok: false, erro: 'Sessão expirada.' });
+  res.json({ ok: true, ...dados });
 });
 
 app.get('/portal-aluna/presencas/:cpf', async (req, res) => {
@@ -3578,6 +3594,20 @@ app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
 // OTP GENERICO — senha unica enviada por WhatsApp (Portal Aluna, Portal Profs, Mural)
 // ============================================================
 const otpStore = {};
+const sessaoStore = {};
+
+function criarSessao(identificador, dados) {
+  const token = require('crypto').randomBytes(16).toString('hex');
+  sessaoStore[token] = { identificador, dados, expiraEm: Date.now() + 10 * 60000 };
+  return token;
+}
+
+function verificarSessao(token) {
+  const registro = sessaoStore[token];
+  if (!registro) return null;
+  if (Date.now() > registro.expiraEm) { delete sessaoStore[token]; return null; }
+  return registro.dados;
+}
 
 function gerarCodigoOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
