@@ -1895,10 +1895,26 @@ const PROFESSORES_PORTAL = [
   { nome: 'Roberta', cpf: '21811238882', telefone: '5511971918173' },
 ];
 
-app.get('/portal/login/:cpf', (req, res) => {
-  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+app.post('/portal/login/solicitar', async (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
   const prof = PROFESSORES_PORTAL.find(p => p.cpf && p.cpf === cpfLimpo);
   if (!prof) return res.json({ ok: false, erro: 'CPF não encontrado. Fale com o Fábio.' });
+  try {
+    const numBr = prof.telefone;
+    await enviarOtp('prof_' + cpfLimpo, numBr, prof.nome);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal/login/solicitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal/login/verificar', (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
+  const verificacao = verificarOtp('prof_' + cpfLimpo, req.body.codigo);
+  if (!verificacao.ok) return res.json(verificacao);
+  const prof = PROFESSORES_PORTAL.find(p => p.cpf && p.cpf === cpfLimpo);
+  if (!prof) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
   res.json({ ok: true, nome: prof.nome, telefone: prof.telefone });
 });
 
@@ -3017,47 +3033,68 @@ app.get('/contrato-professor/meu/:cpfCnpj', async (req, res) => {
 // PORTAL ALUNA — login por CPF, contrato, presenca, solicitacoes
 // ============================================================
 const PRESENCAS_2026_DB = '282c0bc0-06d8-4828-acae-d5ac35388318';
+const REPOSICOES_DB = 'dde8519e6e0f4157b2bb56b545e2ef84';
 
-app.get('/portal-aluna/login/:cpf', async (req, res) => {
-  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+async function buscarMatriculasPorCpf(cpfLimpo) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { and: [
+        { property: 'CPF', rich_text: { equals: cpfLimpo } },
+        { property: 'Status', select: { equals: 'Ativa' } },
+      ]},
+      page_size: 20,
+    }),
+  });
+  const d = await r.json();
+  return (d.results || []).map(p => {
+    const props = p.properties;
+    return {
+      pageId: p.id,
+      nome: props['Nome']?.title?.[0]?.plain_text || '',
+      contato: props['Contato']?.phone_number || '',
+      email: props['Email']?.email || '',
+      endereco: props['Endereço']?.rich_text?.[0]?.plain_text || '',
+      modalidade: props['Modalidade']?.select?.name || '',
+      turma: props['Turma']?.select?.name || '',
+      dia: props['Dia']?.select?.name || '',
+      horario: props['Horário']?.select?.name || '',
+      professor: props['Professor']?.select?.name || '',
+      plano: props['Plano']?.select?.name || '',
+      frequencia: props['Frequência']?.select?.name || '',
+      valor: props['Valor']?.number || null,
+      linkContratoPdf: props['Link do Contrato PDF']?.url || '',
+      contatoEmergenciaNome: props['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
+      contatoEmergenciaTelefone: props['Tel. Emergência']?.phone_number || '',
+    };
+  });
+}
+
+app.post('/portal-aluna/login/solicitar', async (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
   try {
-    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filter: { and: [
-          { property: 'CPF', rich_text: { equals: cpfLimpo } },
-          { property: 'Status', select: { equals: 'Ativa' } },
-        ]},
-        page_size: 20,
-      }),
-    });
-    const d = await r.json();
-    const matriculas = (d.results || []).map(p => {
-      const props = p.properties;
-      return {
-        pageId: p.id,
-        nome: props['Nome']?.title?.[0]?.plain_text || '',
-        contato: props['Contato']?.phone_number || '',
-        modalidade: props['Modalidade']?.select?.name || '',
-        turma: props['Turma']?.select?.name || '',
-        dia: props['Dia']?.select?.name || '',
-        horario: props['Horário']?.select?.name || '',
-        professor: props['Professor']?.select?.name || '',
-        plano: props['Plano']?.select?.name || '',
-        frequencia: props['Frequência']?.select?.name || '',
-        valor: props['Valor']?.number || null,
-        linkContratoPdf: props['Link do Contrato PDF']?.url || '',
-        contatoEmergenciaNome: props['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
-        contatoEmergenciaTelefone: props['Tel. Emergência']?.phone_number || '',
-      };
-    });
-
+    const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
     if (matriculas.length === 0) return res.json({ ok: false, erro: 'CPF não encontrado ou sem matrícula ativa. Fale com o Fábio.' });
+    const numBr = matriculas[0].contato.replace(/\D/g, '');
+    await enviarOtp('aluna_' + cpfLimpo, numBr.length === 11 ? '55' + numBr : numBr, matriculas[0].nome);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-aluna/login/solicitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
 
+app.post('/portal-aluna/login/verificar', async (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
+  const verificacao = verificarOtp('aluna_' + cpfLimpo, req.body.codigo);
+  if (!verificacao.ok) return res.json(verificacao);
+  try {
+    const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
+    if (matriculas.length === 0) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
     res.json({ ok: true, nome: matriculas[0].nome, contato: matriculas[0].contato, matriculas });
   } catch (err) {
-    console.error('[portal-aluna/login] erro:', err.message);
+    console.error('[portal-aluna/login/verificar] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
@@ -3149,14 +3186,41 @@ async function notificarSolicitacaoAluna(tipo, nome, contato, detalhes) {
 }
 
 app.post('/portal-aluna/solicitar-reposicao', async (req, res) => {
-  const { cpf, nome, contato, modalidade, turmaAtual, turmaDesejada, dataDesejada } = req.body;
+  const { cpf, nome, contato, modalidade, turmaAtual, turmaDesejada, dataDesejada, frequencia } = req.body;
   if (!cpf || !modalidade || !turmaDesejada || !dataDesejada) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
+  if (turmaDesejada === turmaAtual) {
+    return res.status(400).json({ ok: false, erro: 'A reposição precisa ser em um horário diferente da sua turma atual.' });
+  }
+  const cpfLimpo = (cpf || '').replace(/\D/g, '');
+
   try {
     const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
     const infoTurma = dadosModalidade?.turmas.find(t => t.nome === turmaDesejada);
     if (!infoTurma) return res.status(400).json({ ok: false, erro: 'Turma inválida.' });
+
+    // Cota mensal de reposicao conforme a frequencia do plano
+    const cota = frequencia === '2x semana' ? 2 : 1;
+    const hoje = new Date();
+    const mesReferencia = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
+    const rCota = await fetch('https://api.notion.com/v1/databases/' + REPOSICOES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'CPF Aluna', rich_text: { equals: cpfLimpo } },
+          { property: 'Mês de Referência', rich_text: { equals: mesReferencia } },
+          { property: 'Status', select: { does_not_equal: 'Negada' } },
+        ]},
+        page_size: 20,
+      }),
+    });
+    const dCota = await rCota.json();
+    const usadas = (dCota.results || []).length;
+    if (usadas >= cota) {
+      return res.json({ ok: false, erro: 'Você já usou sua cota de reposições deste mês (' + usadas + ' de ' + cota + '). Fale com o Fábio se precisar de uma exceção.' });
+    }
 
     const rCheck = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
       method: 'POST',
@@ -3176,10 +3240,28 @@ app.post('/portal-aluna/solicitar-reposicao', async (req, res) => {
       return res.json({ ok: false, erro: 'Essa turma está sem vaga disponível para reposição. Escolha outro horário.' });
     }
 
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: REPOSICOES_DB },
+        properties: {
+          'Título': { title: [{ text: { content: nome + ' — ' + mesReferencia } }] },
+          'CPF Aluna': { rich_text: [{ text: { content: cpfLimpo } }] },
+          'Modalidade': { rich_text: [{ text: { content: modalidade } }] },
+          'Turma Origem': { rich_text: [{ text: { content: turmaAtual || '' } }] },
+          'Turma Desejada': { rich_text: [{ text: { content: turmaDesejada } }] },
+          'Data Desejada': { rich_text: [{ text: { content: dataDesejada } }] },
+          'Mês de Referência': { rich_text: [{ text: { content: mesReferencia } }] },
+          'Status': { select: { name: 'Solicitada' } },
+        },
+      }),
+    });
+
     await notificarSolicitacaoAluna(
       'Reposição de aula',
       nome, contato,
-      'De: ' + (turmaAtual || '(não informado)') + '\nPara: ' + turmaDesejada + ', em ' + dataDesejada
+      'De: ' + (turmaAtual || '(não informado)') + '\nPara: ' + turmaDesejada + ', em ' + dataDesejada + '\n(Uso da cota: ' + (usadas + 1) + ' de ' + cota + ')'
     );
     res.json({ ok: true });
   } catch (err) {
@@ -3189,14 +3271,15 @@ app.post('/portal-aluna/solicitar-reposicao', async (req, res) => {
 });
 
 app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
-  const { cpf, nome, contato, modalidade, turmaAtual, novaTurma } = req.body;
-  if (!cpf || !modalidade || !novaTurma) {
-    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  const { cpf, nome, contato, modalidade, turmaAtual, novaTurma, motivo } = req.body;
+  if (!cpf || !modalidade || !novaTurma || !motivo) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios, incluindo o motivo.' });
   }
   try {
     const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
-    const infoTurma = dadosModalidade?.turmas.find(t => t.nome === novaTurma);
-    if (!infoTurma) return res.status(400).json({ ok: false, erro: 'Turma inválida.' });
+    const infoTurmaNova = dadosModalidade?.turmas.find(t => t.nome === novaTurma);
+    const infoTurmaAntiga = dadosModalidade?.turmas.find(t => t.nome === turmaAtual);
+    if (!infoTurmaNova) return res.status(400).json({ ok: false, erro: 'Turma inválida.' });
 
     const rCheck = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
       method: 'POST',
@@ -3212,15 +3295,27 @@ app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
     });
     const dCheck = await rCheck.json();
     const ocupadas = (dCheck.results || []).length;
-    if (ocupadas >= infoTurma.limite) {
+    if (ocupadas >= infoTurmaNova.limite) {
       return res.json({ ok: false, erro: 'Essa turma já está lotada. Escolha outro horário.' });
     }
 
     await notificarSolicitacaoAluna(
       'Mudança de turma',
       nome, contato,
-      'De: ' + (turmaAtual || '(não informado)') + '\nPara: ' + novaTurma
+      'De: ' + (turmaAtual || '(não informado)') + '\nPara: ' + novaTurma + '\nMotivo: ' + motivo
     );
+
+    // Avisa o professor antigo e o novo (se forem diferentes)
+    const msgProfessores = 'ℹ️ *Aviso de mudança de turma*\n\nAluna: ' + nome + '\nDe: ' + (turmaAtual || '(não informado)') + '\nPara: ' + novaTurma + '\nMotivo: ' + motivo;
+    if (infoTurmaAntiga?.professor) {
+      const telAntigo = buscarTelefoneProfessorPorNome(infoTurmaAntiga.professor);
+      if (telAntigo) { try { await enviarWhatsAppComHorarioComercial(telAntigo, msgProfessores); } catch(e) {} }
+    }
+    if (infoTurmaNova?.professor && infoTurmaNova.professor !== infoTurmaAntiga?.professor) {
+      const telNovo = buscarTelefoneProfessorPorNome(infoTurmaNova.professor);
+      if (telNovo) { try { await enviarWhatsAppComHorarioComercial(telNovo, msgProfessores); } catch(e) {} }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error('[portal-aluna/solicitar-mudanca-turma] erro:', err.message);
@@ -3250,6 +3345,148 @@ app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
   }
 });
 
+app.post('/portal-aluna/atualizar-cadastro', async (req, res) => {
+  const { cpf, nome, email, contato, endereco } = req.body;
+  const cpfLimpo = (cpf || '').replace(/\D/g, '');
+  if (!cpfLimpo || !nome || !email || !contato) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 20 }),
+    });
+    const d = await r.json();
+    const paginas = d.results || [];
+    if (paginas.length === 0) return res.status(404).json({ ok: false, erro: 'Cadastro não encontrado.' });
+
+const MURAL_DB = 'c45786e213ff463f8558054b2f787a69';
+
+app.post('/mural/login/solicitar', async (req, res) => {
+  try {
+    await enviarOtp('mural_fabio', WHATSAPP_FABIO, 'Fábio');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[mural/login/solicitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/mural/login/verificar', (req, res) => {
+  const verificacao = verificarOtp('mural_fabio', req.body.codigo);
+  res.json(verificacao);
+});
+
+app.get('/mural/turmas-disponiveis', (req, res) => {
+  const turmas = [];
+  for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
+    dados.turmas.forEach(t => turmas.push({ modalidade, turma: t.nome, dia: t.dia, horario: t.horario }));
+  }
+  res.json({ ok: true, turmas });
+});
+
+app.post('/mural/postar', async (req, res) => {
+  const { titulo, mensagem, turmasAlvo } = req.body;
+  if (!titulo || !mensagem || !Array.isArray(turmasAlvo) || turmasAlvo.length === 0) {
+    return res.status(400).json({ ok: false, erro: 'Preencha título, mensagem e ao menos uma turma.' });
+  }
+  try {
+    const filtrosOr = turmasAlvo.map(t => ({ and: [
+      { property: 'Modalidade', select: { equals: t.modalidade } },
+      { property: 'Turma', select: { equals: t.turma } },
+      { property: 'Status', select: { equals: 'Ativa' } },
+    ]}));
+    const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { or: filtrosOr }, page_size: 200 }),
+    });
+    const dAlunas = await rAlunas.json();
+    const contatos = new Set();
+    (dAlunas.results || []).forEach(p => {
+      const contato = p.properties['Contato']?.phone_number;
+      if (contato) contatos.add(contato.replace(/\D/g, ''));
+    });
+
+    const msgCompleta = '📢 *' + titulo + '*\n\n' + mensagem;
+    let enviados = 0;
+    for (const numLimpo of contatos) {
+      const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
+      try { await enviarWhatsAppComHorarioComercial(numBr, msgCompleta); enviados++; } catch(e) {}
+    }
+
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: MURAL_DB },
+        properties: {
+          'Título': { title: [{ text: { content: titulo } }] },
+          'Mensagem': { rich_text: [{ text: { content: mensagem } }] },
+          'Turmas Alvo JSON': { rich_text: [{ text: { content: JSON.stringify(turmasAlvo) } }] },
+          'Autor': { rich_text: [{ text: { content: 'Fábio' } }] },
+          'Enviado': { checkbox: true },
+          'Total Destinatarios': { number: enviados },
+        },
+      }),
+    });
+
+    res.json({ ok: true, totalDestinatarios: enviados });
+  } catch (err) {
+    console.error('[mural/postar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.get('/mural/listar/:modalidade/:turma', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + MURAL_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sorts: [{ timestamp: 'created_time', direction: 'descending' }], page_size: 30 }),
+    });
+    const d = await r.json();
+    const modalidade = decodeURIComponent(req.params.modalidade);
+    const turma = decodeURIComponent(req.params.turma);
+    const avisos = (d.results || []).filter(p => {
+      let turmasAlvo = [];
+      try { turmasAlvo = JSON.parse(p.properties['Turmas Alvo JSON']?.rich_text?.[0]?.plain_text || '[]'); } catch(e) {}
+      return turmasAlvo.some(t => t.modalidade === modalidade && t.turma === turma);
+    }).map(p => ({
+      titulo: p.properties['Título']?.title?.[0]?.plain_text || '',
+      mensagem: p.properties['Mensagem']?.rich_text?.[0]?.plain_text || '',
+      data: p.created_time,
+    }));
+    res.json({ ok: true, avisos });
+  } catch (err) {
+    console.error('[mural/listar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+    for (const pagina of paginas) {
+      await fetch('https://api.notion.com/v1/pages/' + pagina.id, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          properties: {
+            'Nome': { title: [{ text: { content: nome } }] },
+            'Email': { email: email },
+            'Contato': { phone_number: contato },
+            'Endereço': { rich_text: [{ text: { content: endereco || '' } }] },
+          },
+        }),
+      });
+    }
+    try { await enviarWhatsApp(WHATSAPP_FABIO, 'ℹ️ *Dados cadastrais atualizados* — ' + nome + ' (' + contato + ')'); } catch(e) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-aluna/atualizar-cadastro] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
   const { cpf, nome, contato, modalidade, turma, motivo } = req.body;
   if (!cpf || !modalidade) {
@@ -3267,6 +3504,35 @@ app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
+
+// ============================================================
+// OTP GENERICO — senha unica enviada por WhatsApp (Portal Aluna, Portal Profs, Mural)
+// ============================================================
+const otpStore = {};
+
+function gerarCodigoOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+async function enviarOtp(identificador, numeroWhatsapp, nome) {
+  const codigo = gerarCodigoOtp();
+  otpStore[identificador] = { codigo, expiraEm: Date.now() + 10 * 60000 };
+  await enviarWhatsApp(numeroWhatsapp, 'Olá' + (nome ? ', ' + nome.split(' ')[0] : '') + '! 🔐\n\nSeu código de acesso é: *' + codigo + '*\n\nVálido por 10 minutos.');
+}
+
+function verificarOtp(identificador, codigoDigitado) {
+  const registro = otpStore[identificador];
+  if (!registro) return { ok: false, erro: 'Código não solicitado ou expirado. Peça um novo código.' };
+  if (Date.now() > registro.expiraEm) { delete otpStore[identificador]; return { ok: false, erro: 'Código expirado. Peça um novo código.' }; }
+  if (registro.codigo !== String(codigoDigitado || '').trim()) return { ok: false, erro: 'Código incorreto.' };
+  delete otpStore[identificador];
+  return { ok: true };
+}
+
+function buscarTelefoneProfessorPorNome(nome) {
+  const prof = PROFESSORES_PORTAL.find(p => p.nome === nome);
+  return prof ? prof.telefone : null;
+}
 
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
