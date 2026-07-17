@@ -348,7 +348,7 @@ app.post('/inscricao', async (req, res) => {
       const cpfLimpo = cpf.replace(/\D/g, '');
       const cotaInfo = await verificarCotaReposicao(cpfLimpo, 'Aéreos');
       if (!cotaInfo.podeAgendar) {
-        return res.status(400).json({ ok: false, erro: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+        return res.status(400).json({ ok: false, erro: cotaInfo.mensagemBloqueio });
       }
       creditoReposicaoId = cotaInfo.creditos[0].id;
     }
@@ -545,7 +545,7 @@ app.post('/inscricao-infantil', async (req, res) => {
       const cpfLimpo = cpf.replace(/\D/g, '');
       const cotaInfo = await verificarCotaReposicao(cpfLimpo, 'Circo Infantil');
       if (!cotaInfo.podeAgendar) {
-        return res.status(400).json({ ok: false, erro: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+        return res.status(400).json({ ok: false, erro: cotaInfo.mensagemBloqueio });
       }
       creditoReposicaoId = cotaInfo.creditos[0].id;
     }
@@ -3388,7 +3388,10 @@ async function verificarCotaReposicao(cpfLimpo, modalidade) {
   // "No limite mas nao bloqueada": com creditos.length === cota, ela ainda pode marcar (consome o mais
   // antigo). So bloqueia quando ja excede a cota (creditos acumulados sem serem usados) ou nao ha credito algum.
   const podeAgendar = creditos.length > 0 && creditos.length <= cota;
-  return { cota, creditosAbertos: creditos.length, podeAgendar, creditos };
+  const mensagemBloqueio = creditos.length === 0
+    ? 'Não encontramos nenhuma falta em aberto para repor. Se você acredita que isso é um engano, fale com a gente.'
+    : 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.';
+  return { cota, creditosAbertos: creditos.length, podeAgendar, creditos, mensagemBloqueio };
 }
 
 // Vincula a marcação da reposição ao crédito e muda Status para "Usado"
@@ -3637,7 +3640,7 @@ app.post('/reposicao/confirmar', async (req, res) => {
   try {
     const cotaInfo = await verificarCotaReposicao(cpfLimpo, modalidade);
     if (!cotaInfo.podeAgendar) {
-      return res.status(400).json({ ok: false, erro: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+      return res.status(400).json({ ok: false, erro: cotaInfo.mensagemBloqueio });
     }
     await consumirCreditoReposicao(cotaInfo.creditos[0].id, { turmaDesejada, dataDesejada });
     res.json({ ok: true });
@@ -4372,7 +4375,7 @@ app.post('/inscricao-yoga', async (req, res) => {
     const cpfLimpo = cpf.replace(/\D/g, '');
     const cotaInfo = await verificarCotaReposicao(cpfLimpo, 'Yoga');
     if (!cotaInfo.podeAgendar) {
-      return res.status(400).json({ ok: false, error: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+      return res.status(400).json({ ok: false, error: cotaInfo.mensagemBloqueio });
     }
     creditoReposicaoId = cotaInfo.creditos[0].id;
   }
