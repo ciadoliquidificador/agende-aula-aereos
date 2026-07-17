@@ -1896,13 +1896,46 @@ const PROFESSORES_PORTAL = [
   { nome: 'Fábio', cpf: '21529074851', telefone: '5511989946586' },
 ];
 
+const PROFESSORES_CADASTRO_DB = '728021ad4c58466db1dd5ab112ada252';
+
+async function buscarProfessorPorCpf(cpfLimpo) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + PROFESSORES_CADASTRO_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 1 }),
+  });
+  const d = await r.json();
+  const pagina = (d.results || [])[0];
+  if (!pagina) return null;
+  const p = pagina.properties;
+  return {
+    pageId: pagina.id,
+    nome: p['Nome']?.title?.[0]?.plain_text || '',
+    cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+    telefone: (p['Telefone']?.phone_number || '').replace(/\D/g, ''),
+    endereco: p['Endereço']?.rich_text?.[0]?.plain_text || '',
+    email: p['Email']?.email || '',
+  };
+}
+
+async function buscarProfessorPorNome(nome) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + PROFESSORES_CADASTRO_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filter: { property: 'Nome', title: { equals: nome } }, page_size: 1 }),
+  });
+  const d = await r.json();
+  const pagina = (d.results || [])[0];
+  if (!pagina) return null;
+  return (pagina.properties['Telefone']?.phone_number || '').replace(/\D/g, '');
+}
+
 app.post('/portal/login/solicitar', async (req, res) => {
   const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
-  const prof = PROFESSORES_PORTAL.find(p => p.cpf && p.cpf === cpfLimpo);
-  if (!prof) return res.json({ ok: false, erro: 'CPF não encontrado. Fale com o Fábio.' });
   try {
-    const numBr = prof.telefone;
-    await enviarOtp('prof_' + cpfLimpo, numBr, prof.nome);
+    const prof = await buscarProfessorPorCpf(cpfLimpo);
+    if (!prof) return res.json({ ok: false, erro: 'CPF não encontrado. Fale com o Fábio.' });
+    await enviarOtp('prof_' + cpfLimpo, prof.telefone, prof.nome);
     res.json({ ok: true });
   } catch (err) {
     console.error('[portal/login/solicitar] erro:', err.message);
@@ -1910,13 +1943,48 @@ app.post('/portal/login/solicitar', async (req, res) => {
   }
 });
 
-app.post('/portal/login/verificar', (req, res) => {
+app.post('/portal/login/verificar', async (req, res) => {
   const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
   const verificacao = verificarOtp('prof_' + cpfLimpo, req.body.codigo);
   if (!verificacao.ok) return res.json(verificacao);
-  const prof = PROFESSORES_PORTAL.find(p => p.cpf && p.cpf === cpfLimpo);
-  if (!prof) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
-  res.json({ ok: true, nome: prof.nome, telefone: prof.telefone });
+  try {
+    const prof = await buscarProfessorPorCpf(cpfLimpo);
+    if (!prof) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
+    res.json({ ok: true, nome: prof.nome, telefone: prof.telefone, endereco: prof.endereco, email: prof.email });
+  } catch (err) {
+    console.error('[portal/login/verificar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal/atualizar-cadastro', async (req, res) => {
+  const { cpf, nome, telefone, endereco, email } = req.body;
+  const cpfLimpo = (cpf || '').replace(/\D/g, '');
+  if (!cpfLimpo || !nome || !telefone) {
+    return res.status(400).json({ ok: false, erro: 'Preencha nome e telefone.' });
+  }
+  try {
+    const prof = await buscarProfessorPorCpf(cpfLimpo);
+    if (!prof) return res.status(404).json({ ok: false, erro: 'Cadastro não encontrado.' });
+
+    await fetch('https://api.notion.com/v1/pages/' + prof.pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Nome': { title: [{ text: { content: nome } }] },
+          'Telefone': { phone_number: telefone },
+          'Endereço': { rich_text: [{ text: { content: endereco || '' } }] },
+          'Email': { email: email || null },
+        },
+      }),
+    });
+    try { await enviarWhatsApp(WHATSAPP_FABIO, 'ℹ️ *Professor(a) atualizou o cadastro* — ' + nome + ' (' + telefone + ')'); } catch(e) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal/atualizar-cadastro] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
 });
 
 function turmasDoProfessor(nome) {
@@ -3309,11 +3377,11 @@ app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
     // Avisa o professor antigo e o novo (se forem diferentes)
     const msgProfessores = 'ℹ️ *Aviso de mudança de turma*\n\nAluna: ' + nome + '\nDe: ' + (turmaAtual || '(não informado)') + '\nPara: ' + novaTurma + '\nMotivo: ' + motivo;
     if (infoTurmaAntiga?.professor) {
-      const telAntigo = buscarTelefoneProfessorPorNome(infoTurmaAntiga.professor);
+      const telAntigo = await buscarTelefoneProfessorPorNome(infoTurmaAntiga.professor);
       if (telAntigo) { try { await enviarWhatsAppComHorarioComercial(telAntigo, msgProfessores); } catch(e) {} }
     }
     if (infoTurmaNova?.professor && infoTurmaNova.professor !== infoTurmaAntiga?.professor) {
-      const telNovo = buscarTelefoneProfessorPorNome(infoTurmaNova.professor);
+      const telNovo = await buscarTelefoneProfessorPorNome(infoTurmaNova.professor);
       if (telNovo) { try { await enviarWhatsAppComHorarioComercial(telNovo, msgProfessores); } catch(e) {} }
     }
 
@@ -3530,7 +3598,11 @@ function verificarOtp(identificador, codigoDigitado) {
   return { ok: true };
 }
 
-function buscarTelefoneProfessorPorNome(nome) {
+async function buscarTelefoneProfessorPorNome(nome) {
+  try {
+    const telNotion = await buscarProfessorPorNome(nome);
+    if (telNotion) return telNotion;
+  } catch (e) {}
   const prof = PROFESSORES_PORTAL.find(p => p.nome === nome);
   return prof ? prof.telefone : null;
 }
