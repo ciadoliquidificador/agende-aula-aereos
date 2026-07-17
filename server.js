@@ -339,14 +339,31 @@ app.get('/turmas', async (req, res) => {
 
 app.post('/inscricao', async (req, res) => {
   try {
-    const { nome, telefone, turma, professor, dia, horario, data } = req.body;
+    const { nome, telefone, turma, professor, dia, horario, data, tipo, cpf } = req.body;
     if (!nome || !telefone || !turma) return res.json({ ok: false, erro: 'Campos obrigatórios: nome, telefone, turma.' });
+
+    let creditoReposicaoId = null;
+    if (tipo === 'reposicao') {
+      if (!cpf) return res.status(400).json({ ok: false, erro: 'CPF é obrigatório para agendar reposição.' });
+      const cpfLimpo = cpf.replace(/\D/g, '');
+      const cotaInfo = await verificarCotaReposicao(cpfLimpo, 'Aéreos');
+      if (!cotaInfo.podeAgendar) {
+        return res.status(400).json({ ok: false, erro: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+      }
+      creditoReposicaoId = cotaInfo.creditos[0].id;
+    }
+
     const response = await fetch(`https://api.notion.com/v1/pages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({ parent: { database_id: ALUNAS_DB }, properties: { Nome: { title: [{ text: { content: nome } }] }, Contato: { phone_number: telefone }, Turma: { select: { name: turma } }, Professor: { select: { name: professor || '' } }, Dia: { select: { name: dia || '' } }, Horário: { select: { name: horario || '' } }, Modalidade: { select: { name: 'Aéreos' } }, Status: { select: { name: 'Experimental' } }, Observações: { rich_text: [{ text: { content: `Aula experimental agendada para ${data || ''}` } }] } } }),
     });
     if (!response.ok) { const t = await response.text(); throw new Error(`Notion ${response.status}: ${t}`); }
+
+    if (creditoReposicaoId) {
+      await consumirCreditoReposicao(creditoReposicaoId, { turmaDesejada: turma, dataDesejada: data });
+    }
+
     return res.json({ ok: true });
   } catch (err) { return res.json({ ok: false, erro: err.message }); }
 });
@@ -518,15 +535,32 @@ app.get('/vagas-ocupadas-acro', async (req, res) => {
 // ── Circo Infantil ────────────────────────────────────────────────────────────
 app.post('/inscricao-infantil', async (req, res) => {
   try {
-    const { nome, telefone, turma, professor, dia, horario, data, tipo } = req.body;
+    const { nome, telefone, turma, professor, dia, horario, data, tipo, cpf } = req.body;
     if (!nome || !telefone || !turma) return res.json({ ok: false, erro: 'Campos obrigatórios: nome, telefone, turma.' });
     const status = tipo === 'reposicao' ? 'Ativo' : 'Experimental';
+
+    let creditoReposicaoId = null;
+    if (tipo === 'reposicao') {
+      if (!cpf) return res.status(400).json({ ok: false, erro: 'CPF é obrigatório para agendar reposição.' });
+      const cpfLimpo = cpf.replace(/\D/g, '');
+      const cotaInfo = await verificarCotaReposicao(cpfLimpo, 'Circo Infantil');
+      if (!cotaInfo.podeAgendar) {
+        return res.status(400).json({ ok: false, erro: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+      }
+      creditoReposicaoId = cotaInfo.creditos[0].id;
+    }
+
     const response = await fetch(`https://api.notion.com/v1/pages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({ parent: { database_id: ALUNAS_DB }, properties: { Nome: { title: [{ text: { content: nome } }] }, Contato: { phone_number: telefone }, Turma: { select: { name: turma } }, Professor: { select: { name: 'Titzi' } }, Dia: { select: { name: dia || 'Terça' } }, Horário: { select: { name: horario || '18:00' } }, Modalidade: { select: { name: 'Circo Infantil' } }, Status: { select: { name: status } }, Observações: { rich_text: [{ text: { content: `Agendado para ${data || ''}` } }] } } }),
     });
     if (!response.ok) { const t = await response.text(); throw new Error(`Notion ${response.status}: ${t}`); }
+
+    if (creditoReposicaoId) {
+      await consumirCreditoReposicao(creditoReposicaoId, { turmaDesejada: turma, dataDesejada: data });
+    }
+
     return res.json({ ok: true });
   } catch (err) { return res.json({ ok: false, erro: err.message }); }
 });
@@ -3273,6 +3307,148 @@ app.post('/contrato-professor/propor-mudanca', async (req, res) => {
 const PRESENCAS_2026_DB = '282c0bc0-06d8-4828-acae-d5ac35388318';
 const REPOSICOES_DB = 'dde8519e6e0f4157b2bb56b545e2ef84';
 
+// ============================================================
+// COTA DE REPOSIÇÃO — créditos individuais com janela rolante de 30 dias
+// Cada Falta gera um crédito (Prazo Limite = Data da falta + 30 dias).
+// A cota é quantos créditos "Aberto" simultâneos a aluna pode ter por modalidade.
+// ============================================================
+function calcularCotaReposicao(frequencia) {
+  if (frequencia === '1x semana') return 1;
+  if (frequencia === '2x semana') return 2;
+  return 1; // fallback seguro para "Acordo" ou qualquer valor inesperado
+}
+
+function somarDias(dataISO, dias) {
+  const d = new Date(dataISO + 'T12:00:00Z'); // meio-dia UTC evita virada de dia por fuso horário
+  d.setUTCDate(d.getUTCDate() + dias);
+  return d.toISOString().slice(0, 10);
+}
+
+async function buscarFrequenciaAluna(cpfLimpo, modalidade) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { and: [
+        { property: 'CPF', rich_text: { equals: cpfLimpo } },
+        { property: 'Modalidade', select: { equals: modalidade } },
+        { property: 'Status', select: { equals: 'Ativa' } },
+      ]},
+      page_size: 5,
+    }),
+  });
+  const d = await r.json();
+  const pagina = (d.results || [])[0];
+  return pagina?.properties?.['Frequência']?.select?.name || '';
+}
+
+// Retorna { cota, creditosAbertos, podeAgendar, creditos: [{id, dataFalta, prazoLimite, turmaOrigem}] }
+// Expira preguiçosamente (lazy) qualquer crédito "Aberto" cujo Prazo Limite já passou.
+async function verificarCotaReposicao(cpfLimpo, modalidade) {
+  const frequencia = await buscarFrequenciaAluna(cpfLimpo, modalidade);
+  const cota = calcularCotaReposicao(frequencia);
+
+  const r = await fetch('https://api.notion.com/v1/databases/' + REPOSICOES_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { and: [
+        { property: 'CPF Aluna', rich_text: { equals: cpfLimpo } },
+        { property: 'Modalidade', rich_text: { equals: modalidade } },
+        { property: 'Status', select: { equals: 'Aberto' } },
+      ]},
+      page_size: 100,
+    }),
+  });
+  const d = await r.json();
+  const hoje = new Date().toISOString().slice(0, 10);
+
+  const creditos = [];
+  for (const pagina of (d.results || [])) {
+    const prazoLimite = pagina.properties?.['Prazo Limite']?.date?.start || '';
+    if (prazoLimite && prazoLimite < hoje) {
+      try {
+        await fetch('https://api.notion.com/v1/pages/' + pagina.id, {
+          method: 'PATCH',
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ properties: { 'Status': { select: { name: 'Expirado' } } } }),
+        });
+      } catch (e) { console.error('[reposicao] erro ao expirar credito:', e.message); }
+      continue; // expirado, nao conta pra cota
+    }
+    creditos.push({
+      id: pagina.id,
+      dataFalta: prazoLimite ? somarDias(prazoLimite, -30) : '',
+      prazoLimite,
+      turmaOrigem: pagina.properties?.['Turma Origem']?.rich_text?.[0]?.plain_text || '',
+    });
+  }
+  creditos.sort((a, b) => a.prazoLimite.localeCompare(b.prazoLimite)); // mais antigo (prazo mais proximo) primeiro
+
+  return { cota, creditosAbertos: creditos.length, podeAgendar: creditos.length < cota, creditos };
+}
+
+// Vincula a marcação da reposição ao crédito e muda Status para "Usado"
+async function consumirCreditoReposicao(creditoId, { turmaDesejada, dataDesejada }) {
+  await fetch('https://api.notion.com/v1/pages/' + creditoId, {
+    method: 'PATCH',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      properties: {
+        'Data Desejada': { rich_text: [{ text: { content: dataDesejada || '' } }] },
+        'Turma Desejada': { rich_text: [{ text: { content: turmaDesejada || '' } }] },
+        'Status': { select: { name: 'Usado' } },
+      },
+    }),
+  });
+}
+
+// Chamado logo apos gravar uma Falta em Presenças 2026: cria o credito de reposicao correspondente.
+// Idempotente: se ja existir um credito com essa "Falta Relacionada", nao duplica.
+async function criarCreditoReposicaoPorFalta({ faltaPageId, alunaId, nomeAluna, modalidade, turma, dataFalta }) {
+  try {
+    const rExiste = await fetch('https://api.notion.com/v1/databases/' + REPOSICOES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'Falta Relacionada', relation: { contains: faltaPageId } },
+        page_size: 1,
+      }),
+    });
+    const dExiste = await rExiste.json();
+    if ((dExiste.results || []).length > 0) return; // credito ja existe para essa falta
+
+    const alunaResp = await fetch('https://api.notion.com/v1/pages/' + alunaId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    if (!alunaResp.ok) { console.error('[reposicao] aluna nao encontrada para credito:', alunaId); return; }
+    const alunaData = await alunaResp.json();
+    const cpf = (alunaData.properties?.CPF?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
+    if (!cpf) { console.error('[reposicao] aluna sem CPF, credito nao criado:', alunaId); return; }
+
+    const prazoLimite = somarDias(dataFalta, 30);
+
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: REPOSICOES_DB },
+        properties: {
+          'Título': { title: [{ text: { content: `${nomeAluna} - Falta ${dataFalta} - ${modalidade}` } }] },
+          'CPF Aluna': { rich_text: [{ text: { content: cpf } }] },
+          'Modalidade': { rich_text: [{ text: { content: modalidade } }] },
+          'Turma Origem': { rich_text: [{ text: { content: turma || '' } }] },
+          'Falta Relacionada': { relation: [{ id: faltaPageId }] },
+          'Prazo Limite': { date: { start: prazoLimite } },
+          'Status': { select: { name: 'Aberto' } },
+        },
+      }),
+    });
+  } catch (e) {
+    console.error('[reposicao] erro ao criar credito por falta:', e.message);
+  }
+}
+
 async function buscarMatriculasPorCpf(cpfLimpo) {
   const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
     method: 'POST',
@@ -3434,6 +3610,50 @@ async function notificarSolicitacaoAluna(tipo, nome, contato, detalhes) {
   const msg = '📋 *Solicitação de aluna* — ' + tipo + '\n\nAluna: ' + nome + ' (' + contato + ')\n' + detalhes + '\n\n_Pendente de confirmação sua._';
   try { await enviarWhatsApp(WHATSAPP_FABIO, msg); } catch(e) {}
 }
+
+// GET /reposicao/verificar-cota/:cpf/:modalidade
+app.get('/reposicao/verificar-cota/:cpf/:modalidade', async (req, res) => {
+  const cpfLimpo = (req.params.cpf || '').replace(/\D/g, '');
+  const modalidade = req.params.modalidade;
+  if (!cpfLimpo || !modalidade) return res.status(400).json({ ok: false, erro: 'CPF e modalidade são obrigatórios.' });
+  try {
+    const resultado = await verificarCotaReposicao(cpfLimpo, modalidade);
+    res.json({ ok: true, ...resultado });
+  } catch (err) {
+    console.error('[reposicao/verificar-cota] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// GET /portal-aluna/reposicoes/:cpf — creditos abertos agrupados por modalidade, para a aba "Minha Presença"
+const MAPA_MODALIDADES_REPOSICAO = {
+  'Aéreos': 'https://agende-aereos.ciadoliquidificador.com.br?reposicao=1',
+  'Circo Infantil': 'https://agende-infantil.ciadoliquidificador.com.br?reposicao=1',
+  'Yoga': 'https://agende-yoga.ciadoliquidificador.com.br?reposicao=1',
+};
+
+app.get('/portal-aluna/reposicoes/:cpf', async (req, res) => {
+  const cpfLimpo = (req.params.cpf || '').replace(/\D/g, '');
+  if (!cpfLimpo) return res.status(400).json({ ok: false, erro: 'CPF é obrigatório.' });
+  try {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const modalidades = [];
+    for (const [modalidade, linkRemarcar] of Object.entries(MAPA_MODALIDADES_REPOSICAO)) {
+      const resultado = await verificarCotaReposicao(cpfLimpo, modalidade);
+      if (resultado.creditosAbertos === 0) continue;
+      const creditos = resultado.creditos.map(c => ({
+        dataFalta: c.dataFalta,
+        prazoLimite: c.prazoLimite,
+        diasRestantes: Math.ceil((new Date(c.prazoLimite + 'T12:00:00Z') - new Date(hoje + 'T12:00:00Z')) / 86400000),
+      }));
+      modalidades.push({ modalidade, cota: resultado.cota, creditosAbertos: resultado.creditosAbertos, creditos, linkRemarcar });
+    }
+    res.json({ ok: true, modalidades });
+  } catch (err) {
+    console.error('[portal-aluna/reposicoes] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
 
 app.post('/portal-aluna/solicitar-reposicao', async (req, res) => {
   const { cpf, nome, contato, modalidade, turmaAtual, turmaDesejada, dataDesejada, frequencia } = req.body;
@@ -4112,7 +4332,7 @@ app.get('/vagas-yoga', async (req, res) => {
 });
 
 app.post('/inscricao-yoga', async (req, res) => {
-  const { nome, whatsapp, email, turmaId, data, tipo } = req.body;
+  const { nome, whatsapp, email, turmaId, data, tipo, cpf } = req.body;
   if (!nome || !whatsapp || !turmaId || !data || !tipo) return res.status(400).json({ error: 'Campos obrigatorios faltando' });
   const turma = YOGA_TURMAS[turmaId];
   if (!turma) return res.status(400).json({ error: 'Turma invalida' });
@@ -4123,6 +4343,18 @@ app.post('/inscricao-yoga', async (req, res) => {
   const dataFmt = data.split('-').reverse().join('/');
   const primeiroNome = nome.split(' ')[0];
   const obs = data + ' - ' + tipoTexto + ' - ' + turma.label + (email ? ' - ' + email : '');
+
+  let creditoReposicaoId = null;
+  if (tipo === 'reposicao') {
+    if (!cpf) return res.status(400).json({ ok: false, error: 'CPF é obrigatório para agendar reposição.' });
+    const cpfLimpo = cpf.replace(/\D/g, '');
+    const cotaInfo = await verificarCotaReposicao(cpfLimpo, 'Yoga');
+    if (!cotaInfo.podeAgendar) {
+      return res.status(400).json({ ok: false, error: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+    }
+    creditoReposicaoId = cotaInfo.creditos[0].id;
+  }
+
   try {
     const notionResp = await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
@@ -4139,6 +4371,11 @@ app.post('/inscricao-yoga', async (req, res) => {
       }}),
     });
     if (!notionResp.ok) { const e = await notionResp.json(); console.error('[yoga/notion]', e); return res.status(500).json({ error: 'Erro ao salvar', detail: e }); }
+
+    if (creditoReposicaoId) {
+      await consumirCreditoReposicao(creditoReposicaoId, { turmaDesejada: turma.nome, dataDesejada: data });
+    }
+
     const numBr = '55' + numLimpo;
     const msgAluna = 'Ola, ' + primeiroNome + '! Sua vaga na aula de *Hatha Yoga* com Giulia Hoff esta confirmada!\n\nData: ' + dataFmt + '\nHorario: ' + horDisplay + '\nEspaco Liquidificador - Rua Dr. Carvalho de Mendonca, 67, Campos Eliseos\n\nQualquer duvida e so responder aqui!';
     const msgGiulia = 'Nova inscricao - Yoga\n\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + (email ? '\nEmail: ' + email : '') + '\nData: ' + dataFmt + ' - ' + horDisplay + '\nTipo: ' + tipoTexto;
@@ -4355,6 +4592,19 @@ app.post('/registrar-presenca', async (req, res) => {
         const errData = await notionResp.json();
         console.error('[presenca] erro ao criar registro:', errData);
       }
+    }
+
+    // Cota de reposicao: toda Falta Regular gera (ou ja tem) um credito com prazo de 30 dias
+    const faltasParaCredito = criados.filter(c => c.tipo !== 'Experimental' && c.status === 'Falta' && c.pageId && c.alunaId);
+    for (const falta of faltasParaCredito) {
+      await criarCreditoReposicaoPorFalta({
+        faltaPageId: falta.pageId,
+        alunaId: falta.alunaId,
+        nomeAluna: falta.nome,
+        modalidade,
+        turma,
+        dataFalta: data,
+      });
     }
 
     const experimentaisRegistradas = presencas.filter(p => p.tipo === 'Experimental');
