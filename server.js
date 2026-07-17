@@ -3092,16 +3092,65 @@ app.get('/contrato-professor/meu/:cpfCnpj', async (req, res) => {
     const contratos = (dResp.results || []).map(pagina => {
       const p = pagina.properties;
       return {
+        pageId: pagina.id,
         modalidade: p['Modalidade']?.select?.name,
         trilha: p['Trilha']?.select?.name,
         status: p['Status']?.select?.name,
         linkPdf: p['Link do Contrato PDF']?.url || '',
         dataAceite: p['Data/Hora Aceite']?.date?.start || '',
+        valorHora: p['Valor Hora/Aula']?.number || null,
+        periodicidade: p['Periodicidade']?.select?.name || '',
+        vigencia: p['Vigência']?.select?.name || '',
+        solicitacaoPendente: p['Solicitação Pendente']?.select?.name || 'Nenhuma',
       };
     });
     res.json({ ok: true, contratos });
   } catch (err) {
     console.error('[contrato-professor/meu] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/contrato-professor/solicitar-cancelamento', async (req, res) => {
+  const { pageId, nome, motivo } = req.body;
+  if (!pageId || !nome) return res.status(400).json({ ok: false, erro: 'Dados incompletos.' });
+  try {
+    await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Solicitação Pendente': { select: { name: 'Cancelamento' } },
+          'Detalhes da Solicitação': { rich_text: [{ text: { content: motivo || '(sem motivo informado)' } }] },
+        },
+      }),
+    });
+    try { await enviarWhatsApp(WHATSAPP_FABIO, '⚠️ *Professor solicitou cancelamento de contrato* — ' + nome + '\nMotivo: ' + (motivo || '(sem motivo informado)')); } catch(e) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[contrato-professor/solicitar-cancelamento] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/contrato-professor/propor-mudanca', async (req, res) => {
+  const { pageId, nome, proposta } = req.body;
+  if (!pageId || !nome || !proposta) return res.status(400).json({ ok: false, erro: 'Descreva a mudança desejada.' });
+  try {
+    await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Solicitação Pendente': { select: { name: 'Mudança' } },
+          'Detalhes da Solicitação': { rich_text: [{ text: { content: proposta } }] },
+        },
+      }),
+    });
+    try { await enviarWhatsApp(WHATSAPP_FABIO, '📝 *Professor propôs mudança no contrato* — ' + nome + '\nProposta: ' + proposta); } catch(e) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[contrato-professor/propor-mudanca] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
