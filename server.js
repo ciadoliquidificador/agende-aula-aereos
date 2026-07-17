@@ -1564,27 +1564,47 @@ CLÁUSULA QUARTA – VENCIMENTOS E ATRASOS
 
 A data estabelecida para pagamento é até o dia 10 (dez) do mês vigente. Em caso de não pagamento no vencimento, o valor será acrescido de multa de 2% (dois por cento) e juros de mora de 0,33% (trinta e três centésimos por cento) ao dia, até a data da efetiva quitação. Persistindo o atraso, a CONTRATADA encaminhará a cobrança a escritório especializado.
 
-CLÁUSULA QUINTA – DESLIGAMENTO
+CLÁUSULA QUINTA – DA VIGÊNCIA E DA RENOVAÇÃO
 
-Ao final do período do plano escolhido, sem comunicação de continuidade, este contrato será considerado encerrado. Em caso de desistência, a CONTRATADA deverá ser comunicada com 30 (trinta) dias de antecedência. O abandono sem aviso prévio não será considerado desistência, permanecendo as cobranças até a efetiva comunicação. Em desistência em prazo inferior ao estipulado, o valor será recalculado com base no plano mensal.
+O plano contratado vigora pelo período correspondente à sua modalidade — mensal (1 mês), semestral (6 meses) ou anual (12 meses) — contado a partir da data de validade indicada na Cláusula Primeira.
 
-CLÁUSULA SEXTA – FERIADOS, RECESSOS, FALTAS E REPOSIÇÕES
+Ao final do período, o plano renova-se automaticamente, mantidas as condições e o valor vigentes, até que seja cancelado por qualquer das partes na forma da Cláusula Sexta, não sendo necessária qualquer confirmação periódica de continuidade por parte do(a) CONTRATANTE.
+
+Parágrafo único – o período de fidelidade corresponde ao período inicialmente contratado. Cumprido esse período, a renovação prossegue sem novo prazo de fidelidade, podendo o(a) CONTRATANTE cancelar a qualquer tempo, mediante o aviso prévio da Cláusula Sexta, sem incidência de multa.
+
+CLÁUSULA SEXTA – DO CANCELAMENTO E DESLIGAMENTO
+
+6.1. O cancelamento por iniciativa do(a) CONTRATANTE deverá ser comunicado por escrito, com 30 (trinta) dias de antecedência. As aulas e as cobranças permanecem durante esse período de aviso, encerrando-se ao seu término.
+
+6.2. Plano mensal: não há período de fidelidade nem multa; o cancelamento opera-se apenas com o aviso prévio de 30 (trinta) dias.
+
+6.3. Planos semestral e anual: o desconto concedido em relação ao plano mensal é condicionado à permanência pelo período contratado. Em caso de cancelamento antes do término do período de fidelidade, o(a) CONTRATANTE perde o desconto relativo aos meses efetivamente cursados, pagando, a título de multa de cancelamento, a diferença entre o valor do plano mensal de mesma frequência e o valor do plano contratado, multiplicada pelo número de meses cursados:
+
+Multa = (valor mensal − valor do plano contratado) × número de meses cursados.
+
+6.4. O encerramento ao final do período contratado, ou após cumprido o período de fidelidade, não gera multa, desde que observado o aviso prévio de 30 (trinta) dias.
+
+6.5. O abandono das aulas sem aviso prévio não caracteriza cancelamento; as cobranças permanecem até a efetiva comunicação por escrito do(a) CONTRATANTE, a partir da qual passa a correr o aviso prévio de 30 (trinta) dias.
+
+6.6. A CONTRATADA dará ciência, por escrito, do recebimento da comunicação de cancelamento, disponibilizando a vaga aos demais interessados ao término do vínculo.
+
+CLÁUSULA SÉTIMA – FERIADOS, RECESSOS, FALTAS E REPOSIÇÕES
 
 Não haverá reposição de aula em feriados nacionais, estaduais e municipais. Haverá recesso de fim de ano, conforme calendário informado pela CONTRATADA. A reposição de faltas será possível mediante solicitação por escrito com 2 (dois) dias úteis de antecedência, sujeita à disponibilidade de vagas. Máximo de 1 (uma) reposição mensal para 1x/semana, ou 2 (duas) para 2x/semana.
 
-CLÁUSULA SÉTIMA – SAÚDE, RESPONSABILIDADE E ASSUNÇÃO DE RISCO
+CLÁUSULA OITAVA – SAÚDE, RESPONSABILIDADE E ASSUNÇÃO DE RISCO
 
 ${ehInfantil ? 'As atividades envolvem esforço físico e riscos inerentes, adaptados à faixa etária. O(A) responsável legal declara que a criança está em condições de saúde compatíveis com a atividade, conforme o Termo de Responsabilidade constante do Anexo I.' : 'As atividades envolvem esforço físico e riscos inerentes à prática. O(A) CONTRATANTE declara estar em condições de saúde compatíveis com a atividade, conforme o Termo de Responsabilidade e Declaração de Aptidão constante do Anexo I.'} O(A) CONTRATANTE compromete-se a seguir as orientações dos(as) instrutores(as) e as normas de segurança do espaço.
 
-CLÁUSULA OITAVA – DA PROTEÇÃO DE DADOS PESSOAIS (LGPD)
+CLÁUSULA NONA – DA PROTEÇÃO DE DADOS PESSOAIS (LGPD)
 
 Para a execução deste contrato, a CONTRATADA coleta e trata dados pessoais do(a) CONTRATANTE${ehInfantil ? ' e da criança' : ''}, em conformidade com a Lei nº 13.709/2018 (LGPD), exclusivamente para cadastro, gestão do plano, comunicação, cobrança e prática segura das atividades.${ehInfantil ? ' O tratamento de dados da criança observa o art. 14 da LGPD, mediante o consentimento específico e destacado do responsável legal.' : ''} Os dados não serão comercializados nem compartilhados com terceiros, salvo obrigação legal. O(A) titular pode, a qualquer tempo, solicitar acesso, correção ou eliminação de dados.
 
-CLÁUSULA NONA – DO FORO
+CLÁUSULA DÉCIMA – DO FORO
 
 As partes elegem o foro da Comarca da Capital do Estado de São Paulo, facultado ao(à) CONTRATANTE optar pelo foro de seu domicílio, nos termos do CDC.
 
-CLÁUSULA DÉCIMA – DO ACEITE ELETRÔNICO
+CLÁUSULA DÉCIMA PRIMEIRA – DO ACEITE ELETRÔNICO
 
 Este contrato e seu Anexo I são celebrados por meio eletrônico. O(A) CONTRATANTE declara ter tido acesso ao inteiro teor deste instrumento e de cada declaração do Anexo I antes de manifestar sua concordância, mediante aceite eletrônico individual de cada item na ficha de inscrição, nos termos do art. 107 do Código Civil e da MP 2.200-2/2001. A autoria e a data são comprovadas pelo registro eletrônico que integra este contrato como prova de aceitação.`;
 }
@@ -1597,6 +1617,82 @@ function montarAnexoIItens(dados) {
     ? ANEXO_I_ITENS_POR_MODALIDADE['Circo Infantil'](nomeResponsavel, rgResponsavel, cpfResponsavel, nomeCrianca, dataNascCrianca)
     : ANEXO_I_ITENS_POR_MODALIDADE[modalidade](nome, rg, cpf);
   return { cabecalho, itens };
+}
+
+// Quebra um texto longo em blocos de ate `tamanho` caracteres, no formato aceito por propriedades
+// rich_text do Notion (cada bloco de texto tem limite de 2000 caracteres na API).
+function paraRichTextEmBlocos(texto, tamanho = 1900) {
+  const blocos = [];
+  for (let i = 0; i < texto.length; i += tamanho) blocos.push({ text: { content: texto.slice(i, i + tamanho) } });
+  return blocos.length ? blocos : [{ text: { content: '' } }];
+}
+
+// Duracao (em meses) do periodo de fidelidade de cada plano, conforme Clausula Quinta.
+const DURACAO_FIDELIDADE_MESES = { Mensal: 1, Semestral: 6, Anual: 12 };
+
+// Conta quantos ciclos mensais de vigencia ja comecaram entre dataInicio e dataReferencia (hoje, por padrao).
+// Ex.: no proprio dia da matricula ja conta 1 (1o mes em curso); ao completar 2 meses corridos, conta 3
+// (pois o 3o mes de vigencia ja comecou) — mesmo que incompleto, o mes cursado ja gerou o desconto de fidelidade.
+function contarMesesCursados(dataInicioISO, dataReferencia) {
+  if (!dataInicioISO) return 0;
+  const inicio = new Date(dataInicioISO);
+  const ref = dataReferencia || new Date();
+  if (isNaN(inicio.getTime())) return 0;
+  let meses = 0;
+  const cursor = new Date(inicio.getTime());
+  while (cursor <= ref) {
+    meses++;
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return meses;
+}
+
+// Data em que o periodo atualmente contratado termina (inicio + duracao do plano), usada para
+// popular "Vencimento do Contrato" no Notion (referencia de renovacao, nao usada no calculo da multa).
+function calcularVencimentoContrato(dataInicioISO, plano) {
+  if (!dataInicioISO) return null;
+  const inicio = new Date(dataInicioISO);
+  if (isNaN(inicio.getTime())) return null;
+  const duracao = DURACAO_FIDELIDADE_MESES[plano] || 1;
+  inicio.setMonth(inicio.getMonth() + duracao);
+  return inicio.toISOString();
+}
+
+// Multa de cancelamento (Clausula Sexta, item 6.3): so incide em planos semestral/anual, e so antes de
+// cumprida a fidelidade. multa = (valor mensal da mesma frequencia - valor do plano contratado) x meses cursados.
+// Reutilizavel: chamada tanto pelo Portal Aluna (simular/solicitar cancelamento) quanto, futuramente, pelo Portal Admin.
+function calcularMultaCancelamento(modalidade, frequencia, plano, dataInicio, dataReferencia) {
+  const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
+  if (!dadosModalidade) return { ok: false, erro: 'Modalidade inválida.' };
+  const precoTabela = dadosModalidade.precos[frequencia];
+  if (!precoTabela) return { ok: false, erro: 'Frequência inválida para esta modalidade.' };
+  const valorPlanoContratado = precoTabela[plano];
+  if (valorPlanoContratado === undefined) return { ok: false, erro: 'Plano inválido para esta frequência/modalidade.' };
+
+  const duracaoFidelidadeMeses = DURACAO_FIDELIDADE_MESES[plano] || 1;
+  const mesesCursados = Math.min(contarMesesCursados(dataInicio, dataReferencia), duracaoFidelidadeMeses);
+
+  if (plano === 'Mensal') {
+    return {
+      ok: true, multa: 0, mesesCursados, duracaoFidelidadeMeses, fidelidadeCumprida: true,
+      valorMensalMesmaFrequencia: valorPlanoContratado, valorPlanoContratado,
+      motivo: 'Plano mensal não possui período de fidelidade nem multa de cancelamento.',
+    };
+  }
+
+  const valorMensalMesmaFrequencia = precoTabela['Mensal'];
+  if (valorMensalMesmaFrequencia === undefined) {
+    return { ok: false, erro: 'Não há preço do plano mensal cadastrado para esta frequência/modalidade — não é possível calcular a multa.' };
+  }
+
+  const fidelidadeCumprida = mesesCursados >= duracaoFidelidadeMeses;
+  const multa = fidelidadeCumprida ? 0 : Math.max(0, Math.round((valorMensalMesmaFrequencia - valorPlanoContratado) * mesesCursados * 100) / 100);
+
+  return {
+    ok: true, multa, mesesCursados, duracaoFidelidadeMeses, fidelidadeCumprida,
+    valorMensalMesmaFrequencia, valorPlanoContratado,
+    motivo: fidelidadeCumprida ? 'Período de fidelidade já cumprido — cancelamento sem multa.' : null,
+  };
 }
 
 async function gerarPdfContratoMatricula(textoContrato, { assinaturaDigitada, dataHoraISO, ip, dispositivo, versao }) {
@@ -1728,7 +1824,14 @@ app.post('/matricula/inscrever', async (req, res) => {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
   if (!Array.isArray(anexoAceites) || anexoAceites.length === 0 || anexoAceites.some(v => !v)) {
-    return res.status(400).json({ ok: false, erro: 'Você precisa aceitar todos os itens do Anexo I (Termo de Responsabilidade).' });
+    const itensFaltantes = Array.isArray(anexoAceites) ? anexoAceites.map((v, i) => (!v ? i + 1 : null)).filter(Boolean) : [];
+    return res.status(400).json({
+      ok: false,
+      erro: itensFaltantes.length
+        ? 'Você precisa marcar todos os itens do Anexo I (Termo de Responsabilidade). Item(ns) pendente(s): ' + itensFaltantes.join(', ') + '.'
+        : 'Você precisa marcar todos os itens do Anexo I (Termo de Responsabilidade).',
+      itensFaltantes,
+    });
   }
   if (ehInfantil && (!nomeResponsavel || !rgResponsavel || !cpfResponsavel || !nome)) {
     return res.status(400).json({ ok: false, erro: 'Preencha os dados do responsável legal e da criança.' });
@@ -1789,6 +1892,14 @@ app.post('/matricula/inscrever', async (req, res) => {
     const textoContrato = textoCorpo + '\n\nANEXO I — TERMO DE RESPONSABILIDADE E DECLARAÇÃO DE APTIDÃO\n\n' + anexo.cabecalho + '\n\n' + anexoTextoNumerado;
     const crypto = require('crypto');
     const versaoCalculada = versaoContrato || crypto.createHash('sha256').update(textoContrato).digest('hex').slice(0, 16);
+
+    // Trilha de auditoria item a item do Anexo I: cada declaracao marcada gera seu proprio registro
+    // (identificador do item, versao do texto do contrato, marcado sim/nao, data/hora, IP), conforme diretriz.
+    const anexoTrilhaAuditoria = anexo.itens.map((item, i) =>
+      (i + 1) + '. ' + item +
+      '\n   [item ' + (i + 1) + '/' + anexo.itens.length + ' | aceito=' + (anexoAceites[i] ? 'SIM' : 'NÃO') +
+      ' | versão=' + versaoCalculada + ' | ' + dataHoraAceiteISO + ' | IP ' + ip + ']'
+    ).join('\n');
 
     let linkContratoPdf = '';
     try {
@@ -1853,7 +1964,8 @@ app.post('/matricula/inscrever', async (req, res) => {
             'Data/Hora Aceite Contrato': { date: { start: dataHoraAceiteISO } },
             'Versão do Contrato': { rich_text: [{ text: { content: versaoCalculada } }] },
             'Link do Contrato PDF': { url: linkContratoPdf || null },
-            'Anexo I - Itens Aceitos': { rich_text: [{ text: { content: anexoTextoNumerado } }] },
+            'Anexo I - Itens Aceitos': { rich_text: paraRichTextEmBlocos(anexoTrilhaAuditoria) },
+            'Vencimento do Contrato': { date: { start: calcularVencimentoContrato(dataHoraAceiteISO, plano) } },
           },
         }),
       });
@@ -3193,6 +3305,10 @@ async function buscarMatriculasPorCpf(cpfLimpo) {
       linkContratoPdf: props['Link do Contrato PDF']?.url || '',
       contatoEmergenciaNome: props['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
       contatoEmergenciaTelefone: props['Tel. Emergência']?.phone_number || '',
+      // Data de inicio do plano em curso = data em que o contrato foi aceito (Clausula Primeira: "Validade: a partir de ...").
+      dataInicio: props['Data/Hora Aceite Contrato']?.date?.start || null,
+      vencimentoContrato: props['Vencimento do Contrato']?.date?.start || null,
+      observacoes: props['Observações']?.rich_text?.[0]?.plain_text || '',
     };
   });
 }
@@ -3621,18 +3737,93 @@ app.get('/mural/listar/:modalidade/:turma', async (req, res) => {
   }
 });
 
+// Encontra, dentre as matriculas ativas de um CPF, a(s) que casam com modalidade/turma informadas
+// (turma e opcional — se omitida, casa qualquer turma daquela modalidade).
+function localizarMatricula(matriculas, modalidade, turma) {
+  return matriculas.filter(m => m.modalidade === modalidade && (!turma || m.turma === turma));
+}
+
+function formatarDetalhesMulta(calculo) {
+  if (!calculo || !calculo.ok) return 'Não foi possível calcular a multa automaticamente — confira manualmente.';
+  if (calculo.multa > 0) {
+    return 'Multa de cancelamento: R$ ' + calculo.multa.toFixed(2) +
+      ' (meses cursados: ' + calculo.mesesCursados + '/' + calculo.duracaoFidelidadeMeses +
+      '; valor mensal mesma frequência: R$ ' + calculo.valorMensalMesmaFrequencia.toFixed(2) +
+      '; valor do plano contratado: R$ ' + calculo.valorPlanoContratado.toFixed(2) + ')';
+  }
+  return 'Sem multa de cancelamento' + (calculo.motivo ? (' — ' + calculo.motivo) : '') + '.';
+}
+
+// GET /portal-aluna/simular-cancelamento/:cpf?modalidade=...&turma=...
+// Retorna a multa (ou "sem multa") calculada por calcularMultaCancelamento, para o Portal Aluna
+// exibir para a aluna ANTES de ela confirmar o cancelamento. Sem filtro de modalidade/turma, retorna
+// a simulação de todas as matrículas ativas daquele CPF.
+app.get('/portal-aluna/simular-cancelamento/:cpf', async (req, res) => {
+  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  const { modalidade, turma } = req.query;
+  try {
+    const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
+    if (matriculas.length === 0) return res.json({ ok: false, erro: 'Cadastro não encontrado ou sem matrícula ativa.' });
+
+    const alvos = modalidade ? localizarMatricula(matriculas, modalidade, turma) : matriculas;
+    if (alvos.length === 0) return res.json({ ok: false, erro: 'Matrícula não encontrada para os filtros informados.' });
+
+    const simulacoes = alvos.map(m => {
+      const calculo = calcularMultaCancelamento(m.modalidade, m.frequencia, m.plano, m.dataInicio);
+      return {
+        modalidade: m.modalidade, turma: m.turma, plano: m.plano, frequencia: m.frequencia,
+        valorAtual: m.valor, dataInicio: m.dataInicio,
+        ...calculo,
+        detalhes: formatarDetalhesMulta(calculo),
+      };
+    });
+
+    res.json({ ok: true, simulacoes });
+  } catch (err) {
+    console.error('[portal-aluna/simular-cancelamento] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
   const { cpf, nome, contato, modalidade, turma, motivo } = req.body;
   if (!cpf || !modalidade) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
+  const cpfLimpo = (cpf || '').replace(/\D/g, '');
   try {
+    const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
+    const alvos = localizarMatricula(matriculas, modalidade, turma);
+    const matricula = alvos[0] || null;
+
+    let calculo = null;
+    if (matricula) {
+      calculo = calcularMultaCancelamento(matricula.modalidade, matricula.frequencia, matricula.plano, matricula.dataInicio);
+
+      // Registra a solicitacao e a trilha de auditoria do calculo da multa direto na matricula, no Notion.
+      if (matricula.pageId) {
+        const registroCancelamento =
+          'Cancelamento solicitado em ' + new Date().toLocaleString('pt-BR') + '. Motivo: ' + (motivo || '(não informado)') +
+          (calculo && calculo.ok ? ('\n' + formatarDetalhesMulta(calculo)) : '');
+        const observacoesAtualizadas = (matricula.observacoes ? matricula.observacoes + '\n\n' : '') + registroCancelamento;
+        try {
+          await fetch('https://api.notion.com/v1/pages/' + matricula.pageId, {
+            method: 'PATCH',
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ properties: { 'Observações': { rich_text: paraRichTextEmBlocos(observacoesAtualizadas) } } }),
+          });
+        } catch (e) { console.error('[portal-aluna/solicitar-cancelamento] erro ao gravar no Notion:', e.message); }
+      }
+    }
+
     await notificarSolicitacaoAluna(
       'Cancelamento de contrato',
       nome, contato,
-      'Modalidade: ' + modalidade + (turma ? (' — ' + turma) : '') + '\nMotivo: ' + (motivo || '(não informado)') + '\n\n⚠️ Contrato prevê 30 dias de aviso prévio — confirmar data de encerramento com a aluna.'
+      'Modalidade: ' + modalidade + (turma ? (' — ' + turma) : '') + '\nMotivo: ' + (motivo || '(não informado)') +
+      '\n\n⚠️ Contrato prevê 30 dias de aviso prévio a partir desta comunicação escrita — confirmar data de encerramento com a aluna.' +
+      '\n💰 ' + formatarDetalhesMulta(calculo)
     );
-    res.json({ ok: true });
+    res.json({ ok: true, calculoMulta: calculo });
   } catch (err) {
     console.error('[portal-aluna/solicitar-cancelamento] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
