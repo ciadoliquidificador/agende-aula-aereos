@@ -3385,7 +3385,10 @@ async function verificarCotaReposicao(cpfLimpo, modalidade) {
   }
   creditos.sort((a, b) => a.prazoLimite.localeCompare(b.prazoLimite)); // mais antigo (prazo mais proximo) primeiro
 
-  return { cota, creditosAbertos: creditos.length, podeAgendar: creditos.length < cota, creditos };
+  // "No limite mas nao bloqueada": com creditos.length === cota, ela ainda pode marcar (consome o mais
+  // antigo). So bloqueia quando ja excede a cota (creditos acumulados sem serem usados) ou nao ha credito algum.
+  const podeAgendar = creditos.length > 0 && creditos.length <= cota;
+  return { cota, creditosAbertos: creditos.length, podeAgendar, creditos };
 }
 
 // Vincula a marcação da reposição ao crédito e muda Status para "Usado"
