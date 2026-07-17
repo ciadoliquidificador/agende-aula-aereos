@@ -3445,6 +3445,28 @@ app.post('/portal-aluna/atualizar-cadastro', async (req, res) => {
     const d = await r.json();
     const paginas = d.results || [];
     if (paginas.length === 0) return res.status(404).json({ ok: false, erro: 'Cadastro não encontrado.' });
+    for (const pagina of paginas) {
+      await fetch('https://api.notion.com/v1/pages/' + pagina.id, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          properties: {
+            'Nome': { title: [{ text: { content: nome } }] },
+            'Email': { email: email },
+            'Contato': { phone_number: contato },
+            'Endereço': { rich_text: [{ text: { content: endereco || '' } }] },
+          },
+        }),
+      });
+    }
+    try { await enviarWhatsApp(WHATSAPP_FABIO, 'ℹ️ *Dados cadastrais atualizados* — ' + nome + ' (' + contato + ')'); } catch(e) {}
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-aluna/atualizar-cadastro] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 
 const MURAL_DB = 'c45786e213ff463f8558054b2f787a69';
 
@@ -3546,28 +3568,6 @@ app.get('/mural/listar/:modalidade/:turma', async (req, res) => {
     res.json({ ok: true, avisos });
   } catch (err) {
     console.error('[mural/listar] erro:', err.message);
-    res.status(500).json({ ok: false, erro: err.message });
-  }
-});
-
-    for (const pagina of paginas) {
-      await fetch('https://api.notion.com/v1/pages/' + pagina.id, {
-        method: 'PATCH',
-        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          properties: {
-            'Nome': { title: [{ text: { content: nome } }] },
-            'Email': { email: email },
-            'Contato': { phone_number: contato },
-            'Endereço': { rich_text: [{ text: { content: endereco || '' } }] },
-          },
-        }),
-      });
-    }
-    try { await enviarWhatsApp(WHATSAPP_FABIO, 'ℹ️ *Dados cadastrais atualizados* — ' + nome + ' (' + contato + ')'); } catch(e) {}
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[portal-aluna/atualizar-cadastro] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
