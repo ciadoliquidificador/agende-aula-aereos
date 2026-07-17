@@ -3013,6 +3013,261 @@ app.get('/contrato-professor/meu/:cpfCnpj', async (req, res) => {
   }
 });
 
+// ============================================================
+// PORTAL ALUNA — login por CPF, contrato, presenca, solicitacoes
+// ============================================================
+const PRESENCAS_2026_DB = '282c0bc0-06d8-4828-acae-d5ac35388318';
+
+app.get('/portal-aluna/login/:cpf', async (req, res) => {
+  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'CPF', rich_text: { equals: cpfLimpo } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: 20,
+      }),
+    });
+    const d = await r.json();
+    const matriculas = (d.results || []).map(p => {
+      const props = p.properties;
+      return {
+        pageId: p.id,
+        nome: props['Nome']?.title?.[0]?.plain_text || '',
+        contato: props['Contato']?.phone_number || '',
+        modalidade: props['Modalidade']?.select?.name || '',
+        turma: props['Turma']?.select?.name || '',
+        dia: props['Dia']?.select?.name || '',
+        horario: props['Horário']?.select?.name || '',
+        professor: props['Professor']?.select?.name || '',
+        plano: props['Plano']?.select?.name || '',
+        frequencia: props['Frequência']?.select?.name || '',
+        valor: props['Valor']?.number || null,
+        linkContratoPdf: props['Link do Contrato PDF']?.url || '',
+        contatoEmergenciaNome: props['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
+        contatoEmergenciaTelefone: props['Tel. Emergência']?.phone_number || '',
+      };
+    });
+
+    if (matriculas.length === 0) return res.json({ ok: false, erro: 'CPF não encontrado ou sem matrícula ativa. Fale com o Fábio.' });
+
+    res.json({ ok: true, nome: matriculas[0].nome, contato: matriculas[0].contato, matriculas });
+  } catch (err) {
+    console.error('[portal-aluna/login] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.get('/portal-aluna/presencas/:cpf', async (req, res) => {
+  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  try {
+    const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 20 }),
+    });
+    const dAlunas = await rAlunas.json();
+    const alunaIds = (dAlunas.results || []).map(p => p.id);
+    if (alunaIds.length === 0) return res.json({ ok: true, presencas: [] });
+
+    const rPresencas = await fetch('https://api.notion.com/v1/databases/' + PRESENCAS_2026_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { or: alunaIds.map(id => ({ property: 'Aluna', relation: { contains: id } })) },
+        sorts: [{ property: 'Data', direction: 'descending' }],
+        page_size: 100,
+      }),
+    });
+    const dPresencas = await rPresencas.json();
+    const presencas = (dPresencas.results || []).map(p => ({
+      data: p.properties['Data']?.date?.start || '',
+      turma: p.properties['Turma']?.select?.name || '',
+      status: p.properties['Status']?.select?.name || '',
+      tipo: p.properties['Tipo']?.select?.name || '',
+      professor: p.properties['Professor']?.select?.name || '',
+    }));
+
+    const totalPresencas = presencas.filter(p => p.status === 'Presente').length;
+    const totalFaltas = presencas.filter(p => p.status === 'Falta').length;
+
+    res.json({ ok: true, presencas, totalPresencas, totalFaltas });
+  } catch (err) {
+    console.error('[portal-aluna/presencas] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal-aluna/atualizar-contato', async (req, res) => {
+  const { cpf, contatoEmergenciaNome, contatoEmergenciaTelefone, possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos, condicaoSaude, qualCondicao } = req.body;
+  const cpfLimpo = (cpf || '').replace(/\D/g, '');
+  if (!cpfLimpo || !contatoEmergenciaNome || !contatoEmergenciaTelefone) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 20 }),
+    });
+    const d = await r.json();
+    const paginas = d.results || [];
+    if (paginas.length === 0) return res.status(404).json({ ok: false, erro: 'Cadastro não encontrado.' });
+
+    for (const pagina of paginas) {
+      await fetch('https://api.notion.com/v1/pages/' + pagina.id, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          properties: {
+            'Contato de Emergência': { rich_text: [{ text: { content: contatoEmergenciaNome } }] },
+            'Tel. Emergência': { phone_number: contatoEmergenciaTelefone },
+            'Possui alergias?': { select: { name: possuiAlergias || 'Não' } },
+            'Quais alergias?': { rich_text: [{ text: { content: quaisAlergias || '' } }] },
+            'Usa medicamentos?': { select: { name: usaMedicamentos || 'Não' } },
+            'Quais medicamentos?': { rich_text: [{ text: { content: quaisMedicamentos || '' } }] },
+            'Condição de saúde?': { select: { name: condicaoSaude || 'Não' } },
+            'Qual condição?': { rich_text: [{ text: { content: qualCondicao || '' } }] },
+          },
+        }),
+      });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-aluna/atualizar-contato] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+async function notificarSolicitacaoAluna(tipo, nome, contato, detalhes) {
+  const msg = '📋 *Solicitação de aluna* — ' + tipo + '\n\nAluna: ' + nome + ' (' + contato + ')\n' + detalhes + '\n\n_Pendente de confirmação sua._';
+  try { await enviarWhatsApp(WHATSAPP_FABIO, msg); } catch(e) {}
+}
+
+app.post('/portal-aluna/solicitar-reposicao', async (req, res) => {
+  const { cpf, nome, contato, modalidade, turmaAtual, turmaDesejada, dataDesejada } = req.body;
+  if (!cpf || !modalidade || !turmaDesejada || !dataDesejada) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  try {
+    const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
+    const infoTurma = dadosModalidade?.turmas.find(t => t.nome === turmaDesejada);
+    if (!infoTurma) return res.status(400).json({ ok: false, erro: 'Turma inválida.' });
+
+    const rCheck = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Modalidade', select: { equals: modalidade } },
+          { property: 'Turma', select: { equals: turmaDesejada } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: 200,
+      }),
+    });
+    const dCheck = await rCheck.json();
+    const ocupadas = (dCheck.results || []).length;
+    if (ocupadas >= infoTurma.limite) {
+      return res.json({ ok: false, erro: 'Essa turma está sem vaga disponível para reposição. Escolha outro horário.' });
+    }
+
+    await notificarSolicitacaoAluna(
+      'Reposição de aula',
+      nome, contato,
+      'De: ' + (turmaAtual || '(não informado)') + '\nPara: ' + turmaDesejada + ', em ' + dataDesejada
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-aluna/solicitar-reposicao] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
+  const { cpf, nome, contato, modalidade, turmaAtual, novaTurma } = req.body;
+  if (!cpf || !modalidade || !novaTurma) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  try {
+    const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
+    const infoTurma = dadosModalidade?.turmas.find(t => t.nome === novaTurma);
+    if (!infoTurma) return res.status(400).json({ ok: false, erro: 'Turma inválida.' });
+
+    const rCheck = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Modalidade', select: { equals: modalidade } },
+          { property: 'Turma', select: { equals: novaTurma } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: 200,
+      }),
+    });
+    const dCheck = await rCheck.json();
+    const ocupadas = (dCheck.results || []).length;
+    if (ocupadas >= infoTurma.limite) {
+      return res.json({ ok: false, erro: 'Essa turma já está lotada. Escolha outro horário.' });
+    }
+
+    await notificarSolicitacaoAluna(
+      'Mudança de turma',
+      nome, contato,
+      'De: ' + (turmaAtual || '(não informado)') + '\nPara: ' + novaTurma
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-aluna/solicitar-mudanca-turma] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
+  const { cpf, nome, contato, modalidade, planoAtual, frequenciaAtual, novoPlano, novaFrequencia } = req.body;
+  if (!cpf || !modalidade || !novoPlano || !novaFrequencia) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  try {
+    const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
+    const novoValor = dadosModalidade?.precos?.[novaFrequencia]?.[novoPlano];
+    if (novoValor === undefined) return res.status(400).json({ ok: false, erro: 'Combinação de plano/frequência inválida.' });
+
+    await notificarSolicitacaoAluna(
+      'Mudança de plano',
+      nome, contato,
+      'De: ' + (planoAtual || '?') + ' (' + (frequenciaAtual || '?') + ')\nPara: ' + novoPlano + ' (' + novaFrequencia + ') — novo valor estimado: R$ ' + novoValor.toFixed(2)
+    );
+    res.json({ ok: true, novoValor });
+  } catch (err) {
+    console.error('[portal-aluna/solicitar-mudanca-plano] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
+  const { cpf, nome, contato, modalidade, turma, motivo } = req.body;
+  if (!cpf || !modalidade) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  try {
+    await notificarSolicitacaoAluna(
+      'Cancelamento de contrato',
+      nome, contato,
+      'Modalidade: ' + modalidade + (turma ? (' — ' + turma) : '') + '\nMotivo: ' + (motivo || '(não informado)') + '\n\n⚠️ Contrato prevê 30 dias de aviso prévio — confirmar data de encerramento com a aluna.'
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-aluna/solicitar-cancelamento] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.get('/apresentacoes-hoje', async (req, res) => {
   function hojeBrasilia() {
     const agora = new Date();
