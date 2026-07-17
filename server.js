@@ -3625,6 +3625,25 @@ app.get('/reposicao/verificar-cota/:cpf/:modalidade', async (req, res) => {
   }
 });
 
+// POST /reposicao/confirmar — gate + consumo de credito sem escrever em Alunas.
+// Usado pelo Aéreos, cujo fluxo de reposição (vagas locais + WhatsApp) não passa por /inscricao.
+app.post('/reposicao/confirmar', async (req, res) => {
+  const { cpf, modalidade, turmaDesejada, dataDesejada } = req.body;
+  const cpfLimpo = (cpf || '').replace(/\D/g, '');
+  if (!cpfLimpo || !modalidade) return res.status(400).json({ ok: false, erro: 'CPF e modalidade são obrigatórios.' });
+  try {
+    const cotaInfo = await verificarCotaReposicao(cpfLimpo, modalidade);
+    if (!cotaInfo.podeAgendar) {
+      return res.status(400).json({ ok: false, erro: 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.' });
+    }
+    await consumirCreditoReposicao(cotaInfo.creditos[0].id, { turmaDesejada, dataDesejada });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[reposicao/confirmar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 // GET /portal-aluna/reposicoes/:cpf — creditos abertos agrupados por modalidade, para a aba "Minha Presença"
 const MAPA_MODALIDADES_REPOSICAO = {
   'Aéreos': 'https://agende-aereos.ciadoliquidificador.com.br?reposicao=1',
