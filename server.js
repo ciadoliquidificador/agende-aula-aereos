@@ -3833,32 +3833,19 @@ app.post('/portal-admin/login/solicitar', async (req, res) => {
 app.post('/portal-admin/login/verificar', (req, res) => {
   const verificacao = verificarOtp('portal_admin_fabio', req.body.codigo);
   if (!verificacao.ok) {
-    return res.status(401).json({ ok: false, erro: verificacao.erro || 'Código incorreto ou expirado.' });
+    return res.status(401).json(verificacao);
   }
-
-  const token = crypto.randomUUID();
-  sessaoStore.set('portalAdminSessao:' + token, {
-    criadoEm: Date.now(),
-  });
-
+  const token = criarSessao('portal_admin_fabio', {});
   res.json({ ok: true, token });
 });
 
 app.get('/portal-admin/sessao/verificar', (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.replace('Bearer ', '').trim();
-  const sessao = sessaoStore.get('portalAdminSessao:' + token);
-
-  if (!sessao) {
+  const dados = verificarSessao(token);
+  if (!dados) {
     return res.status(401).json({ ok: false, erro: 'Sessão inválida ou expirada.' });
   }
-
-  const dezMinutos = 10 * 60 * 1000;
-  if (Date.now() - sessao.criadoEm > dezMinutos) {
-    sessaoStore.delete('portalAdminSessao:' + token);
-    return res.status(401).json({ ok: false, erro: 'Sessão expirada.' });
-  }
-
   res.json({ ok: true });
 });
 // ===== FIM PORTAL ADMIN — LOGIN OTP + SESSÃO =====
