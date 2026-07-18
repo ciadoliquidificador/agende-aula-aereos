@@ -3818,6 +3818,52 @@ app.post('/mural/login/verificar', (req, res) => {
   res.json(verificacao);
 });
 
+// ===== PORTAL ADMIN — LOGIN OTP + SESSÃO =====
+app.post('/portal-admin/login/solicitar', async (req, res) => {
+  try {
+    await enviarOtp('portal_admin_fabio', WHATSAPP_FABIO, 'Fábio');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-admin/login/solicitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao enviar código.' });
+  }
+});
+
+app.post('/portal-admin/login/verificar', (req, res) => {
+  const verificacao = verificarOtp('portal_admin_fabio', req.body.codigo);
+  if (!verificacao.ok) {
+    return res.status(401).json({ ok: false, erro: verificacao.erro || 'Código incorreto ou expirado.' });
+  }
+
+  const token = crypto.randomUUID();
+  sessaoStore.set('portalAdminSessao:' + token, {
+    criadoEm: Date.now(),
+  });
+
+  res.json({ ok: true, token });
+});
+
+app.get('/portal-admin/sessao/verificar', (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace('Bearer ', '').trim();
+  const sessao = sessaoStore.get('portalAdminSessao:' + token);
+
+  if (!sessao) {
+    return res.status(401).json({ ok: false, erro: 'Sessão inválida ou expirada.' });
+  }
+
+  const dezMinutos = 10 * 60 * 1000;
+  if (Date.now() - sessao.criadoEm > dezMinutos) {
+    sessaoStore.delete('portalAdminSessao:' + token);
+    return res.status(401).json({ ok: false, erro: 'Sessão expirada.' });
+  }
+
+  res.json({ ok: true });
+});
+// ===== FIM PORTAL ADMIN — LOGIN OTP + SESSÃO =====
+
+
+
 app.get('/mural/turmas-disponiveis', (req, res) => {
   const turmas = [];
   for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
