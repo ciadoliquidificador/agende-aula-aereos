@@ -3839,9 +3839,8 @@ app.post('/portal-admin/login/verificar', (req, res) => {
   res.json({ ok: true, token });
 });
 
-app.get('/portal-admin/sessao/verificar', (req, res) => {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.replace('Bearer ', '').trim();
+app.post('/portal-admin/sessao/verificar', (req, res) => {
+  const token = req.body.token || '';
   const dados = verificarSessao(token);
   if (!dados) {
     return res.status(401).json({ ok: false, erro: 'Sessão inválida ou expirada.' });
