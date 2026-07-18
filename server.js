@@ -3680,89 +3680,12 @@ app.get('/portal-aluna/reposicoes/:cpf', async (req, res) => {
   }
 });
 
-app.post('/portal-aluna/solicitar-reposicao', async (req, res) => {
-  const { cpf, nome, contato, modalidade, turmaAtual, turmaDesejada, dataDesejada, frequencia } = req.body;
-  if (!cpf || !modalidade || !turmaDesejada || !dataDesejada) {
-    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
-  }
-  if (turmaDesejada === turmaAtual) {
-    return res.status(400).json({ ok: false, erro: 'A reposição precisa ser em um horário diferente da sua turma atual.' });
-  }
-  const cpfLimpo = (cpf || '').replace(/\D/g, '');
-
-  try {
-    const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
-    const infoTurma = dadosModalidade?.turmas.find(t => t.nome === turmaDesejada);
-    if (!infoTurma) return res.status(400).json({ ok: false, erro: 'Turma inválida.' });
-
-    // Cota mensal de reposicao conforme a frequencia do plano
-    const cota = frequencia === '2x semana' ? 2 : 1;
-    const hoje = new Date();
-    const mesReferencia = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
-    const rCota = await fetch('https://api.notion.com/v1/databases/' + REPOSICOES_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filter: { and: [
-          { property: 'CPF Aluna', rich_text: { equals: cpfLimpo } },
-          { property: 'Mês de Referência', rich_text: { equals: mesReferencia } },
-          { property: 'Status', select: { does_not_equal: 'Negada' } },
-        ]},
-        page_size: 20,
-      }),
-    });
-    const dCota = await rCota.json();
-    const usadas = (dCota.results || []).length;
-    if (usadas >= cota) {
-      return res.json({ ok: false, erro: 'Você já usou sua cota de reposições deste mês (' + usadas + ' de ' + cota + '). Fale com o Fábio se precisar de uma exceção.' });
-    }
-
-    const rCheck = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filter: { and: [
-          { property: 'Modalidade', select: { equals: modalidade } },
-          { property: 'Turma', select: { equals: turmaDesejada } },
-          { property: 'Status', select: { equals: 'Ativa' } },
-        ]},
-        page_size: 200,
-      }),
-    });
-    const dCheck = await rCheck.json();
-    const ocupadas = (dCheck.results || []).length;
-    if (ocupadas >= infoTurma.limite) {
-      return res.json({ ok: false, erro: 'Essa turma está sem vaga disponível para reposição. Escolha outro horário.' });
-    }
-
-    await fetch('https://api.notion.com/v1/pages', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parent: { database_id: REPOSICOES_DB },
-        properties: {
-          'Título': { title: [{ text: { content: nome + ' — ' + mesReferencia } }] },
-          'CPF Aluna': { rich_text: [{ text: { content: cpfLimpo } }] },
-          'Modalidade': { rich_text: [{ text: { content: modalidade } }] },
-          'Turma Origem': { rich_text: [{ text: { content: turmaAtual || '' } }] },
-          'Turma Desejada': { rich_text: [{ text: { content: turmaDesejada } }] },
-          'Data Desejada': { rich_text: [{ text: { content: dataDesejada } }] },
-          'Mês de Referência': { rich_text: [{ text: { content: mesReferencia } }] },
-          'Status': { select: { name: 'Solicitada' } },
-        },
-      }),
-    });
-
-    await notificarSolicitacaoAluna(
-      'Reposição de aula',
-      nome, contato,
-      'De: ' + (turmaAtual || '(não informado)') + '\nPara: ' + turmaDesejada + ', em ' + dataDesejada + '\n(Uso da cota: ' + (usadas + 1) + ' de ' + cota + ')'
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[portal-aluna/solicitar-reposicao] erro:', err.message);
-    res.status(500).json({ ok: false, erro: err.message });
-  }
+// Descontinuado: escrevia com o schema antigo de Reposições Solicitadas (Mês de Referência,
+// Status "Solicitada"/"Negada"), incompatível com o sistema de cota por janela rolante de 30 dias.
+// Investigação confirmou zero chamadas em qualquer frontend (Aluna, Aéreos, Infantil, Yoga, Acro, Prof).
+// Fluxo atual: apps Aéreos/Infantil/Yoga com ?reposicao=1 + POST /reposicao/confirmar.
+app.post('/portal-aluna/solicitar-reposicao', (req, res) => {
+  res.status(410).json({ erro: 'Este endpoint foi descontinuado. Use o fluxo de reposição dos apps (Aéreos/Infantil/Yoga) com ?reposicao=1.' });
 });
 
 app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
