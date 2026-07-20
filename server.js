@@ -2065,6 +2065,115 @@ async function buscarProfessorPorCpf(cpfLimpo) {
   };
 }
 
+// ===== PORTAL ADMIN — BUSCA POR NOME/CPF/TELEFONE =====
+const INTEGRANTES_DB = 'e1047585-3dd2-4bda-9896-1a4caeeea284';
+
+function normalizarBusca(texto) {
+  return (texto || '').trim();
+}
+
+app.get('/portal-admin/busca', async (req, res) => {
+  const tipo = req.query.tipo || '';
+  const q = normalizarBusca(req.query.q);
+
+  if (!q || q.length < 2) {
+    return res.json({ ok: true, resultados: [] });
+  }
+
+  try {
+    let resultados = [];
+
+    if (tipo === 'aluna') {
+      const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { or: [
+            { property: 'Nome', title: { contains: q } },
+            { property: 'CPF', rich_text: { contains: q } },
+            { property: 'Contato', phone_number: { contains: q } },
+          ]},
+          page_size: 20,
+        }),
+      });
+      const d = await r.json();
+      resultados = (d.results || []).map(pagina => {
+        const p = pagina.properties;
+        return {
+          pageId: pagina.id,
+          nome: p['Nome']?.title?.[0]?.plain_text || '',
+          cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+          telefone: p['Contato']?.phone_number || '',
+          modalidade: p['Modalidade']?.select?.name || '',
+          turma: p['Turma']?.select?.name || '',
+          status: p['Status']?.select?.name || '',
+        };
+      });
+    } else if (tipo === 'professor') {
+      const r = await fetch('https://api.notion.com/v1/databases/' + PROFESSORES_CADASTRO_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { or: [
+            { property: 'Nome', title: { contains: q } },
+            { property: 'CPF', rich_text: { contains: q } },
+            { property: 'Telefone', phone_number: { contains: q } },
+          ]},
+          page_size: 20,
+        }),
+      });
+      const d = await r.json();
+      resultados = (d.results || []).map(pagina => {
+        const p = pagina.properties;
+        return {
+          pageId: pagina.id,
+          nome: p['Nome']?.title?.[0]?.plain_text || '',
+          cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+          telefone: p['Telefone']?.phone_number || '',
+          email: p['Email']?.email || '',
+        };
+      });
+    } else if (tipo === 'artista') {
+      const r = await fetch('https://api.notion.com/v1/databases/' + INTEGRANTES_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { or: [
+            { property: 'Nome', title: { contains: q } },
+            { property: 'Nome Artístico', rich_text: { contains: q } },
+            { property: 'CPF', rich_text: { contains: q } },
+            { property: 'Telefone', phone_number: { contains: q } },
+          ]},
+          page_size: 20,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        console.error('[portal-admin/busca] erro Integrantes:', JSON.stringify(d));
+        return res.status(500).json({ ok: false, erro: 'Erro ao consultar Integrantes. O token pode não ter acesso a esse banco — ver console.' });
+      }
+      resultados = (d.results || []).map(pagina => {
+        const p = pagina.properties;
+        return {
+          pageId: pagina.id,
+          nome: p['Nome']?.title?.[0]?.plain_text || '',
+          nomeArtistico: p['Nome Artístico']?.rich_text?.[0]?.plain_text || '',
+          cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+          telefone: p['Telefone']?.phone_number || '',
+        };
+      });
+    } else {
+      return res.status(400).json({ ok: false, erro: 'Tipo de busca inválido. Use aluna, professor ou artista.' });
+    }
+
+    res.json({ ok: true, resultados });
+  } catch (err) {
+    console.error('[portal-admin/busca] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — BUSCA =====
+
 async function buscarProfessorPorNome(nome) {
   const r = await fetch('https://api.notion.com/v1/databases/' + PROFESSORES_CADASTRO_DB + '/query', {
     method: 'POST',
