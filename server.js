@@ -2186,6 +2186,102 @@ async function buscarProfessorPorNome(nome) {
   return (pagina.properties['Telefone']?.phone_number || '').replace(/\D/g, '');
 }
 
+// ===== PORTAL ADMIN — OCUPAÇÃO DE TURMAS =====
+const CAPACIDADE_TURMAS_DB = '6bce9296-8a72-47e9-aa65-c5e19173998f';
+
+app.get('/portal-admin/ocupacao', async (req, res) => {
+  try {
+    const rCap = await fetch('https://api.notion.com/v1/databases/' + CAPACIDADE_TURMAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_size: 100 }),
+    });
+    const dCap = await rCap.json();
+    if (!rCap.ok) {
+      console.error('[portal-admin/ocupacao] erro Capacidade:', JSON.stringify(dCap));
+      return res.status(500).json({ ok: false, erro: 'Erro ao consultar Capacidade de Turmas.' });
+    }
+
+    const turmas = (dCap.results || []).map(pagina => {
+      const p = pagina.properties;
+      return {
+        pageId: pagina.id,
+        turma: p['Título']?.title?.[0]?.plain_text || '',
+        modalidade: p['Modalidade']?.select?.name || '',
+        turmaId: p['Turma ID']?.rich_text?.[0]?.plain_text || '',
+        capacidadeRegular: p['Capacidade Regular']?.number ?? 0,
+        vagaReposicaoExtra: p['Vaga Reposição Extra']?.number ?? 0,
+      };
+    });
+
+    // Busca TODAS as alunas ativas de uma vez (mais eficiente que 1 query por turma)
+    const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { or: [
+          { property: 'Status', select: { equals: 'Ativa' } },
+          { property: 'Status', select: { equals: 'Ativo' } },
+        ]},
+        page_size: 100,
+      }),
+    });
+    const dAlunas = await rAlunas.json();
+    const alunas = dAlunas.results || [];
+
+    const resultado = turmas.map(t => {
+      const ocupados = alunas.filter(pagina => {
+        const p = pagina.properties;
+        const modalidade = p['Modalidade']?.select?.name || '';
+        const turma = p['Turma']?.select?.name || '';
+        return modalidade === t.modalidade && turma === t.turma;
+      }).length;
+
+      return {
+        ...t,
+        capacidadeTotal: t.capacidadeRegular + t.vagaReposicaoExtra,
+        ocupados,
+      };
+    });
+
+    res.json({ ok: true, turmas: resultado });
+  } catch (err) {
+    console.error('[portal-admin/ocupacao] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar ocupação.' });
+  }
+});
+
+app.post('/portal-admin/ocupacao/salvar', async (req, res) => {
+  const { pageId, capacidadeRegular, vagaReposicaoExtra } = req.body;
+
+  if (!pageId) {
+    return res.status(400).json({ ok: false, erro: 'pageId é obrigatório.' });
+  }
+
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Capacidade Regular': { number: Number(capacidadeRegular) },
+          'Vaga Reposição Extra': { number: Number(vagaReposicaoExtra) },
+        },
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      console.error('[portal-admin/ocupacao/salvar] erro:', JSON.stringify(d));
+      return res.status(500).json({ ok: false, erro: 'Erro ao salvar.' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-admin/ocupacao/salvar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao salvar.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — OCUPAÇÃO DE TURMAS =====
+
 // ===== PORTAL ADMIN — CADASTRO DE PROFESSORES (CRUD) =====
 app.get('/portal-admin/professores/:pageId', async (req, res) => {
   try {
