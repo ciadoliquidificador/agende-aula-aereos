@@ -2186,6 +2186,87 @@ async function buscarProfessorPorNome(nome) {
   return (pagina.properties['Telefone']?.phone_number || '').replace(/\D/g, '');
 }
 
+// ===== PORTAL ADMIN — CADASTRO DE PROFESSORES (CRUD) =====
+app.get('/portal-admin/professores/:pageId', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + req.params.pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pagina = await r.json();
+    if (!r.ok) return res.status(404).json({ ok: false, erro: 'Professor não encontrado.' });
+
+    const p = pagina.properties;
+    res.json({
+      ok: true,
+      professor: {
+        pageId: pagina.id,
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+        telefone: p['Telefone']?.phone_number || '',
+        email: p['Email']?.email || '',
+        endereco: p['Endereço']?.rich_text?.[0]?.plain_text || '',
+        modalidades: (p['Modalidades']?.multi_select || []).map(m => m.name),
+        valorHora: p['Valor Hora']?.number ?? null,
+      },
+    });
+  } catch (err) {
+    console.error('[portal-admin/professores/:pageId] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar professor.' });
+  }
+});
+
+app.post('/portal-admin/professores/salvar', async (req, res) => {
+  const { pageId, nome, cpf, telefone, email, endereco, modalidades, valorHora } = req.body;
+
+  if (!nome || !String(nome).trim()) {
+    return res.status(400).json({ ok: false, erro: 'Nome é obrigatório.' });
+  }
+
+  const properties = {
+    Nome: { title: [{ text: { content: nome } }] },
+    CPF: { rich_text: [{ text: { content: cpf || '' } }] },
+    Telefone: { phone_number: telefone || null },
+    Email: { email: email || null },
+    Endereço: { rich_text: [{ text: { content: endereco || '' } }] },
+    Modalidades: { multi_select: (modalidades || []).map(m => ({ name: m })) },
+    'Valor Hora': { number: valorHora !== undefined && valorHora !== null && valorHora !== '' ? Number(valorHora) : null },
+  };
+
+  try {
+    if (pageId) {
+      // Atualiza professor existente
+      const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ properties }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        console.error('[portal-admin/professores/salvar] erro update:', JSON.stringify(d));
+        return res.status(500).json({ ok: false, erro: 'Erro ao atualizar professor.' });
+      }
+      return res.json({ ok: true, pageId: d.id, criado: false });
+    } else {
+      // Cria professor novo
+      const r = await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent: { database_id: PROFESSORES_CADASTRO_DB }, properties }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        console.error('[portal-admin/professores/salvar] erro create:', JSON.stringify(d));
+        return res.status(500).json({ ok: false, erro: 'Erro ao criar professor.' });
+      }
+      return res.json({ ok: true, pageId: d.id, criado: true });
+    }
+  } catch (err) {
+    console.error('[portal-admin/professores/salvar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao salvar professor.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — CADASTRO DE PROFESSORES =====
+
 app.post('/portal/login/solicitar', async (req, res) => {
   const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
   try {
