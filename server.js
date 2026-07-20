@@ -2186,6 +2186,197 @@ async function buscarProfessorPorNome(nome) {
   return (pagina.properties['Telefone']?.phone_number || '').replace(/\D/g, '');
 }
 
+// ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
+
+async function buscarAprovacaoPorId(pageId) {
+  const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+  });
+  const pagina = await r.json();
+  if (!r.ok) return null;
+  const p = pagina.properties;
+  return {
+    pageId: pagina.id,
+    tipo: p['Tipo']?.select?.name || '',
+    cpf: p['CPF Aluna']?.rich_text?.[0]?.plain_text || '',
+    nome: p['Nome Aluna']?.rich_text?.[0]?.plain_text || '',
+    contato: p['Contato']?.phone_number || '',
+    modalidade: p['Modalidade']?.rich_text?.[0]?.plain_text || '',
+    turmaAtual: p['Turma Atual']?.rich_text?.[0]?.plain_text || '',
+    turmaNova: p['Turma Nova']?.rich_text?.[0]?.plain_text || '',
+    planoAtual: p['Plano Atual']?.rich_text?.[0]?.plain_text || '',
+    planoNovo: p['Plano Novo']?.rich_text?.[0]?.plain_text || '',
+    frequenciaAtual: p['Frequência Atual']?.rich_text?.[0]?.plain_text || '',
+    frequenciaNova: p['Frequência Nova']?.rich_text?.[0]?.plain_text || '',
+    valorNovo: p['Valor Novo']?.number ?? null,
+    motivo: p['Motivo']?.rich_text?.[0]?.plain_text || '',
+    detalhesMulta: p['Detalhes Multa']?.rich_text?.[0]?.plain_text || '',
+    status: p['Status']?.select?.name || '',
+    matriculaPageId: (p['Matrícula']?.relation || [])[0]?.id || null,
+  };
+}
+
+app.get('/portal-admin/aprovacoes', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + APROVACOES_ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+        page_size: 100,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      console.error('[portal-admin/aprovacoes] erro:', JSON.stringify(d));
+      return res.status(500).json({ ok: false, erro: 'Erro ao consultar aprovações.' });
+    }
+
+    const pedidos = (d.results || []).map(pagina => {
+      const p = pagina.properties;
+      return {
+        pageId: pagina.id,
+        tipo: p['Tipo']?.select?.name || '',
+        nome: p['Nome Aluna']?.rich_text?.[0]?.plain_text || '',
+        cpf: p['CPF Aluna']?.rich_text?.[0]?.plain_text || '',
+        contato: p['Contato']?.phone_number || '',
+        modalidade: p['Modalidade']?.rich_text?.[0]?.plain_text || '',
+        turmaAtual: p['Turma Atual']?.rich_text?.[0]?.plain_text || '',
+        turmaNova: p['Turma Nova']?.rich_text?.[0]?.plain_text || '',
+        planoAtual: p['Plano Atual']?.rich_text?.[0]?.plain_text || '',
+        planoNovo: p['Plano Novo']?.rich_text?.[0]?.plain_text || '',
+        frequenciaAtual: p['Frequência Atual']?.rich_text?.[0]?.plain_text || '',
+        frequenciaNova: p['Frequência Nova']?.rich_text?.[0]?.plain_text || '',
+        valorNovo: p['Valor Novo']?.number ?? null,
+        motivo: p['Motivo']?.rich_text?.[0]?.plain_text || '',
+        detalhesMulta: p['Detalhes Multa']?.rich_text?.[0]?.plain_text || '',
+        status: p['Status']?.select?.name || '',
+        criadoEm: pagina.created_time,
+      };
+    });
+
+    res.json({ ok: true, pedidos });
+  } catch (err) {
+    console.error('[portal-admin/aprovacoes] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar aprovações.' });
+  }
+});
+
+app.post('/portal-admin/aprovacoes/:id/aprovar', async (req, res) => {
+  try {
+    const pedido = await buscarAprovacaoPorId(req.params.id);
+    if (!pedido) return res.status(404).json({ ok: false, erro: 'Pedido não encontrado.' });
+    if (pedido.status !== 'Pendente') return res.status(400).json({ ok: false, erro: 'Este pedido já foi decidido.' });
+    if (!pedido.matriculaPageId) return res.status(400).json({ ok: false, erro: 'Matrícula não vinculada a este pedido — verifique manualmente no Notion.' });
+
+    let mensagemAluna = '';
+
+    if (pedido.tipo === 'Mudança de Turma') {
+      // Recheca vaga na hora de aprovar
+      const rCheck = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { and: [
+            { property: 'Modalidade', select: { equals: pedido.modalidade } },
+            { property: 'Turma', select: { equals: pedido.turmaNova } },
+            { property: 'Status', select: { equals: 'Ativa' } },
+          ]},
+          page_size: 200,
+        }),
+      });
+      const dCheck = await rCheck.json();
+      const dadosModalidade = MODALIDADES_MATRICULA[pedido.modalidade];
+      const infoTurmaNova = dadosModalidade?.turmas.find(t => t.nome === pedido.turmaNova);
+      const ocupadas = (dCheck.results || []).length;
+      if (infoTurmaNova && ocupadas >= infoTurmaNova.limite) {
+        return res.json({ ok: false, erro: 'A turma ' + pedido.turmaNova + ' encheu desde o pedido. Não é possível aprovar agora — negue ou oriente a aluna a escolher outro horário.' });
+      }
+
+      await fetch('https://api.notion.com/v1/pages/' + pedido.matriculaPageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ properties: { 'Turma': { select: { name: pedido.turmaNova } } } }),
+      });
+
+      mensagemAluna = '✅ Sua mudança de turma foi aprovada! Nova turma: ' + pedido.turmaNova + '.';
+
+    } else if (pedido.tipo === 'Mudança de Plano') {
+      await fetch('https://api.notion.com/v1/pages/' + pedido.matriculaPageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          properties: {
+            'Plano': { select: { name: pedido.planoNovo } },
+            'Frequência': { select: { name: pedido.frequenciaNova } },
+            'Valor': { number: pedido.valorNovo },
+          },
+        }),
+      });
+
+      mensagemAluna = '✅ Sua mudança de plano foi aprovada! Novo plano: ' + pedido.planoNovo + ' (' + pedido.frequenciaNova + ').';
+
+    } else if (pedido.tipo === 'Cancelamento') {
+      await fetch('https://api.notion.com/v1/pages/' + pedido.matriculaPageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ properties: { 'Status': { select: { name: 'Cancelado' } } } }),
+      });
+
+      mensagemAluna = '✅ Seu cancelamento foi confirmado. Qualquer dúvida sobre a multa ou aviso prévio, fale com a gente.';
+
+    } else {
+      return res.status(400).json({ ok: false, erro: 'Tipo de pedido desconhecido.' });
+    }
+
+    await fetch('https://api.notion.com/v1/pages/' + pedido.pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { 'Status': { select: { name: 'Aprovado' } } } }),
+    });
+
+    if (pedido.contato) {
+      try { await enviarWhatsApp(pedido.contato, mensagemAluna); } catch (e) { console.error('[aprovar] erro ao notificar aluna:', e.message); }
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-admin/aprovacoes/aprovar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao aprovar.' });
+  }
+});
+
+app.post('/portal-admin/aprovacoes/:id/negar', async (req, res) => {
+  const motivoNegacao = req.body.motivoNegacao || '';
+  try {
+    const pedido = await buscarAprovacaoPorId(req.params.id);
+    if (!pedido) return res.status(404).json({ ok: false, erro: 'Pedido não encontrado.' });
+    if (pedido.status !== 'Pendente') return res.status(400).json({ ok: false, erro: 'Este pedido já foi decidido.' });
+
+    await fetch('https://api.notion.com/v1/pages/' + pedido.pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Status': { select: { name: 'Negado' } },
+          'Motivo Negação': { rich_text: [{ text: { content: motivoNegacao } }] },
+        },
+      }),
+    });
+
+    if (pedido.contato) {
+      const msg = '❌ Seu pedido (' + pedido.tipo + ') não foi aprovado.' + (motivoNegacao ? ('\nMotivo: ' + motivoNegacao) : '') + '\n\nFale com a gente se quiser entender melhor.';
+      try { await enviarWhatsApp(pedido.contato, msg); } catch (e) { console.error('[negar] erro ao notificar aluna:', e.message); }
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-admin/aprovacoes/negar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao negar.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
+
 // ===== PORTAL ADMIN — OCUPAÇÃO DE TURMAS =====
 const CAPACIDADE_TURMAS_DB = 'cf832b7c91db44df8cb506d31b40bc3c';
 
@@ -4022,6 +4213,33 @@ app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
       return res.json({ ok: false, erro: 'Essa turma já está lotada. Escolha outro horário.' });
     }
 
+    // Cria registro estruturado de aprovação pendente
+    try {
+      const cpfLimpoAprov = (cpf || '').replace(/\D/g, '');
+      const matriculasAprov = await buscarMatriculasPorCpf(cpfLimpoAprov);
+      const alvoAprov = localizarMatricula(matriculasAprov, modalidade, turmaAtual)[0] || null;
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: APROVACOES_ALUNAS_DB },
+          properties: {
+            'Título': { title: [{ text: { content: nome + ' — Mudança de Turma' } }] },
+            'Tipo': { select: { name: 'Mudança de Turma' } },
+            'CPF Aluna': { rich_text: [{ text: { content: cpfLimpoAprov } }] },
+            'Nome Aluna': { rich_text: [{ text: { content: nome || '' } }] },
+            'Contato': { phone_number: contato || null },
+            'Modalidade': { rich_text: [{ text: { content: modalidade || '' } }] },
+            'Turma Atual': { rich_text: [{ text: { content: turmaAtual || '' } }] },
+            'Turma Nova': { rich_text: [{ text: { content: novaTurma || '' } }] },
+            'Motivo': { rich_text: [{ text: { content: motivo || '' } }] },
+            'Status': { select: { name: 'Pendente' } },
+            'Matrícula': alvoAprov?.pageId ? { relation: [alvoAprov.pageId] } : undefined,
+          },
+        }),
+      });
+    } catch (eAprov) { console.error('[solicitar-mudanca-turma] erro ao criar aprovacao:', eAprov.message); }
+
     await notificarSolicitacaoAluna(
       'Mudança de turma',
       nome, contato,
@@ -4055,6 +4273,35 @@ app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
     const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
     const novoValor = dadosModalidade?.precos?.[novaFrequencia]?.[novoPlano];
     if (novoValor === undefined) return res.status(400).json({ ok: false, erro: 'Combinação de plano/frequência inválida.' });
+
+    // Cria registro estruturado de aprovação pendente
+    try {
+      const cpfLimpoAprov = (cpf || '').replace(/\D/g, '');
+      const matriculasAprov = await buscarMatriculasPorCpf(cpfLimpoAprov);
+      const alvoAprov = localizarMatricula(matriculasAprov, modalidade)[0] || null;
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: APROVACOES_ALUNAS_DB },
+          properties: {
+            'Título': { title: [{ text: { content: nome + ' — Mudança de Plano' } }] },
+            'Tipo': { select: { name: 'Mudança de Plano' } },
+            'CPF Aluna': { rich_text: [{ text: { content: cpfLimpoAprov } }] },
+            'Nome Aluna': { rich_text: [{ text: { content: nome || '' } }] },
+            'Contato': { phone_number: contato || null },
+            'Modalidade': { rich_text: [{ text: { content: modalidade || '' } }] },
+            'Plano Atual': { rich_text: [{ text: { content: planoAtual || '' } }] },
+            'Plano Novo': { rich_text: [{ text: { content: novoPlano || '' } }] },
+            'Frequência Atual': { rich_text: [{ text: { content: frequenciaAtual || '' } }] },
+            'Frequência Nova': { rich_text: [{ text: { content: novaFrequencia || '' } }] },
+            'Valor Novo': { number: novoValor },
+            'Status': { select: { name: 'Pendente' } },
+            'Matrícula': alvoAprov?.pageId ? { relation: [alvoAprov.pageId] } : undefined,
+          },
+        }),
+      });
+    } catch (eAprov) { console.error('[solicitar-mudanca-plano] erro ao criar aprovacao:', eAprov.message); }
 
     await notificarSolicitacaoAluna(
       'Mudança de plano',
@@ -4320,6 +4567,30 @@ app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
         } catch (e) { console.error('[portal-aluna/solicitar-cancelamento] erro ao gravar no Notion:', e.message); }
       }
     }
+
+    // Cria registro estruturado de aprovação pendente
+    try {
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: APROVACOES_ALUNAS_DB },
+          properties: {
+            'Título': { title: [{ text: { content: nome + ' — Cancelamento' } }] },
+            'Tipo': { select: { name: 'Cancelamento' } },
+            'CPF Aluna': { rich_text: [{ text: { content: cpfLimpo } }] },
+            'Nome Aluna': { rich_text: [{ text: { content: nome || '' } }] },
+            'Contato': { phone_number: contato || null },
+            'Modalidade': { rich_text: [{ text: { content: modalidade || '' } }] },
+            'Turma Atual': { rich_text: [{ text: { content: turma || '' } }] },
+            'Motivo': { rich_text: [{ text: { content: motivo || '' } }] },
+            'Detalhes Multa': { rich_text: [{ text: { content: formatarDetalhesMulta(calculo) } }] },
+            'Status': { select: { name: 'Pendente' } },
+            'Matrícula': matricula?.pageId ? { relation: [matricula.pageId] } : undefined,
+          },
+        }),
+      });
+    } catch (eAprov) { console.error('[solicitar-cancelamento] erro ao criar aprovacao:', eAprov.message); }
 
     await notificarSolicitacaoAluna(
       'Cancelamento de contrato',
