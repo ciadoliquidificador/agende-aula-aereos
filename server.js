@@ -4219,7 +4219,7 @@ app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
       const cpfLimpoAprov = (cpf || '').replace(/\D/g, '');
       const matriculasAprov = await buscarMatriculasPorCpf(cpfLimpoAprov);
       const alvoAprov = localizarMatricula(matriculasAprov, modalidade, turmaAtual)[0] || null;
-      await fetch('https://api.notion.com/v1/pages', {
+      const rAprov = await fetch('https://api.notion.com/v1/pages', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4239,6 +4239,7 @@ app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
           },
         }),
       });
+      if (!rAprov.ok) { const eBody = await rAprov.text(); console.error('[solicitar-mudanca-turma] Notion recusou criar aprovacao:', eBody); }
     } catch (eAprov) { console.error('[solicitar-mudanca-turma] erro ao criar aprovacao:', eAprov.message); }
 
     await notificarSolicitacaoAluna(
@@ -4280,7 +4281,7 @@ app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
       const cpfLimpoAprov = (cpf || '').replace(/\D/g, '');
       const matriculasAprov = await buscarMatriculasPorCpf(cpfLimpoAprov);
       const alvoAprov = localizarMatricula(matriculasAprov, modalidade)[0] || null;
-      await fetch('https://api.notion.com/v1/pages', {
+      const rAprov = await fetch('https://api.notion.com/v1/pages', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4302,6 +4303,7 @@ app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
           },
         }),
       });
+      if (!rAprov.ok) { const eBody = await rAprov.text(); console.error('[solicitar-mudanca-plano] Notion recusou criar aprovacao:', eBody); }
     } catch (eAprov) { console.error('[solicitar-mudanca-plano] erro ao criar aprovacao:', eAprov.message); }
 
     await notificarSolicitacaoAluna(
@@ -4571,7 +4573,7 @@ app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
 
     // Cria registro estruturado de aprovação pendente
     try {
-      await fetch('https://api.notion.com/v1/pages', {
+      const rAprov = await fetch('https://api.notion.com/v1/pages', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4591,6 +4593,7 @@ app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
           },
         }),
       });
+      if (!rAprov.ok) { const eBody = await rAprov.text(); console.error('[solicitar-cancelamento] Notion recusou criar aprovacao:', eBody); }
     } catch (eAprov) { console.error('[solicitar-cancelamento] erro ao criar aprovacao:', eAprov.message); }
 
     await notificarSolicitacaoAluna(
