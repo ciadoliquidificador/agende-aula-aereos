@@ -2187,7 +2187,7 @@ async function buscarProfessorPorNome(nome) {
 }
 
 // ===== PORTAL ADMIN — OCUPAÇÃO DE TURMAS =====
-const CAPACIDADE_TURMAS_DB = '6bce9296-8a72-47e9-aa65-c5e19173998f';
+const CAPACIDADE_TURMAS_DB = 'cf832b7c91db44df8cb506d31b40bc3c';
 
 app.get('/portal-admin/ocupacao', async (req, res) => {
   try {
