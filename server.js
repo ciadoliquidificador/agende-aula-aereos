@@ -2294,11 +2294,21 @@ app.post('/portal-admin/aprovacoes/:id/aprovar', async (req, res) => {
         return res.json({ ok: false, erro: 'A turma ' + pedido.turmaNova + ' encheu desde o pedido. Não é possível aprovar agora — negue ou oriente a aluna a escolher outro horário.' });
       }
 
-      await fetch('https://api.notion.com/v1/pages/' + pedido.matriculaPageId, {
+      const propsAtualizacao = { 'Turma': { select: { name: pedido.turmaNova } } };
+      if (infoTurmaNova?.dia) propsAtualizacao['Dia'] = { select: { name: infoTurmaNova.dia } };
+      if (infoTurmaNova?.horario) propsAtualizacao['Horário'] = { select: { name: infoTurmaNova.horario } };
+      if (infoTurmaNova?.professor) propsAtualizacao['Professor'] = { select: { name: infoTurmaNova.professor } };
+
+      const rPatchTurma = await fetch('https://api.notion.com/v1/pages/' + pedido.matriculaPageId, {
         method: 'PATCH',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ properties: { 'Turma': { select: { name: pedido.turmaNova } } } }),
+        body: JSON.stringify({ properties: propsAtualizacao }),
       });
+      if (!rPatchTurma.ok) {
+        const eBody = await rPatchTurma.text();
+        console.error('[aprovar mudanca-turma] Notion recusou atualizar matricula:', eBody);
+        return res.status(500).json({ ok: false, erro: 'Notion recusou atualizar a matrícula — ver logs.' });
+      }
 
       mensagemAluna = '✅ Sua mudança de turma foi aprovada! Nova turma: ' + pedido.turmaNova + '.';
 
