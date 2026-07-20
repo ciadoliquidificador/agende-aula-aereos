@@ -128,6 +128,7 @@ async function uploadFotoOneDrive(token, base64Data, filename) {
   return data.webUrl;
 }
 const ALUNAS_DB = process.env.NOTION_DATABASE_ID || 'aee12f7f-8cb9-4ee2-80ba-1bcb06d9eda0';
+const APROVACOES_ALUNAS_DB = 'ec88dc5a5d9048a8b20d90332d96aa54';
 
 const digisacHeaders = {
   'Content-Type': 'application/json',
