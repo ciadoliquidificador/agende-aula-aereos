@@ -2229,6 +2229,17 @@ app.get('/portal-admin/ocupacao', async (req, res) => {
     const dAlunas = await rAlunas.json();
     const alunas = dAlunas.results || [];
 
+    const DIA_ORDEM = { 'segunda': 1, 'terça': 2, 'terca': 2, 'quarta': 3, 'quinta': 4, 'sexta': 5, 'sábado': 6, 'sabado': 6, 'domingo': 7 };
+
+    function extrairDiaEHora(turma) {
+      const partes = (turma || '').trim().toLowerCase().split(/\s+/);
+      const diaTexto = partes[0] || '';
+      const dia = DIA_ORDEM[diaTexto] ?? 99;
+      const horaMatch = (turma || '').match(/(\d{1,2})h(\d{2})?/i);
+      const hora = horaMatch ? parseInt(horaMatch[1], 10) * 60 + (horaMatch[2] ? parseInt(horaMatch[2], 10) : 0) : 9999;
+      return { dia, hora };
+    }
+
     const resultado = turmas.map(t => {
       const ocupados = alunas.filter(pagina => {
         const p = pagina.properties;
@@ -2242,6 +2253,13 @@ app.get('/portal-admin/ocupacao', async (req, res) => {
         capacidadeTotal: t.capacidadeRegular + t.vagaReposicaoExtra,
         ocupados,
       };
+    });
+
+    resultado.sort((a, b) => {
+      const da = extrairDiaEHora(a.turma);
+      const db = extrairDiaEHora(b.turma);
+      if (da.dia !== db.dia) return da.dia - db.dia;
+      return da.hora - db.hora;
     });
 
     res.json({ ok: true, turmas: resultado });
