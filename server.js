@@ -4235,7 +4235,7 @@ app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
             'Turma Nova': { rich_text: [{ text: { content: novaTurma || '' } }] },
             'Motivo': { rich_text: [{ text: { content: motivo || '' } }] },
             'Status': { select: { name: 'Pendente' } },
-            'Matrícula': alvoAprov?.pageId ? { relation: [alvoAprov.pageId] } : undefined,
+            'Matrícula': alvoAprov?.pageId ? { relation: [{ id: alvoAprov.pageId }] } : undefined,
           },
         }),
       });
@@ -4299,7 +4299,7 @@ app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
             'Frequência Nova': { rich_text: [{ text: { content: novaFrequencia || '' } }] },
             'Valor Novo': { number: novoValor },
             'Status': { select: { name: 'Pendente' } },
-            'Matrícula': alvoAprov?.pageId ? { relation: [alvoAprov.pageId] } : undefined,
+            'Matrícula': alvoAprov?.pageId ? { relation: [{ id: alvoAprov.pageId }] } : undefined,
           },
         }),
       });
@@ -4589,7 +4589,7 @@ app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
             'Motivo': { rich_text: [{ text: { content: motivo || '' } }] },
             'Detalhes Multa': { rich_text: [{ text: { content: formatarDetalhesMulta(calculo) } }] },
             'Status': { select: { name: 'Pendente' } },
-            'Matrícula': matricula?.pageId ? { relation: [matricula.pageId] } : undefined,
+            'Matrícula': matricula?.pageId ? { relation: [{ id: matricula.pageId }] } : undefined,
           },
         }),
       });
