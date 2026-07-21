@@ -4288,7 +4288,7 @@ app.post('/portal-aluna/login/verificar', async (req, res) => {
   try {
     const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
     if (matriculas.length === 0) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
-    const dadosLogin = { nome: matriculas[0].nome, contato: matriculas[0].contato, matriculas };
+    const dadosLogin = { nome: matriculas[0].nome, contato: matriculas[0].contato, matriculas, cpf: cpfLimpo };
     const sessionToken = criarSessao('aluna_' + cpfLimpo, dadosLogin);
     res.json({ ok: true, ...dadosLogin, sessionToken });
   } catch (err) {
@@ -4305,6 +4305,9 @@ app.post('/portal-aluna/sessao/verificar', (req, res) => {
 
 app.get('/portal-aluna/presencas/:cpf', async (req, res) => {
   const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  const dadosSessaoAluna = verificarSessao(req.query.sessionToken);
+  if (!dadosSessaoAluna) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAluna.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
       method: 'POST',
@@ -4344,8 +4347,11 @@ app.get('/portal-aluna/presencas/:cpf', async (req, res) => {
 });
 
 app.post('/portal-aluna/atualizar-contato', async (req, res) => {
-  const { cpf, contatoEmergenciaNome, contatoEmergenciaTelefone, possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos, condicaoSaude, qualCondicao } = req.body;
+  const { cpf, contatoEmergenciaNome, contatoEmergenciaTelefone, possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos, condicaoSaude, qualCondicao, sessionToken } = req.body;
   const cpfLimpo = (cpf || '').replace(/\D/g, '');
+  const dadosSessaoAluna = verificarSessao(sessionToken);
+  if (!dadosSessaoAluna) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAluna.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   if (!cpfLimpo || !contatoEmergenciaNome || !contatoEmergenciaTelefone) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
@@ -4432,6 +4438,9 @@ const MAPA_MODALIDADES_REPOSICAO = {
 app.get('/portal-aluna/reposicoes/:cpf', async (req, res) => {
   const cpfLimpo = (req.params.cpf || '').replace(/\D/g, '');
   if (!cpfLimpo) return res.status(400).json({ ok: false, erro: 'CPF é obrigatório.' });
+  const dadosSessaoAluna = verificarSessao(req.query.sessionToken);
+  if (!dadosSessaoAluna) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAluna.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const hoje = new Date().toISOString().slice(0, 10);
     const modalidades = [];
@@ -4461,10 +4470,13 @@ app.post('/portal-aluna/solicitar-reposicao', (req, res) => {
 });
 
 app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
-  const { cpf, nome, contato, modalidade, turmaAtual, novaTurma, motivo } = req.body;
+  const { cpf, nome, contato, modalidade, turmaAtual, novaTurma, motivo, sessionToken } = req.body;
   if (!cpf || !modalidade || !novaTurma || !motivo) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios, incluindo o motivo.' });
   }
+  const dadosSessaoAlunaMT = verificarSessao(sessionToken);
+  if (!dadosSessaoAlunaMT) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAlunaMT.cpf !== (cpf || '').replace(/\D/g, '')) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
     const infoTurmaNova = dadosModalidade?.turmas.find(t => t.nome === novaTurma);
@@ -4542,10 +4554,13 @@ app.post('/portal-aluna/solicitar-mudanca-turma', async (req, res) => {
 });
 
 app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
-  const { cpf, nome, contato, modalidade, planoAtual, frequenciaAtual, novoPlano, novaFrequencia } = req.body;
+  const { cpf, nome, contato, modalidade, planoAtual, frequenciaAtual, novoPlano, novaFrequencia, sessionToken } = req.body;
   if (!cpf || !modalidade || !novoPlano || !novaFrequencia) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
+  const dadosSessaoAlunaMP = verificarSessao(sessionToken);
+  if (!dadosSessaoAlunaMP) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAlunaMP.cpf !== (cpf || '').replace(/\D/g, '')) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
     const novoValor = dadosModalidade?.precos?.[novaFrequencia]?.[novoPlano];
@@ -4594,8 +4609,11 @@ app.post('/portal-aluna/solicitar-mudanca-plano', async (req, res) => {
 });
 
 app.post('/portal-aluna/atualizar-cadastro', async (req, res) => {
-  const { cpf, nome, email, contato, endereco } = req.body;
+  const { cpf, nome, email, contato, endereco, sessionToken } = req.body;
   const cpfLimpo = (cpf || '').replace(/\D/g, '');
+  const dadosSessaoAlunaAC = verificarSessao(sessionToken);
+  if (!dadosSessaoAlunaAC) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAlunaAC.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   if (!cpfLimpo || !nome || !email || !contato) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
@@ -4791,6 +4809,9 @@ function formatarDetalhesMulta(calculo) {
 app.get('/portal-aluna/simular-cancelamento/:cpf', async (req, res) => {
   const cpfLimpo = req.params.cpf.replace(/\D/g, '');
   const { modalidade, turma } = req.query;
+  const dadosSessaoAlunaSC = verificarSessao(req.query.sessionToken);
+  if (!dadosSessaoAlunaSC) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAlunaSC.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
     if (matriculas.length === 0) return res.json({ ok: false, erro: 'Cadastro não encontrado ou sem matrícula ativa.' });
@@ -4816,10 +4837,13 @@ app.get('/portal-aluna/simular-cancelamento/:cpf', async (req, res) => {
 });
 
 app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
-  const { cpf, nome, contato, modalidade, turma, motivo } = req.body;
+  const { cpf, nome, contato, modalidade, turma, motivo, sessionToken } = req.body;
   if (!cpf || !modalidade) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
+  const dadosSessaoAlunaSCa = verificarSessao(sessionToken);
+  if (!dadosSessaoAlunaSCa) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAlunaSCa.cpf !== (cpf || '').replace(/\D/g, '')) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   const cpfLimpo = (cpf || '').replace(/\D/g, '');
   try {
     const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
