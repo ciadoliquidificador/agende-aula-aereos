@@ -3164,6 +3164,7 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     const tituloApresentacao = tituloDaProposta || contratanteNomes.join(', ') || 'Apresentação sem local definido';
 
     const dataApresentacao = p['Data']?.date?.start || null;
+    const horarioApresentacaoProposta = p['Horário Apresentação']?.rich_text?.[0]?.plain_text || '';
     const trabalhosIds = (p['🎭 Trabalhos']?.relation || []).map(r => r.id);
     const integrantesIds = (p['Integrantes']?.relation || []).map(r => r.id);
 
@@ -3173,6 +3174,7 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     };
     if (enderecoProp?.place) propsNovaApresentacao['Endereço'] = { place: enderecoProp.place };
     if (dataApresentacao) propsNovaApresentacao['Data da Apresentação'] = { date: { start: dataApresentacao } };
+    if (horarioApresentacaoProposta) propsNovaApresentacao['Horário Apresentação'] = { rich_text: [{ text: { content: horarioApresentacaoProposta } }] };
     if (trabalhosIds.length) propsNovaApresentacao['🎭 Trabalhos'] = { relation: trabalhosIds.map(id => ({ id })) };
     if (integrantesIds.length) propsNovaApresentacao['ELENCO'] = { relation: integrantesIds.map(id => ({ id })) };
 
