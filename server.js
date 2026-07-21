@@ -2187,6 +2187,141 @@ async function buscarProfessorPorNome(nome) {
   return (pagina.properties['Telefone']?.phone_number || '').replace(/\D/g, '');
 }
 
+// ===== PORTAL ADMIN — PAINEL GERAL =====
+const CONTRATOS_PROFESSORES_DB = 'f1b934a8100143019ac7f5f877c405f1';
+
+app.get('/portal-admin/painel-geral', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const hojeISO = hoje.toISOString().slice(0, 10);
+    const em30dias = new Date(hoje.getTime() - 30 * 24 * 60 * 60000).toISOString();
+    const em14dias = new Date(hoje.getTime() + 14 * 24 * 60 * 60000).toISOString().slice(0, 10);
+
+    // ---------- 1. Pendências ----------
+    const [rAprov, rContratos, rSubs] = await Promise.all([
+      fetch('https://api.notion.com/v1/databases/' + APROVACOES_ALUNAS_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: { property: 'Status', select: { equals: 'Pendente' } }, page_size: 100 }),
+      }),
+      fetch('https://api.notion.com/v1/databases/' + CONTRATOS_PROFESSORES_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { or: [
+            { property: 'Status', select: { equals: 'Aguardando Aceite' } },
+            { property: 'Solicitação Pendente', select: { equals: 'Cancelamento' } },
+            { property: 'Solicitação Pendente', select: { equals: 'Mudança' } },
+          ]},
+          page_size: 100,
+        }),
+      }),
+      fetch('https://api.notion.com/v1/databases/' + SUBSTITUICOES_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { or: [
+            { property: 'Status', select: { equals: 'Aguardando Confirmação' } },
+            { property: 'Status', select: { equals: 'Sem Substituto - Fábio Notificado' } },
+          ]},
+          page_size: 100,
+        }),
+      }),
+    ]);
+    const dAprov = await rAprov.json();
+    const dContratos = await rContratos.json();
+    const dSubsPendentes = await rSubs.json();
+
+    const pendencias = {
+      aprovacoesAlunas: (dAprov.results || []).length,
+      contratosProfessores: (dContratos.results || []).length,
+      substituicoes: (dSubsPendentes.results || []).length,
+    };
+    pendencias.total = pendencias.aprovacoesAlunas + pendencias.contratosProfessores + pendencias.substituicoes;
+
+    // ---------- 2. Aulas experimentais (últimos 30 dias) com presença ----------
+    const rExp = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Status', select: { equals: 'Experimental' } },
+          { timestamp: 'created_time', created_time: { on_or_after: em30dias } },
+        ]},
+        page_size: 100,
+        sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+      }),
+    });
+    const dExp = await rExp.json();
+    const experimentaisPaginas = dExp.results || [];
+
+    const rPresencasExp = await fetch('https://api.notion.com/v1/databases/8365a940-b386-401b-bedb-d26dfff2415e/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_size: 100, sorts: [{ timestamp: 'created_time', direction: 'descending' }] }),
+    });
+    const dPresencasExp = await rPresencasExp.json();
+    const presencasTodas = dPresencasExp.results || [];
+
+    const experimentais = experimentaisPaginas.map(pagina => {
+      const p = pagina.properties;
+      const presencaMatch = presencasTodas.find(pp => (pp.properties['Aluna']?.relation || []).some(rel => rel.id === pagina.id));
+      return {
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        modalidade: p['Modalidade']?.select?.name || '',
+        turma: p['Turma']?.select?.name || '',
+        criadoEm: pagina.created_time,
+        presenca: presencaMatch ? (presencaMatch.properties['Status']?.select?.name || 'Aguardando') : 'Aguardando',
+      };
+    });
+
+    // ---------- 3. Substituições nos próximos 14 dias ----------
+    const rSubsProximas = await fetch('https://api.notion.com/v1/databases/' + SUBSTITUICOES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Data da Falta', date: { on_or_after: hojeISO } },
+          { property: 'Data da Falta', date: { on_or_before: em14dias } },
+        ]},
+        page_size: 100,
+        sorts: [{ property: 'Data da Falta', direction: 'ascending' }],
+      }),
+    });
+    const dSubsProximas = await rSubsProximas.json();
+    const substituicoesProximas = (dSubsProximas.results || []).map(pagina => {
+      const p = pagina.properties;
+      return {
+        dataFalta: p['Data da Falta']?.date?.start || '',
+        modalidade: p['Modalidade']?.select?.name || '',
+        turma: p['Turma']?.rich_text?.[0]?.plain_text || '',
+        professorTitular: p['Professor Titular']?.rich_text?.[0]?.plain_text || '',
+        substituto: p['Substituto']?.rich_text?.[0]?.plain_text || '',
+        status: p['Status']?.select?.name || '',
+      };
+    });
+
+    // ---------- 4. Próximos feriados ----------
+    const anoAtual = hoje.getFullYear();
+    const feriadosSet = await getFeriadosDoAno(anoAtual);
+    const feriadosProximoAno = await getFeriadosDoAno(anoAtual + 1);
+    const todosFeriados = [...feriadosSet, ...feriadosProximoAno].sort();
+    const proximosFeriados = todosFeriados.filter(f => f >= hojeISO).slice(0, 5);
+
+    res.json({
+      ok: true,
+      pendencias,
+      experimentais,
+      substituicoesProximas,
+      proximosFeriados,
+    });
+  } catch (err) {
+    console.error('[portal-admin/painel-geral] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao montar o painel geral.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — PAINEL GERAL =====
+
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
 async function buscarAprovacaoPorId(pageId) {
