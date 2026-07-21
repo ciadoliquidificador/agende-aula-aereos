@@ -983,61 +983,6 @@ app.post('/webhook-apresentacao-notion', async (req, res) => {
 });
 
 // ============================================================
-// PROPOSTA APROVADA — gatilho principal (mais confiavel que o de
-// Apresentacoes, que nao dispara quando os campos ja chegam
-// preenchidos via export). Configurar uma automacao no Notion no
-// banco de Propostas: "Quando Status muda para Aprovado - Aguardando
-// contrato" -> Send webhook para esta URL, com o page id da Proposta.
-// ============================================================
-const APRESENTACOES_2026_DB = '2b9c4503-1f73-8082-8d34-f47353b066e7';
-
-async function buscarApresentacaoPorProposta(propostaPageId, tentativas = 8, esperaMs = 4000) {
-  for (let i = 0; i < tentativas; i++) {
-    const r = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_2026_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filter: { property: 'Proposta', relation: { contains: propostaPageId } },
-        page_size: 5,
-      }),
-    });
-    const d = await r.json();
-    const encontrada = (d.results || [])[0];
-    if (encontrada) return encontrada.id;
-
-    console.log('[webhook-proposta-aprovada] apresentacao ainda nao encontrada (tentativa ' + (i + 1) + '/' + tentativas + '), aguardando...');
-    await new Promise(resolve => setTimeout(resolve, esperaMs));
-  }
-  return null;
-}
-
-app.post('/webhook-proposta-aprovada', async (req, res) => {
-  res.status(200).json({ ok: true }); // responde rapido, processa depois
-
-  try {
-    const body = req.body || {};
-    console.log('[webhook-proposta-aprovada] payload recebido:', JSON.stringify(body).slice(0, 500));
-
-    const propostaPageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
-    if (!propostaPageId) {
-      console.error('[webhook-proposta-aprovada] payload sem page id reconhecivel.');
-      return;
-    }
-
-    const apresentacaoPageId = await buscarApresentacaoPorProposta(propostaPageId);
-    if (!apresentacaoPageId) {
-      console.error('[webhook-proposta-aprovada] apresentacao correspondente nao encontrada apos varias tentativas para proposta ' + propostaPageId + '. Rode o backfill manual depois ou verifique a automacao de export.');
-      return;
-    }
-
-    await sincronizarApresentacaoComCalendar(apresentacaoPageId);
-    console.log('[webhook-proposta-aprovada] sincronizado com sucesso via proposta ' + propostaPageId);
-  } catch (err) {
-    console.error('[webhook-proposta-aprovada] erro:', err.message);
-  }
-});
-
-// ============================================================
 // BACKFILL MANUAL (rodar 1x, sem polling continuo) — resolve o
 // passado: apresentacoes que ja chegaram preenchidas e nunca
 // dispararam nenhum gatilho. Chamar via curl/navegador uma vez.
@@ -3207,7 +3152,9 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     });
     const dCheckExistente = await rCheckExistente.json();
     if ((dCheckExistente.results || []).length > 0) {
-      console.log('[webhook-proposta-aprovada] ja tem apresentacao vinculada, ignorando.');
+      const apresentacaoExistenteId = dCheckExistente.results[0].id;
+      console.log('[webhook-proposta-aprovada] ja tem apresentacao vinculada, sincronizando calendario mesmo assim: ' + apresentacaoExistenteId);
+      try { await sincronizarApresentacaoComCalendar(apresentacaoExistenteId); } catch (e) { console.error('[webhook-proposta-aprovada] erro ao sincronizar calendario (apresentacao existente):', e.message); }
       return;
     }
 
@@ -3244,6 +3191,12 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
 
     console.log('[webhook-proposta-aprovada] apresentacao criada: ' + novaApresentacao.id);
+
+    try {
+      await sincronizarApresentacaoComCalendar(novaApresentacao.id);
+    } catch (e) {
+      console.error('[webhook-proposta-aprovada] erro ao sincronizar calendario (apresentacao nova):', e.message);
+    }
   } catch (err) {
     console.error('[webhook-proposta-aprovada] erro:', err.message);
   }
