@@ -2268,6 +2268,7 @@ app.get('/portal-admin/painel-geral', async (req, res) => {
       const presencaMatch = presencasTodas.find(pp => (pp.properties['Aluna']?.relation || []).some(rel => rel.id === pagina.id));
       return {
         nome: p['Nome']?.title?.[0]?.plain_text || '',
+        telefone: p['Contato']?.phone_number || '',
         modalidade: p['Modalidade']?.select?.name || '',
         turma: p['Turma']?.select?.name || '',
         criadoEm: pagina.created_time,
