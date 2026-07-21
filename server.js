@@ -2187,6 +2187,120 @@ async function buscarProfessorPorNome(nome) {
   return (pagina.properties['Telefone']?.phone_number || '').replace(/\D/g, '');
 }
 
+// ===== PORTAL ADMIN — DETALHE DE BUSCA (CARDS) =====
+
+app.get('/portal-admin/busca/detalhe-aluna/:pageId', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + req.params.pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pagina = await r.json();
+    if (!r.ok) return res.status(404).json({ ok: false, erro: 'Aluna não encontrada.' });
+    const p = pagina.properties;
+
+    // Conta faltas nos últimos 30 dias, cruzando com Presenças 2026
+    const trintaDiasAtras = new Date(Date.now() - 30 * 24 * 60 * 60000).toISOString();
+    const rPresencas = await fetch('https://api.notion.com/v1/databases/8365a940-b386-401b-bedb-d26dfff2415e/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Status', select: { equals: 'Falta' } },
+          { timestamp: 'created_time', created_time: { on_or_after: trintaDiasAtras } },
+        ]},
+        page_size: 100,
+      }),
+    });
+    const dPresencas = await rPresencas.json();
+    const faltas30dias = (dPresencas.results || []).filter(pp =>
+      (pp.properties['Aluna']?.relation || []).some(rel => rel.id === pagina.id)
+    ).length;
+
+    res.json({
+      ok: true,
+      card: {
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+        telefone: p['Contato']?.phone_number || '',
+        turma: p['Turma']?.select?.name || '',
+        modalidade: p['Modalidade']?.select?.name || '',
+        plano: p['Plano']?.select?.name || '',
+        frequencia: p['Frequência']?.select?.name || '',
+        vencimentoContrato: p['Vencimento do Contrato']?.date?.start || null,
+        faltas30dias,
+        linkContratoPdf: p['Link do Contrato PDF']?.url || '',
+      },
+    });
+  } catch (err) {
+    console.error('[busca/detalhe-aluna] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar detalhe.' });
+  }
+});
+
+app.get('/portal-admin/busca/detalhe-professor/:pageId', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + req.params.pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pagina = await r.json();
+    if (!r.ok) return res.status(404).json({ ok: false, erro: 'Professor não encontrado.' });
+    const p = pagina.properties;
+    const nome = p['Nome']?.title?.[0]?.plain_text || '';
+
+    // Busca o contrato de docência mais recente desse professor (match por nome)
+    const rContrato = await fetch('https://api.notion.com/v1/databases/' + CONTRATOS_PROFESSORES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'Professor', rich_text: { equals: nome } },
+        sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+        page_size: 1,
+      }),
+    });
+    const dContrato = await rContrato.json();
+    const contrato = (dContrato.results || [])[0];
+    const cp = contrato ? contrato.properties : null;
+
+    // Busca as turmas em Alunas onde esse professor está como titular (matrículas ativas)
+    const rTurmas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Professor', select: { equals: nome } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: 100,
+      }),
+    });
+    const dTurmas = await rTurmas.json();
+    const turmasSet = new Set();
+    (dTurmas.results || []).forEach(pagina2 => {
+      const modalidade = pagina2.properties['Modalidade']?.select?.name || '';
+      const turma = pagina2.properties['Turma']?.select?.name || '';
+      if (turma) turmasSet.add(modalidade + ' — ' + turma);
+    });
+
+    res.json({
+      ok: true,
+      card: {
+        nome,
+        cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+        telefone: p['Telefone']?.phone_number || '',
+        modalidades: (p['Modalidades']?.multi_select || []).map(m => m.name),
+        turmas: [...turmasSet],
+        trilha: cp ? (cp['Trilha']?.select?.name || '') : '',
+        valorHoraAula: p['Valor Hora']?.number ?? (cp ? (cp['Valor Hora/Aula']?.number ?? null) : null),
+        linkContratoPdf: cp ? (cp['Link do Contrato PDF']?.url || '') : '',
+      },
+    });
+  } catch (err) {
+    console.error('[busca/detalhe-professor] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar detalhe.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — DETALHE DE BUSCA (CARDS) =====
+
 // ===== PORTAL ADMIN — PAINEL GERAL =====
 const CONTRATOS_PROFESSORES_DB = 'f1b934a8100143019ac7f5f877c405f1';
 
