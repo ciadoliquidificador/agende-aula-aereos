@@ -2853,7 +2853,7 @@ app.post('/portal/login/verificar', async (req, res) => {
   try {
     const prof = await buscarProfessorPorCpf(cpfLimpo);
     if (!prof) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
-    const dadosLogin = { nome: prof.nome, telefone: prof.telefone, endereco: prof.endereco, email: prof.email };
+    const dadosLogin = { nome: prof.nome, telefone: prof.telefone, endereco: prof.endereco, email: prof.email, cpf: cpfLimpo };
     const sessionToken = criarSessao('prof_' + cpfLimpo, dadosLogin);
     res.json({ ok: true, ...dadosLogin, sessionToken });
   } catch (err) {
@@ -2869,11 +2869,14 @@ app.post('/portal/sessao/verificar', (req, res) => {
 });
 
 app.post('/portal/atualizar-cadastro', async (req, res) => {
-  const { cpf, nome, telefone, endereco, email } = req.body;
+  const { cpf, nome, telefone, endereco, email, sessionToken } = req.body;
   const cpfLimpo = (cpf || '').replace(/\D/g, '');
   if (!cpfLimpo || !nome || !telefone) {
     return res.status(400).json({ ok: false, erro: 'Preencha nome e telefone.' });
   }
+  const dadosSessao = verificarSessao(sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessao.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const prof = await buscarProfessorPorCpf(cpfLimpo);
     if (!prof) return res.status(404).json({ ok: false, erro: 'Cadastro não encontrado.' });
@@ -2911,6 +2914,9 @@ function turmasDoProfessor(nome) {
 
 app.get('/portal/turmas/:nome', async (req, res) => {
   const nome = decodeURIComponent(req.params.nome);
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessao.nome !== nome) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const turmasEncontradas = turmasDoProfessor(nome);
     const resultado = [];
@@ -2939,6 +2945,9 @@ app.get('/portal/turmas/:nome', async (req, res) => {
 
 app.get('/portal/feriados/:nome', async (req, res) => {
   const nome = decodeURIComponent(req.params.nome);
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessao.nome !== nome) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     const diasDoProfessor = new Set(turmasDoProfessor(nome).map(t => t.dia));
     if (diasDoProfessor.size === 0) return res.json({ ok: true, feriados: [] });
@@ -2976,6 +2985,9 @@ const VALOR_AULA_PROFESSOR = {
 
 app.get('/portal/rendimento/:nome', async (req, res) => {
   const nome = decodeURIComponent(req.params.nome);
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessao.nome !== nome) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   const valorAula = VALOR_AULA_PROFESSOR[nome];
   if (!valorAula) return res.json({ ok: true, disponivel: false });
 
@@ -3033,8 +3045,11 @@ app.get('/portal/rendimento/:nome', async (req, res) => {
 });
 
 app.post('/portal/feriado-resposta', async (req, res) => {
-  const { nome, data, decisao } = req.body;
+  const { nome, data, decisao, sessionToken } = req.body;
   if (!nome || !data || !decisao) return res.status(400).json({ ok: false, erro: 'Campos obrigatórios faltando.' });
+  const dadosSessao = verificarSessao(sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessao.nome !== nome) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
     await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
