@@ -859,6 +859,110 @@ function slugify(text) {
 // ============================================================
 const CALENDARIO_APRESENTACOES = '2c8e893b7c567c33ccbcd272b996d7e732a506ec84485e22908e36ffdf1dc999@group.calendar.google.com'; // ex: algumacoisa@group.calendar.google.com
 
+// Funcao reaproveitavel: sincroniza UMA apresentacao (por pageId) com o Google Calendar.
+// Usada pelo webhook de Apresentacoes (edicao manual), pelo webhook de Proposta aprovada
+// (gatilho principal, mais confiavel) e pelo endpoint de backfill (resolver o passado 1x).
+async function sincronizarApresentacaoComCalendar(pageId) {
+  const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+  });
+  const pageData = await rPage.json();
+  const p = pageData.properties || {};
+
+  const dataStr = p['Data da Apresentação']?.date?.start || '';
+  if (!dataStr) {
+    console.log('[sincronizar-apresentacao] pagina sem Data da Apresentacao, ignorando: ' + pageId);
+    return null;
+  }
+  const dataSimples = dataStr.split('T')[0];
+
+  const horarioTexto = p['Horário Apresentação']?.rich_text?.[0]?.plain_text || '';
+  const localTitle = p['LOCAL']?.title?.[0]?.plain_text || '';
+  const localPlace = p['Endereço']?.place || null;
+
+  async function nomeTituloDaPaginaRel(id) {
+    try {
+      const rp = await fetch('https://api.notion.com/v1/pages/' + id, {
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+      });
+      if (!rp.ok) return '';
+      const pd = await rp.json();
+      for (const key in (pd.properties || {})) {
+        if (pd.properties[key].type === 'title') {
+          return (pd.properties[key].title?.[0]?.plain_text || '').trim();
+        }
+      }
+      return '';
+    } catch (e) { return ''; }
+  }
+
+  const trabalhoRel = p['🎭 Trabalhos']?.relation || [];
+  const trabalhoNome = trabalhoRel.length ? await nomeTituloDaPaginaRel(trabalhoRel[0].id) : '';
+
+  function extrairHorarios(texto) {
+    const matches = [...(texto || '').matchAll(/(\d{1,2})h(\d{2})?/g)];
+    if (matches.length === 0) return null;
+    const toHHMM = (m) => (m[1].padStart(2, '0')) + ':' + (m[2] || '00');
+    return { inicio: toHHMM(matches[0]), fim: matches.length > 1 ? toHHMM(matches[1]) : null };
+  }
+  const horarios = extrairHorarios(horarioTexto);
+
+  let eventStart, eventEnd;
+  if (horarios) {
+    const inicioISO = dataSimples + 'T' + horarios.inicio + ':00-03:00';
+    eventStart = { dateTime: inicioISO };
+    if (horarios.fim) {
+      eventEnd = { dateTime: dataSimples + 'T' + horarios.fim + ':00-03:00' };
+    } else {
+      const fimDate = new Date(new Date(inicioISO).getTime() + 2 * 60 * 60000);
+      eventEnd = { dateTime: fimDate.toISOString() };
+    }
+  } else {
+    eventStart = { date: dataSimples };
+    const proximoDia = new Date(dataSimples + 'T00:00:00Z');
+    proximoDia.setUTCDate(proximoDia.getUTCDate() + 1);
+    eventEnd = { date: proximoDia.toISOString().split('T')[0] };
+  }
+
+  const nomeLocal = localPlace?.name || localTitle || 'Local a definir';
+  const enderecoLocal = localPlace?.address || '';
+  const summary = (trabalhoNome || 'Apresentação') + ' — ' + nomeLocal;
+  const description = 'Local: ' + nomeLocal + (enderecoLocal ? ' (' + enderecoLocal + ')' : '') +
+    (horarioTexto ? ('\nHorário: ' + horarioTexto) : '') +
+    '\nGerado automaticamente a partir do Notion.';
+
+  const calendar = await getGoogleCalendarClient();
+  const eventoExistenteId = p['Google Event ID']?.rich_text?.[0]?.plain_text || '';
+  const requestBody = { summary, description, start: eventStart, end: eventEnd };
+  if (enderecoLocal) requestBody.location = enderecoLocal;
+
+  let googleEventId = eventoExistenteId;
+  if (eventoExistenteId) {
+    try {
+      await calendar.events.update({ calendarId: CALENDARIO_APRESENTACOES, eventId: eventoExistenteId, requestBody });
+      console.log('[sincronizar-apresentacao] evento atualizado: ' + eventoExistenteId);
+    } catch (e) {
+      console.error('[sincronizar-apresentacao] erro ao atualizar, criando novo:', e.message);
+      const resp = await calendar.events.insert({ calendarId: CALENDARIO_APRESENTACOES, requestBody });
+      googleEventId = resp.data.id;
+    }
+  } else {
+    const resp = await calendar.events.insert({ calendarId: CALENDARIO_APRESENTACOES, requestBody });
+    googleEventId = resp.data.id;
+  }
+
+  if (googleEventId !== eventoExistenteId) {
+    await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { 'Google Event ID': { rich_text: [{ text: { content: googleEventId } }] } } }),
+    });
+  }
+
+  console.log('[sincronizar-apresentacao] concluido, evento: ' + googleEventId + ' (pagina ' + pageId + ')');
+  return googleEventId;
+}
+
 app.post('/webhook-apresentacao-notion', async (req, res) => {
   res.status(200).json({ ok: true }); // responde rapido, processa depois
 
@@ -872,105 +976,100 @@ app.post('/webhook-apresentacao-notion', async (req, res) => {
       return;
     }
 
-    const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
-    });
-    const pageData = await rPage.json();
-    const p = pageData.properties || {};
-
-    const dataStr = p['Data da Apresentação']?.date?.start || '';
-    if (!dataStr) {
-      console.log('[webhook-apresentacao-notion] pagina sem Data da Apresentacao, ignorando.');
-      return;
-    }
-    const dataSimples = dataStr.split('T')[0];
-
-    const horarioTexto = p['Horário Apresentação']?.rich_text?.[0]?.plain_text || '';
-    const localTitle = p['LOCAL']?.title?.[0]?.plain_text || '';
-    const localPlace = p['Local']?.place || null;
-
-    async function nomeTituloDaPaginaRel(id) {
-      try {
-        const rp = await fetch('https://api.notion.com/v1/pages/' + id, {
-          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
-        });
-        if (!rp.ok) return '';
-        const pd = await rp.json();
-        for (const key in (pd.properties || {})) {
-          if (pd.properties[key].type === 'title') {
-            return (pd.properties[key].title?.[0]?.plain_text || '').trim();
-          }
-        }
-        return '';
-      } catch (e) { return ''; }
-    }
-
-    const trabalhoRel = p['🎭 Trabalhos']?.relation || [];
-    const trabalhoNome = trabalhoRel.length ? await nomeTituloDaPaginaRel(trabalhoRel[0].id) : '';
-
-    function extrairHorarios(texto) {
-      const matches = [...(texto || '').matchAll(/(\d{1,2})h(\d{2})?/g)];
-      if (matches.length === 0) return null;
-      const toHHMM = (m) => (m[1].padStart(2, '0')) + ':' + (m[2] || '00');
-      return { inicio: toHHMM(matches[0]), fim: matches.length > 1 ? toHHMM(matches[1]) : null };
-    }
-    const horarios = extrairHorarios(horarioTexto);
-
-    let eventStart, eventEnd;
-    if (horarios) {
-      const inicioISO = dataSimples + 'T' + horarios.inicio + ':00-03:00';
-      eventStart = { dateTime: inicioISO };
-      if (horarios.fim) {
-        eventEnd = { dateTime: dataSimples + 'T' + horarios.fim + ':00-03:00' };
-      } else {
-        const fimDate = new Date(new Date(inicioISO).getTime() + 2 * 60 * 60000);
-        eventEnd = { dateTime: fimDate.toISOString() };
-      }
-    } else {
-      eventStart = { date: dataSimples };
-      const proximoDia = new Date(dataSimples + 'T00:00:00Z');
-      proximoDia.setUTCDate(proximoDia.getUTCDate() + 1);
-      eventEnd = { date: proximoDia.toISOString().split('T')[0] };
-    }
-
-    const nomeLocal = localPlace?.name || localTitle || 'Local a definir';
-    const enderecoLocal = localPlace?.address || '';
-    const summary = (trabalhoNome || 'Apresentação') + ' — ' + nomeLocal;
-    const description = 'Local: ' + nomeLocal + (enderecoLocal ? ' (' + enderecoLocal + ')' : '') +
-      (horarioTexto ? ('\nHorário: ' + horarioTexto) : '') +
-      '\nGerado automaticamente a partir do Notion.';
-
-    const calendar = await getGoogleCalendarClient();
-    const eventoExistenteId = p['Google Event ID']?.rich_text?.[0]?.plain_text || '';
-    const requestBody = { summary, description, start: eventStart, end: eventEnd };
-    if (enderecoLocal) requestBody.location = enderecoLocal;
-
-    let googleEventId = eventoExistenteId;
-    if (eventoExistenteId) {
-      try {
-        await calendar.events.update({ calendarId: CALENDARIO_APRESENTACOES, eventId: eventoExistenteId, requestBody });
-        console.log('[webhook-apresentacao-notion] evento atualizado: ' + eventoExistenteId);
-      } catch (e) {
-        console.error('[webhook-apresentacao-notion] erro ao atualizar, criando novo:', e.message);
-        const resp = await calendar.events.insert({ calendarId: CALENDARIO_APRESENTACOES, requestBody });
-        googleEventId = resp.data.id;
-      }
-    } else {
-      const resp = await calendar.events.insert({ calendarId: CALENDARIO_APRESENTACOES, requestBody });
-      googleEventId = resp.data.id;
-    }
-
-    if (googleEventId !== eventoExistenteId) {
-      await fetch('https://api.notion.com/v1/pages/' + pageId, {
-        method: 'PATCH',
-        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ properties: { 'Google Event ID': { rich_text: [{ text: { content: googleEventId } }] } } }),
-      });
-    }
-
-    console.log('[webhook-apresentacao-notion] concluido, evento: ' + googleEventId);
+    await sincronizarApresentacaoComCalendar(pageId);
   } catch (err) {
     console.error('[webhook-apresentacao-notion] erro:', err.message);
+  }
+});
+
+// ============================================================
+// PROPOSTA APROVADA — gatilho principal (mais confiavel que o de
+// Apresentacoes, que nao dispara quando os campos ja chegam
+// preenchidos via export). Configurar uma automacao no Notion no
+// banco de Propostas: "Quando Status muda para Aprovado - Aguardando
+// contrato" -> Send webhook para esta URL, com o page id da Proposta.
+// ============================================================
+const APRESENTACOES_2026_DB = '2b9c4503-1f73-8082-8d34-f47353b066e7';
+
+async function buscarApresentacaoPorProposta(propostaPageId, tentativas = 8, esperaMs = 4000) {
+  for (let i = 0; i < tentativas; i++) {
+    const r = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_2026_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'Proposta', relation: { contains: propostaPageId } },
+        page_size: 5,
+      }),
+    });
+    const d = await r.json();
+    const encontrada = (d.results || [])[0];
+    if (encontrada) return encontrada.id;
+
+    console.log('[webhook-proposta-aprovada] apresentacao ainda nao encontrada (tentativa ' + (i + 1) + '/' + tentativas + '), aguardando...');
+    await new Promise(resolve => setTimeout(resolve, esperaMs));
+  }
+  return null;
+}
+
+app.post('/webhook-proposta-aprovada', async (req, res) => {
+  res.status(200).json({ ok: true }); // responde rapido, processa depois
+
+  try {
+    const body = req.body || {};
+    console.log('[webhook-proposta-aprovada] payload recebido:', JSON.stringify(body).slice(0, 500));
+
+    const propostaPageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
+    if (!propostaPageId) {
+      console.error('[webhook-proposta-aprovada] payload sem page id reconhecivel.');
+      return;
+    }
+
+    const apresentacaoPageId = await buscarApresentacaoPorProposta(propostaPageId);
+    if (!apresentacaoPageId) {
+      console.error('[webhook-proposta-aprovada] apresentacao correspondente nao encontrada apos varias tentativas para proposta ' + propostaPageId + '. Rode o backfill manual depois ou verifique a automacao de export.');
+      return;
+    }
+
+    await sincronizarApresentacaoComCalendar(apresentacaoPageId);
+    console.log('[webhook-proposta-aprovada] sincronizado com sucesso via proposta ' + propostaPageId);
+  } catch (err) {
+    console.error('[webhook-proposta-aprovada] erro:', err.message);
+  }
+});
+
+// ============================================================
+// BACKFILL MANUAL (rodar 1x, sem polling continuo) — resolve o
+// passado: apresentacoes que ja chegaram preenchidas e nunca
+// dispararam nenhum gatilho. Chamar via curl/navegador uma vez.
+// ============================================================
+app.get('/admin/sincronizar-apresentacoes-pendentes', async (req, res) => {
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_2026_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Data da Apresentação', date: { is_not_empty: true } },
+          { property: 'Google Event ID', rich_text: { is_empty: true } },
+        ]},
+        page_size: 50,
+      }),
+    });
+    const d = await r.json();
+    const pendentes = d.results || [];
+    const resultado = [];
+    for (const pagina of pendentes) {
+      try {
+        const eventId = await sincronizarApresentacaoComCalendar(pagina.id);
+        resultado.push({ pageId: pagina.id, ok: true, eventId });
+      } catch (e) {
+        resultado.push({ pageId: pagina.id, ok: false, erro: e.message });
+      }
+    }
+    res.json({ ok: true, totalProcessadas: pendentes.length, resultado });
+  } catch (err) {
+    console.error('[sincronizar-apresentacoes-pendentes] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
   }
 });
 
