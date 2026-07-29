@@ -2665,13 +2665,19 @@ app.post('/avaliacao-luz/enviar', async (req, res) => {
 const INTEGRANTES_DB_ARTISTA = 'e1047585-3dd2-4bda-9896-1a4caeeea284';
 
 async function buscarIntegrantePorCpfArtista(cpfLimpo) {
+  // O CPF em Integrantes pode estar salvo com ou sem pontuação (ex: 215.290.748-51),
+  // então buscamos todos e comparamos só os números dos dois lados, em vez de
+  // confiar num filtro exato do Notion que falharia com formatação diferente.
   const r = await fetch('https://api.notion.com/v1/databases/' + INTEGRANTES_DB_ARTISTA + '/query', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 1 }),
+    body: JSON.stringify({ page_size: 100 }),
   });
   const d = await r.json();
-  const pagina = (d.results || [])[0];
+  const pagina = (d.results || []).find(pag => {
+    const cpfArmazenado = (pag.properties['CPF']?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
+    return cpfArmazenado === cpfLimpo;
+  });
   if (!pagina) return null;
   const p = pagina.properties;
   return {
