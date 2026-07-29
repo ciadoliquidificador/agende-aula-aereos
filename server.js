@@ -673,6 +673,37 @@ app.post('/inscricao-percussao', async (req, res) => {
       }}),
     });
     if (!response.ok) { const t = await response.text(); throw new Error(`Notion ${response.status}: ${t}`); }
+
+    // Grava também no banco Alunas principal, pra Ocupação de Turmas (Portal Admin)
+    // e outras rotinas do sistema conseguirem enxergar essa matrícula normalmente.
+    try {
+      const valorEscolhido = (formaPagamento || '').includes('900') ? 900 : 1100;
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: ALUNAS_DB },
+          properties: {
+            'Nome': { title: [{ text: { content: nomeCompleto } }] },
+            'CPF': { rich_text: [{ text: { content: cpf } }] },
+            'Contato': { phone_number: telefone },
+            'Email': { email: email || null },
+            'Modalidade': { select: { name: 'Percussão Coletiva' } },
+            'Turma': { select: { name: 'Terça 19h30' } },
+            'Dia': { select: { name: 'Terça' } },
+            'Horário': { select: { name: '19:30' } },
+            'Professor': { select: { name: 'Lua Oliveira' } },
+            'Plano': { select: { name: 'Semestral' } },
+            'Frequência': { select: { name: '1x semana' } },
+            'Valor': { number: valorEscolhido },
+            'Status': { select: { name: 'Ativa' } },
+          },
+        }),
+      });
+    } catch (eAlunas) {
+      console.error('[inscricao-percussao] erro ao gravar em Alunas (dual-write):', eAlunas.message);
+    }
+
     return res.json({ ok: true });
   } catch (err) { return res.json({ ok: false, erro: err.message }); }
 });
