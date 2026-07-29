@@ -4932,11 +4932,20 @@ app.post('/portal-admin/sessao/verificar', (req, res) => {
 
 
 
+// Turmas que não usam o fluxo genérico de matrícula (MODALIDADES_MATRICULA),
+// mas ainda assim gravam no banco Alunas (dual-write) e podem receber avisos do Mural.
+const TURMAS_MURAL_EXTRAS = [
+  { modalidade: 'Percussão Coletiva', turma: 'Terça 19h30', dia: 'Terça', horario: '19:30' },
+  { modalidade: 'Dancas Brasileiras', turma: 'Quarta 20h', dia: 'Quarta', horario: '20:00' },
+  { modalidade: 'Commedia Dell Arte', turma: 'Sexta 10h', dia: 'Sexta', horario: '10:00' },
+];
+
 app.get('/mural/turmas-disponiveis', (req, res) => {
   const turmas = [];
   for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
     dados.turmas.forEach(t => turmas.push({ modalidade, turma: t.nome, dia: t.dia, horario: t.horario }));
   }
+  turmas.push(...TURMAS_MURAL_EXTRAS);
   res.json({ ok: true, turmas });
 });
 
