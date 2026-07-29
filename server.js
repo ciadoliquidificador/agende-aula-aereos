@@ -2911,6 +2911,157 @@ app.post('/portal-artista/atualizar-dados', async (req, res) => {
   }
 });
 // ===== FIM PORTAL ARTISTAS =====
+// ===== PORTAL ARTISTAS — EXTRAS =====
+
+// 1. Contrato de docência (se o artista também for professor cadastrado)
+app.get('/portal-artista/contrato-professor', async (req, res) => {
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+
+  try {
+    const rProf = await fetch('https://api.notion.com/v1/databases/' + PROFESSORES_CADASTRO_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: dadosSessao.cpf } }, page_size: 1 }),
+    });
+    const dProf = await rProf.json();
+    const profPagina = (dProf.results || [])[0];
+    if (!profPagina) return res.json({ ok: true, ehProfessor: false });
+
+    const nomeProf = profPagina.properties['Nome']?.title?.[0]?.plain_text || '';
+
+    const rContrato = await fetch('https://api.notion.com/v1/databases/' + CONTRATOS_PROFESSORES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'Professor', rich_text: { equals: nomeProf } },
+        sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+        page_size: 1,
+      }),
+    });
+    const dContrato = await rContrato.json();
+    const contratoPagina = (dContrato.results || [])[0];
+    if (!contratoPagina) return res.json({ ok: true, ehProfessor: true, contrato: null });
+
+    const cp = contratoPagina.properties;
+    res.json({
+      ok: true,
+      ehProfessor: true,
+      contrato: {
+        trilha: cp['Trilha']?.select?.name || '',
+        status: cp['Status']?.select?.name || '',
+        linkContratoPdf: cp['Link do Contrato PDF']?.url || '',
+      },
+    });
+  } catch (err) {
+    console.error('[portal-artista/contrato-professor] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar contrato.' });
+  }
+});
+
+// 2. Meu Acervo — itens físicos (figurinos/props/equipamentos) vinculados ao artista
+const ACERVO_DB = '2b537f87-513e-45a9-b09e-28b3ff410858';
+
+app.get('/portal-artista/meu-acervo', async (req, res) => {
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ACERVO_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'Integrantes', relation: { contains: dadosSessao.integrantePageId } },
+        page_size: 100,
+      }),
+    });
+    const d = await r.json();
+    const itens = (d.results || []).map(pagina => {
+      const p = pagina.properties;
+      return {
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        tipo: (p['Tipo']?.multi_select || []).map(o => o.name),
+        status: p['STATUS']?.status?.name || '',
+        medidas: p['Medidas']?.rich_text?.[0]?.plain_text || '',
+        numeracao: p['Numeração']?.rich_text?.[0]?.plain_text || '',
+        validade: p['Validade']?.rich_text?.[0]?.plain_text || '',
+      };
+    });
+    res.json({ ok: true, itens });
+  } catch (err) {
+    console.error('[portal-artista/meu-acervo] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar acervo.' });
+  }
+});
+
+// 3. Notificação automática de pagamento (webhook disparado quando Cachê vira PAGO)
+app.post('/webhook-cache-pago', async (req, res) => {
+  res.status(200).json({ ok: true });
+
+  try {
+    const body = req.body || {};
+    const propostaPageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
+    if (!propostaPageId) { console.error('[webhook-cache-pago] sem page id.'); return; }
+
+    const rProposta = await fetch('https://api.notion.com/v1/pages/' + propostaPageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const proposta = await rProposta.json();
+    const pp = proposta.properties;
+
+    const statusCache = pp['Cachê']?.select?.name;
+    const jaNotificado = pp['Cache Notificado']?.checkbox || false;
+    if (statusCache !== 'PAGO' || jaNotificado) {
+      console.log('[webhook-cache-pago] ignorando (status=' + statusCache + ', jaNotificado=' + jaNotificado + ')');
+      return;
+    }
+
+    // Acha as apresentações vinculadas a essa proposta, pra saber o elenco
+    const rApres = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_2026_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Proposta', relation: { contains: propostaPageId } }, page_size: 20 }),
+    });
+    const dApres = await rApres.json();
+    const localNome = (dApres.results || [])[0]?.properties?.['LOCAL']?.title?.[0]?.plain_text || 'sua apresentação';
+
+    const elencoIds = new Set();
+    (dApres.results || []).forEach(pagina => {
+      (pagina.properties['ELENCO']?.relation || []).forEach(rel => elencoIds.add(rel.id));
+      (pagina.properties['Produção Liqui']?.relation || []).forEach(rel => elencoIds.add(rel.id));
+      (pagina.properties['TÉCNICO DE SOM']?.relation || []).forEach(rel => elencoIds.add(rel.id));
+      (pagina.properties['TÉCNICO DE LUZ']?.relation || []).forEach(rel => elencoIds.add(rel.id));
+    });
+
+    const msg = '💰 Boa notícia! Seu cachê da apresentação em *' + localNome + '* foi *pago*! ' +
+      'Confere o valor certinho no Portal Equipe. Qualquer dúvida, é só chamar. 🎭';
+
+    for (const integranteId of elencoIds) {
+      try {
+        const rInt = await fetch('https://api.notion.com/v1/pages/' + integranteId, {
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+        });
+        const integrante = await rInt.json();
+        const telefone = (integrante.properties['Telefone']?.phone_number || '').replace(/\D/g, '');
+        if (telefone) await enviarWhatsAppComHorarioComercial('55' + telefone, msg);
+      } catch (e) {
+        console.error('[webhook-cache-pago] erro ao notificar integrante ' + integranteId + ':', e.message);
+      }
+    }
+
+    await fetch('https://api.notion.com/v1/pages/' + propostaPageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { 'Cache Notificado': { checkbox: true } } }),
+    });
+
+    console.log('[webhook-cache-pago] notificados ' + elencoIds.size + ' integrante(s) sobre pagamento.');
+  } catch (err) {
+    console.error('[webhook-cache-pago] erro:', err.message);
+  }
+});
+// ===== FIM PORTAL ARTISTAS — EXTRAS =====
+
 
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
