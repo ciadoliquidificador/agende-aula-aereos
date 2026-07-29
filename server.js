@@ -5152,13 +5152,14 @@ async function nomeTituloDaPaginaRelatorio(pageId) {
 }
 
 app.post('/relatorio-apresentacao', async (req, res) => {
-  const { notionPageId, local, localNome, horario, data, produtor, publico, intercorrencia, fotos } = req.body;
+  const { notionPageId, local, localNome, horario, data, produtor, publico, intercorrencia, fotos, valorAlimentacaoTotal, detalheAlimentacao, notasFiscais } = req.body;
   if (!notionPageId || !produtor || publico === undefined) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
   try {
     const msToken = await getMicrosoftToken();
     const localSlug = slugify(localNome || local);
     const produtorSlug = slugify(produtor);
     const fotosValidas = (fotos || []).filter(Boolean);
+    const notasFiscaisValidas = (notasFiscais || []).filter(Boolean);
 
     const nomePasta = `${data}_${localSlug}_${produtorSlug}`;
     const subpastaId = await criarOuObterSubpasta(msToken, nomePasta);
@@ -5181,6 +5182,13 @@ app.post('/relatorio-apresentacao', async (req, res) => {
     });
     await Promise.all(uploadPromises);
 
+    // Notas fiscais vão pra mesma subpasta, com nome de arquivo distinto
+    const uploadNotasFiscaisPromises = notasFiscaisValidas.map((nf, i) => {
+      const filename = `${data}_${trabalhoSlug}_${localSlug}_${produtorSlug}_nota-fiscal-${i + 1}.jpg`;
+      return uploadFotoParaPasta(msToken, subpastaId, nf, filename);
+    });
+    await Promise.all(uploadNotasFiscaisPromises);
+
     const linkPasta = await criarLinkCompartilhamento(msToken, subpastaId);
     const links = [linkPasta];
     const notionResp = await fetch(`https://api.notion.com/v1/pages/${notionPageId}`, {
@@ -5190,6 +5198,9 @@ app.post('/relatorio-apresentacao', async (req, res) => {
         'Público': { number: parseInt(publico) },
         'Intercorrência': { rich_text: [{ text: { content: intercorrencia || 'Nenhuma' } }] },
         'Fotos Drive': { url: links[0] || null },
+        'Valor Alimentacao': { number: valorAlimentacaoTotal !== undefined && valorAlimentacaoTotal !== null ? Number(valorAlimentacaoTotal) : null },
+        'Detalhe Alimentacao': { rich_text: detalheAlimentacao ? [{ text: { content: detalheAlimentacao } }] : [] },
+        'Notas Fiscais Drive': { url: notasFiscaisValidas.length ? links[0] : null },
       }}),
     });
     if (!notionResp.ok) { const err = await notionResp.json(); return res.status(500).json({ error: 'Erro Notion', detail: err }); }
