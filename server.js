@@ -73,6 +73,34 @@ async function criarOuObterSubpasta(token, nomePasta) {
   throw new Error('Criar subpasta: ' + t);
 }
 
+async function criarSubpastaDentroDe(token, parentFolderId, nomePasta) {
+  const nomeSeguro = nomePasta.replace(/[<>:"/\\|?*]/g, '-').slice(0, 100);
+
+  const createUrl = 'https://graph.microsoft.com/v1.0/users/' + MS_USER + '/drive/items/' + parentFolderId + '/children';
+  const createResp = await fetch(createUrl, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: nomeSeguro, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
+  });
+
+  if (createResp.ok) {
+    const data = await createResp.json();
+    return data.id;
+  }
+
+  if (createResp.status === 409) {
+    const getUrl = 'https://graph.microsoft.com/v1.0/users/' + MS_USER + '/drive/items/' + parentFolderId + ':/' + encodeURIComponent(nomeSeguro);
+    const getResp = await fetch(getUrl, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (getResp.ok) {
+      const data = await getResp.json();
+      return data.id;
+    }
+  }
+
+  const t = await createResp.text();
+  throw new Error('Criar subpasta dentro de: ' + t);
+}
+
 async function uploadFotoParaPasta(token, folderId, base64Data, filename) {
   const base64Clean = base64Data.replace(/^data:image\/\w+;base64,/, '');
   const buffer = Buffer.from(base64Clean, 'base64');
@@ -5161,9 +5189,6 @@ app.post('/relatorio-apresentacao', async (req, res) => {
     const fotosValidas = (fotos || []).filter(Boolean);
     const notasFiscaisValidas = (notasFiscais || []).filter(Boolean);
 
-    const nomePasta = `${data}_${localSlug}_${produtorSlug}`;
-    const subpastaId = await criarOuObterSubpasta(msToken, nomePasta);
-
     let trabalhoNome = '';
     try {
       const rPagina = await fetch('https://api.notion.com/v1/pages/' + notionPageId, {
@@ -5175,21 +5200,36 @@ app.post('/relatorio-apresentacao', async (req, res) => {
     } catch (e) { console.error('[produtor] erro ao buscar nome do trabalho:', e.message); }
     const trabalhoSlug = slugify(trabalhoNome || 'apresentacao');
 
+    // Formata a data de YYYY-MM-DD para DD_MM_AA
+    let dataFormatada = data;
+    try {
+      const [ano, mes, dia] = (data || '').split('-');
+      if (ano && mes && dia) dataFormatada = `${dia}_${mes}_${ano.slice(2)}`;
+    } catch (e) {}
+
+    // Pasta principal: "Nome do Trabalho - DD_MM_AA"
+    const nomePastaPrincipal = `${trabalhoNome || 'Apresentação'} - ${dataFormatada}`;
+    const pastaPrincipalId = await criarOuObterSubpasta(msToken, nomePastaPrincipal);
+
+    // Subpastas dentro da principal: "fotos" e "notas fiscais"
+    const pastaFotosId = await criarSubpastaDentroDe(msToken, pastaPrincipalId, 'fotos');
+    const pastaNotasFiscaisId = await criarSubpastaDentroDe(msToken, pastaPrincipalId, 'notas fiscais');
+
     const labelsFotos = ['inicio', 'meio', 'fim', 'publico'];
     const uploadPromises = fotosValidas.map((foto, i) => {
       const filename = `${data}_${trabalhoSlug}_${localSlug}_${produtorSlug}_${labelsFotos[i] || 'foto' + (i+1)}.jpg`;
-      return uploadFotoParaPasta(msToken, subpastaId, foto, filename);
+      return uploadFotoParaPasta(msToken, pastaFotosId, foto, filename);
     });
     await Promise.all(uploadPromises);
 
-    // Notas fiscais vão pra mesma subpasta, com nome de arquivo distinto
     const uploadNotasFiscaisPromises = notasFiscaisValidas.map((nf, i) => {
       const filename = `${data}_${trabalhoSlug}_${localSlug}_${produtorSlug}_nota-fiscal-${i + 1}.jpg`;
-      return uploadFotoParaPasta(msToken, subpastaId, nf, filename);
+      return uploadFotoParaPasta(msToken, pastaNotasFiscaisId, nf, filename);
     });
     await Promise.all(uploadNotasFiscaisPromises);
 
-    const linkPasta = await criarLinkCompartilhamento(msToken, subpastaId);
+    // Link compartilhado aponta pra pasta PRINCIPAL (contém fotos/ e notas fiscais/ dentro)
+    const linkPasta = await criarLinkCompartilhamento(msToken, pastaPrincipalId);
     const links = [linkPasta];
     const notionResp = await fetch(`https://api.notion.com/v1/pages/${notionPageId}`, {
       method: 'PATCH',
