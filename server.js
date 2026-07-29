@@ -760,6 +760,36 @@ app.post('/inscricao-commedia', async (req, res) => {
       }}),
     });
     if (!notionResp.ok) { const err = await notionResp.json(); console.error('[commedia]', err); return res.status(500).json({ error: 'Erro Notion' }); }
+
+    // Dual-write no banco Alunas principal, pra Ocupação de Turmas enxergar essa matrícula.
+    try {
+      const valorEscolhidoCommedia = (formaPagamento || '').includes('Pix') ? 290 : 330;
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: ALUNAS_DB },
+          properties: {
+            'Nome': { title: [{ text: { content: nomeCompleto } }] },
+            'CPF': { rich_text: [{ text: { content: cpf } }] },
+            'Contato': { phone_number: telefone },
+            'Email': { email: email || null },
+            'Modalidade': { select: { name: 'Commedia Dell Arte' } },
+            'Turma': { select: { name: 'Sexta 10h' } },
+            'Dia': { select: { name: 'Sexta' } },
+            'Horário': { select: { name: '10:00' } },
+            'Professor': { select: { name: 'Diego Domingues' } },
+            'Plano': { select: { name: 'Workshop' } },
+            'Frequência': { select: { name: '1x semana' } },
+            'Valor': { number: valorEscolhidoCommedia },
+            'Status': { select: { name: 'Ativa' } },
+          },
+        }),
+      });
+    } catch (eAlunasCommedia) {
+      console.error('[inscricao-commedia] erro ao gravar em Alunas (dual-write):', eAlunasCommedia.message);
+    }
+
     const primeiroNome = nomeCompleto.split(' ')[0];
     const isPix = formaPagamento.includes('Pix');
     const msgAdmin = `🎭 *Nova inscrição — Commedia Dell'Arte*\n\n👤 ${nomeCompleto}\n📱 ${telefone}\n📧 ${email}\n💳 ${formaPagamento}`;
@@ -864,6 +894,36 @@ app.post('/inscricao-dancas', async (req, res) => {
       }}),
     });
     if (!notionResp.ok) { const err = await notionResp.json(); console.error('[dancas]', err); return res.status(500).json({ error: 'Erro Notion' }); }
+
+    // Dual-write no banco Alunas principal, pra Ocupação de Turmas enxergar essa matrícula.
+    try {
+      const valorEscolhidoDancas = (formaPagamento || '').includes('Pix') ? 900 : 1100;
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: ALUNAS_DB },
+          properties: {
+            'Nome': { title: [{ text: { content: nomeCompleto } }] },
+            'CPF': { rich_text: [{ text: { content: cpfLimpo } }] },
+            'Contato': { phone_number: telefone },
+            'Email': { email: email || null },
+            'Modalidade': { select: { name: 'Dancas Brasileiras' } },
+            'Turma': { select: { name: 'Quarta 20h' } },
+            'Dia': { select: { name: 'Quarta' } },
+            'Horário': { select: { name: '20:00' } },
+            'Professor': { select: { name: 'Roberta Viana' } },
+            'Plano': { select: { name: 'Semestral' } },
+            'Frequência': { select: { name: '1x semana' } },
+            'Valor': { number: valorEscolhidoDancas },
+            'Status': { select: { name: 'Ativa' } },
+          },
+        }),
+      });
+    } catch (eAlunasDancas) {
+      console.error('[inscricao-dancas] erro ao gravar em Alunas (dual-write):', eAlunasDancas.message);
+    }
+
     const primeiroNome = nomeCompleto.split(' ')[0];
     const isPix = formaPagamento.includes('Pix');
     const msgAdmin = `💃 *Nova inscrição — Danças Brasileiras*\n\n👤 ${nomeCompleto}\n📱 ${telefone}\n📧 ${email}\n💳 ${formaPagamento}`;
