@@ -2739,11 +2739,17 @@ app.get('/portal-artista/apresentacoes', async (req, res) => {
   }
 
   try {
+    const idPessoa = dadosSessao.integrantePageId;
     const rApres = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_2026_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        filter: { property: 'ELENCO', relation: { contains: dadosSessao.integrantePageId } },
+        filter: { or: [
+          { property: 'ELENCO', relation: { contains: idPessoa } },
+          { property: 'Produção Liqui', relation: { contains: idPessoa } },
+          { property: 'TÉCNICO DE SOM', relation: { contains: idPessoa } },
+          { property: 'TÉCNICO DE LUZ', relation: { contains: idPessoa } },
+        ]},
         page_size: 100,
         sorts: [{ property: 'Data da Apresentação', direction: 'descending' }],
       }),
@@ -2763,7 +2769,17 @@ app.get('/portal-artista/apresentacoes', async (req, res) => {
       const fotosDrive = p['Fotos Drive']?.url || '';
       const propostaRel = p['Proposta']?.relation || [];
 
-      let cacheElenco = null;
+      // Determina o papel dessa pessoa NESSA apresentação específica
+      const noElenco = (p['ELENCO']?.relation || []).some(r => r.id === idPessoa);
+      const naProducao = (p['Produção Liqui']?.relation || []).some(r => r.id === idPessoa);
+      const tecnicoSom = (p['TÉCNICO DE SOM']?.relation || []).some(r => r.id === idPessoa);
+      const tecnicoLuz = (p['TÉCNICO DE LUZ']?.relation || []).some(r => r.id === idPessoa);
+      let papel = 'Elenco';
+      if (noElenco) papel = 'Elenco';
+      else if (tecnicoSom || tecnicoLuz) papel = 'Técnico';
+      else if (naProducao) papel = 'Produção';
+
+      let cacheValor = null;
       let emissaoNf = null;
       let contratantes = [];
       let statusCache = '';
@@ -2775,7 +2791,9 @@ app.get('/portal-artista/apresentacoes', async (req, res) => {
           });
           const propostaData = await rProposta.json();
           const pp = propostaData.properties || {};
-          cacheElenco = pp['Cachê Elenco']?.number ?? null;
+          if (papel === 'Elenco') cacheValor = pp['Cachê Elenco']?.number ?? null;
+          else if (papel === 'Produção') cacheValor = pp['Cachê Produção']?.number ?? null;
+          else if (papel === 'Técnico') cacheValor = pp['Cachê Técnicos']?.number ?? null;
           emissaoNf = pp['Emissão da Nota Fiscal']?.date?.start || null;
           contratantes = (pp['Contratante']?.multi_select || []).map(o => o.name);
           statusCache = pp['Cachê']?.select?.name || '';
@@ -2791,7 +2809,8 @@ app.get('/portal-artista/apresentacoes', async (req, res) => {
         data: dataApresentacao,
         horario,
         fotosDrive,
-        cacheElenco,
+        papel,
+        cacheElenco: cacheValor,
         statusCache: statusCache || 'Não informado',
         emissaoNf,
         contratantes,
@@ -2960,8 +2979,6 @@ app.get('/portal-artista/contrato-professor', async (req, res) => {
 });
 
 // 2. Meu Acervo — itens físicos (figurinos/props/equipamentos) vinculados ao artista
-const ACERVO_DB = '2b537f87-513e-45a9-b09e-28b3ff410858';
-
 app.get('/portal-artista/meu-acervo', async (req, res) => {
   const dadosSessao = verificarSessao(req.query.sessionToken);
   if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
@@ -3061,6 +3078,10 @@ app.post('/webhook-cache-pago', async (req, res) => {
   }
 });
 // ===== FIM PORTAL ARTISTAS — EXTRAS =====
+
+
+
+
 
 
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
