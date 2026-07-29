@@ -2481,6 +2481,63 @@ app.get('/portal-admin/painel-geral', async (req, res) => {
 });
 // ===== FIM PORTAL ADMIN — PAINEL GERAL =====
 
+// ===== AVALIAÇÃO CURSO DE ILUMINAÇÃO =====
+const AVALIACAO_ILUMINACAO_DB = '28a27da340d1499293ba1bceccd5a736';
+
+app.post('/avaliacao-luz/enviar', async (req, res) => {
+  const b = req.body || {};
+
+  function propSelect(valor) {
+    return valor ? { select: { name: valor } } : { select: null };
+  }
+  function propText(valor) {
+    return { rich_text: valor ? [{ text: { content: valor } }] : [] };
+  }
+
+  const propriedades = {
+    'Título': { title: [{ text: { content: (b.nome || 'Respondente anônimo') + ' — ' + new Date().toLocaleDateString('pt-BR') } }] },
+    'Deseja se Identificar': propSelect(b.desejaIdentificar),
+    'Nome do Respondente': propText(b.nome),
+    'Clareza dos Conceitos Técnicos': propSelect(b.clareza),
+    'Relevância para a Prática': propSelect(b.relevancia),
+    'Profundidade do Conteúdo': propSelect(b.profundidade),
+    'Didática do Instrutor': propSelect(b.didatica),
+    'Qualidade do Material de Apoio': propSelect(b.material),
+    'Tempo de Prática com Equipamentos': propSelect(b.tempoPratica),
+    'Qualidade dos Equipamentos': propSelect(b.qualidadeEquip),
+    'Carga Horária': propSelect(b.cargaHoraria),
+    'Organização Geral': propSelect(b.organizacao),
+    'Avaliação do Espaço Físico': propSelect(b.espacoFisico),
+    'Avaliação da Equipe de Atendimento': propSelect(b.equipeAtendimento),
+    'Satisfação Geral': propSelect(b.satisfacao),
+    'Probabilidade de Recomendar (0-5)': { number: b.nps !== undefined && b.nps !== '' && b.nps !== null ? Number(b.nps) : null },
+    'Nível Prévio em Iluminação': propSelect(b.nivelPrevio),
+    'Faria Curso Complementar com Tomate': propSelect(b.tomate),
+    'Faria Curso de Produção': propSelect(b.producao),
+    'Faria Curso de Técnico de Som': propSelect(b.som),
+    'O que mais gostou': propText(b.gostou),
+    'O que melhoraria': propText(b.melhoraria),
+  };
+
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent: { database_id: AVALIACAO_ILUMINACAO_DB }, properties: propriedades }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      console.error('[avaliacao-luz/enviar] Notion recusou:', t);
+      return res.status(500).json({ ok: false, erro: 'Erro ao salvar avaliação.' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[avaliacao-luz/enviar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao salvar avaliação.' });
+  }
+});
+// ===== FIM AVALIAÇÃO CURSO DE ILUMINAÇÃO =====
+
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
 async function buscarAprovacaoPorId(pageId) {
