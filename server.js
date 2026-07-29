@@ -2661,6 +2661,257 @@ app.post('/avaliacao-luz/enviar', async (req, res) => {
 });
 // ===== FIM AVALIAÇÃO CURSO DE ILUMINAÇÃO =====
 
+// ===== PORTAL ARTISTAS =====
+const INTEGRANTES_DB_ARTISTA = 'e1047585-3dd2-4bda-9896-1a4caeeea284';
+
+async function buscarIntegrantePorCpfArtista(cpfLimpo) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + INTEGRANTES_DB_ARTISTA + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 1 }),
+  });
+  const d = await r.json();
+  const pagina = (d.results || [])[0];
+  if (!pagina) return null;
+  const p = pagina.properties;
+  return {
+    pageId: pagina.id,
+    nome: p['Nome']?.title?.[0]?.plain_text || '',
+    telefone: (p['Telefone']?.phone_number || '').replace(/\D/g, ''),
+  };
+}
+
+app.post('/portal-artista/login/solicitar', async (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
+  try {
+    const integrante = await buscarIntegrantePorCpfArtista(cpfLimpo);
+    if (!integrante) return res.json({ ok: false, erro: 'CPF não encontrado. Fale com o Fábio.' });
+    if (!integrante.telefone) return res.json({ ok: false, erro: 'Telefone não cadastrado. Fale com o Fábio.' });
+    await enviarOtp('artista_' + cpfLimpo, integrante.telefone, integrante.nome);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-artista/login/solicitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal-artista/login/verificar', async (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
+  const verificacao = verificarOtp('artista_' + cpfLimpo, req.body.codigo);
+  if (!verificacao.ok) return res.json(verificacao);
+  try {
+    const integrante = await buscarIntegrantePorCpfArtista(cpfLimpo);
+    if (!integrante) return res.json({ ok: false, erro: 'Cadastro não encontrado.' });
+    const dadosLogin = { nome: integrante.nome, cpf: cpfLimpo, integrantePageId: integrante.pageId };
+    const sessionToken = criarSessao('artista_' + cpfLimpo, dadosLogin);
+    res.json({ ok: true, ...dadosLogin, sessionToken });
+  } catch (err) {
+    console.error('[portal-artista/login/verificar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal-artista/sessao/verificar', (req, res) => {
+  const dados = verificarSessao(req.body.sessionToken);
+  if (!dados) return res.json({ ok: false, erro: 'Sessão expirada.' });
+  res.json({ ok: true, ...dados });
+});
+
+function calcularPrevisaoPagamento(emissaoNfISO, contratantes) {
+  if (!emissaoNfISO) return { texto: 'Aguardando emissão da Nota Fiscal', data: null };
+  const contratantesTexto = (contratantes || []).join(' ').toLowerCase();
+  const prazoDias = (contratantesTexto.includes('sme') || contratantesTexto.includes('smc') || contratantesTexto.includes('prefeitura'))
+    ? 30
+    : 15;
+  const dataNf = new Date(emissaoNfISO + 'T00:00:00');
+  const previsao = new Date(dataNf.getTime() + prazoDias * 24 * 60 * 60000);
+  const previsaoISO = previsao.toISOString().slice(0, 10);
+  return { texto: previsaoISO.split('-').reverse().join('/'), data: previsaoISO, prazoDias };
+}
+
+app.get('/portal-artista/apresentacoes', async (req, res) => {
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+
+  const ano = req.query.ano || String(new Date().getFullYear());
+  if (ano !== '2026') {
+    return res.json({ ok: true, apresentacoes: [], aviso: 'Ainda não verificamos se o banco de ' + ano + ' tem a mesma estrutura. Fale com o Fábio.' });
+  }
+
+  try {
+    const rApres = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_2026_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'ELENCO', relation: { contains: dadosSessao.integrantePageId } },
+        page_size: 100,
+        sorts: [{ property: 'Data da Apresentação', direction: 'descending' }],
+      }),
+    });
+    const dApres = await rApres.json();
+    const apresentacoesDoAno = (dApres.results || []).filter(pagina => {
+      const dataStr = pagina.properties['Data da Apresentação']?.date?.start || '';
+      return dataStr.slice(0, 4) === ano;
+    });
+
+    const resultado = [];
+    for (const pagina of apresentacoesDoAno) {
+      const p = pagina.properties;
+      const localNome = p['LOCAL']?.title?.[0]?.plain_text || '';
+      const dataApresentacao = p['Data da Apresentação']?.date?.start || '';
+      const horario = p['Horário Apresentação']?.rich_text?.[0]?.plain_text || '';
+      const fotosDrive = p['Fotos Drive']?.url || '';
+      const propostaRel = p['Proposta']?.relation || [];
+
+      let cacheElenco = null;
+      let emissaoNf = null;
+      let contratantes = [];
+      let statusCache = '';
+
+      if (propostaRel.length) {
+        try {
+          const rProposta = await fetch('https://api.notion.com/v1/pages/' + propostaRel[0].id, {
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+          });
+          const propostaData = await rProposta.json();
+          const pp = propostaData.properties || {};
+          cacheElenco = pp['Cachê Elenco']?.number ?? null;
+          emissaoNf = pp['Emissão da Nota Fiscal']?.date?.start || null;
+          contratantes = (pp['Contratante']?.multi_select || []).map(o => o.name);
+          statusCache = pp['Cachê']?.select?.name || '';
+        } catch (e) {
+          console.error('[portal-artista/apresentacoes] erro ao buscar proposta:', e.message);
+        }
+      }
+
+      const previsao = calcularPrevisaoPagamento(emissaoNf, contratantes);
+
+      resultado.push({
+        local: localNome,
+        data: dataApresentacao,
+        horario,
+        fotosDrive,
+        cacheElenco,
+        statusCache: statusCache || 'Não informado',
+        emissaoNf,
+        contratantes,
+        previsaoPagamentoTexto: previsao.texto,
+      });
+    }
+
+    res.json({ ok: true, apresentacoes: resultado });
+  } catch (err) {
+    console.error('[portal-artista/apresentacoes] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar apresentações.' });
+  }
+});
+
+app.get('/portal-artista/meus-dados', async (req, res) => {
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + dadosSessao.integrantePageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pagina = await r.json();
+    const p = pagina.properties;
+
+    res.json({
+      ok: true,
+      dados: {
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        nomeCompleto: p['Nome Completo']?.rich_text?.[0]?.plain_text || '',
+        nomeSocial: p['Nome Social']?.rich_text?.[0]?.plain_text || '',
+        nomeArtistico: p['Nome Artístico']?.rich_text?.[0]?.plain_text || '',
+        cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+        rg: p['RG']?.rich_text?.[0]?.plain_text || '',
+        dataNascimento: p['Data de Nascimento']?.date?.start || '',
+        telefone: p['Telefone']?.phone_number || '',
+        email: p['E-mail']?.email || '',
+        endereco: p['Endereço']?.rich_text?.[0]?.plain_text || '',
+        instagram: p['Instagram']?.rich_text?.[0]?.plain_text || '',
+        pix: p['PIX']?.rich_text?.[0]?.plain_text || '',
+        dadosBancarios: p['Dados Bancários']?.rich_text?.[0]?.plain_text || '',
+        pis: p['PIS']?.number ?? '',
+        altura: p['Altura']?.number ?? '',
+        sapato: p['Sapato']?.number ?? '',
+        camisa: p['Camisa']?.rich_text?.[0]?.plain_text || '',
+        calca: p['Calça']?.rich_text?.[0]?.plain_text || '',
+        camiseta: p['Camiseta']?.rich_text?.[0]?.plain_text || '',
+        etnia: p['Etnia']?.rich_text?.[0]?.plain_text || '',
+        genero: p['Gênero']?.rich_text?.[0]?.plain_text || '',
+        pronomes: p['Pronomes']?.rich_text?.[0]?.plain_text || '',
+        orientacaoSexual: p['Orientação Sexual']?.rich_text?.[0]?.plain_text || '',
+        pcd: p['PCD']?.rich_text?.[0]?.plain_text || '',
+        alergias: p['Alergias']?.rich_text?.[0]?.plain_text || '',
+        restricaoAlimentar: p['Restrição Alimentar']?.rich_text?.[0]?.plain_text || '',
+        contatoEmergencia: p['Contato de Emergência']?.rich_text?.[0]?.plain_text || '',
+        drtOmb: p['DRT / OMB']?.rich_text?.[0]?.plain_text || '',
+      },
+    });
+  } catch (err) {
+    console.error('[portal-artista/meus-dados] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar dados.' });
+  }
+});
+
+app.post('/portal-artista/atualizar-dados', async (req, res) => {
+  const dadosSessao = verificarSessao(req.body.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+
+  const b = req.body || {};
+  function txt(v) { return { rich_text: v ? [{ text: { content: String(v) } }] : [] }; }
+  function num(v) { return { number: v !== undefined && v !== null && v !== '' ? Number(v) : null }; }
+
+  const propriedades = {
+    'Nome Completo': txt(b.nomeCompleto),
+    'Nome Social': txt(b.nomeSocial),
+    'Nome Artístico': txt(b.nomeArtistico),
+    'RG': txt(b.rg),
+    'Telefone': { phone_number: b.telefone || null },
+    'E-mail': { email: b.email || null },
+    'Endereço': txt(b.endereco),
+    'Instagram': txt(b.instagram),
+    'PIX': txt(b.pix),
+    'Dados Bancários': txt(b.dadosBancarios),
+    'PIS': num(b.pis),
+    'Altura': num(b.altura),
+    'Sapato': num(b.sapato),
+    'Camisa': txt(b.camisa),
+    'Calça': txt(b.calca),
+    'Camiseta': txt(b.camiseta),
+    'Etnia': txt(b.etnia),
+    'Gênero': txt(b.genero),
+    'Pronomes': txt(b.pronomes),
+    'Orientação Sexual': txt(b.orientacaoSexual),
+    'PCD': txt(b.pcd),
+    'Alergias': txt(b.alergias),
+    'Restrição Alimentar': txt(b.restricaoAlimentar),
+    'Contato de Emergência': txt(b.contatoEmergencia),
+    'DRT / OMB': txt(b.drtOmb),
+  };
+  if (b.dataNascimento) propriedades['Data de Nascimento'] = { date: { start: b.dataNascimento } };
+
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + dadosSessao.integrantePageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: propriedades }),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      console.error('[portal-artista/atualizar-dados] Notion recusou:', t);
+      return res.status(500).json({ ok: false, erro: 'Erro ao salvar dados.' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-artista/atualizar-dados] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao salvar dados.' });
+  }
+});
+// ===== FIM PORTAL ARTISTAS =====
+
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
 async function buscarAprovacaoPorId(pageId) {
