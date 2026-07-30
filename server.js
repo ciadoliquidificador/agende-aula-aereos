@@ -6176,6 +6176,19 @@ app.post('/registrar-presenca', async (req, res) => {
     const experimentaisRegistradas = presencas.filter(p => p.tipo === 'Experimental');
     for (const exp of experimentaisRegistradas) {
       const resultado = exp.status === 'Presente' ? 'COMPARECEU ✅' : 'FALTOU ❌';
+
+      // Espelha o resultado direto no banco Alunas, pra facilitar visualizacao
+      if (exp.alunaId) {
+        try {
+          await fetch('https://api.notion.com/v1/pages/' + exp.alunaId, {
+            method: 'PATCH',
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ properties: { 'Compareceu Experimental': { select: { name: exp.status === 'Presente' ? 'Sim' : 'Nao' } } } }),
+          });
+        } catch (eCompareceu) {
+          console.error('[presenca] erro ao marcar Compareceu Experimental:', eCompareceu.message);
+        }
+      }
       const msg = `🎪 *Resultado Aula Experimental*\n\nAluna: ${exp.nome}\nTurma: ${turma}\nProfessor: ${professor}\nData: ${data.split('-').reverse().join('/')}\nResultado: ${resultado}`;
       try { await enviarWhatsApp(WHATSAPP_FABIO, msg); } catch(e) { console.error('[presenca] wpp fabio exp:', e.message); }
       try { await enviarWhatsApp(WHATSAPP_CIA, msg); } catch(e) { console.error('[presenca] wpp cia exp:', e.message); }
