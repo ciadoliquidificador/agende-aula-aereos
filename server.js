@@ -899,7 +899,8 @@ app.post('/inscricao-dancas', async (req, res) => {
 
     // Dual-write no banco Alunas principal, pra Ocupação de Turmas enxergar essa matrícula.
     try {
-      const valorEscolhidoDancas = (formaPagamento || '').includes('Pix') ? 900 : 1100;
+      const ehExperimentalDancas = formaPagamento === 'Aula Experimental Gratuita';
+      const valorEscolhidoDancas = ehExperimentalDancas ? 0 : ((formaPagamento || '').includes('Pix') ? 900 : 1100);
       await fetch('https://api.notion.com/v1/pages', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
@@ -915,10 +916,10 @@ app.post('/inscricao-dancas', async (req, res) => {
             'Dia': { select: { name: 'Quarta' } },
             'Horário': { select: { name: '20:00' } },
             'Professor': { select: { name: 'Roberta Viana' } },
-            'Plano': { select: { name: 'Semestral' } },
+            'Plano': { select: { name: ehExperimentalDancas ? 'Experimental' : 'Semestral' } },
             'Frequência': { select: { name: '1x semana' } },
             'Valor': { number: valorEscolhidoDancas },
-            'Status': { select: { name: 'Ativa' } },
+            'Status': { select: { name: ehExperimentalDancas ? 'Experimental' : 'Ativa' } },
           },
         }),
       });
@@ -928,8 +929,17 @@ app.post('/inscricao-dancas', async (req, res) => {
 
     const primeiroNome = nomeCompleto.split(' ')[0];
     const isPix = formaPagamento.includes('Pix');
+    const isExperimental = formaPagamento === 'Aula Experimental Gratuita';
     const msgAdmin = `💃 *Nova inscrição — Danças Brasileiras*\n\n👤 ${nomeCompleto}\n📱 ${telefone}\n📧 ${email}\n💳 ${formaPagamento}`;
-    const msgUser = `Olá, ${primeiroNome}! 💃\n\nSua inscrição no curso de *Danças Brasileiras* com Roberta Viana foi recebida!\n\n📅 De 05/08 a 16/12\n⏰ Quartas-feiras, 20h às 21h30\n\n${isPix ? 'Envie R$ 900,00 via Pix para *fabio@cialiquidificador.com.br* e mande o comprovante aqui.' : 'Acesse o link de pagamento parcelado para concluir sua inscrição.'}\n\nQualquer dúvida é só responder aqui! ✨`;
+    let instrucaoPagamento;
+    if (isExperimental) {
+      instrucaoPagamento = 'Você garantiu sua aula experimental gratuita, sem compromisso. Qualquer coisa é só chegar no horário! 🎉';
+    } else if (isPix) {
+      instrucaoPagamento = 'Envie R$ 900,00 via Pix para *fabio@cialiquidificador.com.br* e mande o comprovante aqui.';
+    } else {
+      instrucaoPagamento = 'Acesse o link de pagamento parcelado para concluir sua inscrição.';
+    }
+    const msgUser = `Olá, ${primeiroNome}! 💃\n\nSua inscrição no curso de *Danças Brasileiras* com Roberta Viana foi recebida!\n\n📅 De 05/08 a 16/12\n⏰ Quartas-feiras, 20h às 21h30\n\n${instrucaoPagamento}\n\nQualquer dúvida é só responder aqui! ✨`;
     try { const adminId = await getOrCreateContactId('5511986899433'); if (adminId) await enviarWhatsApp('5511986899433', msgAdmin); } catch(e) {}
     try { await enviarWhatsApp('55' + numLimpo, msgUser); } catch(e) {}
     return res.json({ ok: true });
