@@ -18,7 +18,7 @@ const DIGISAC_TOKEN = process.env.DIGISAC_TOKEN;
 const SERVICE_ID = '012587f9-21ea-4143-9005-c0fbdf109f05';
 const USER_ID = 'b0bb99db-a668-403a-af70-efc1d4a7259a';
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
-const ACERVO_DB = '9974cd6db2c246a796606ea2c0b2694b';
+const ACERVO_DB = '2b537f87-513e-45a9-b09e-28b3ff410858';
 const APRESENTACOES_2026_DB = '2b9c4503-1f73-8082-8d34-f47353b066e7';
 
 // ============================================================
