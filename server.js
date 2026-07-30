@@ -1646,7 +1646,6 @@ const MODALIDADES_MATRICULA = {
       { nome: 'Quarta 18h', dia: 'Quarta', horario: '18:00', professor: 'Gustra', limite: 5 },
       { nome: 'Quarta 19h', dia: 'Quarta', horario: '19:00', professor: 'Gustra', limite: 5 },
       { nome: 'Quinta 8h', dia: 'Quinta', horario: '08:00', professor: 'Guilherme', limite: 5 },
-      { nome: 'Sexta 18h', dia: 'Sexta', horario: '18:00', professor: 'Gabi', limite: 5 },
     ],
     permiteFrequenciaDupla: true,
     precos: {
