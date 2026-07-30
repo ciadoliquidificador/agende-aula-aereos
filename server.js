@@ -3001,6 +3001,7 @@ app.get('/portal-artista/meu-acervo', async (req, res) => {
       }),
     });
     const d = await r.json();
+    console.log('[portal-artista/meu-acervo] DEBUG idPessoa=' + dadosSessao.integrantePageId + ' | r.ok=' + r.ok + ' | total resultados=' + (d.results || []).length + ' | resposta bruta=' + JSON.stringify(d).slice(0, 500));
     const itens = (d.results || []).map(pagina => {
       const p = pagina.properties;
       return {
