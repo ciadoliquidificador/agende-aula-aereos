@@ -1650,7 +1650,7 @@ const MODALIDADES_MATRICULA = {
     permiteFrequenciaDupla: true,
     precos: {
       '1x semana': { Mensal: 255.00, Semestral: 230.00, Anual: 207.00 },
-      '2x semana': { Mensal: 365.00, Semestral: 330.00, Anual: 300.00 },
+      '2x semana': { Mensal: 395.00, Semestral: 355.00, Anual: 315.00 },
     },
   },
   'Circo - Acrobacia': {
