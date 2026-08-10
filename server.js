@@ -3106,7 +3106,7 @@ app.post('/webhook-cache-pago', async (req, res) => {
 const LISTA_INTERESSE_DB = 'd0ffcc65-5f9b-4206-8312-6d288fd56ad9';
 
 app.post('/interesse-curso', async (req, res) => {
-  const { curso, nome, whatsapp, mensagem } = req.body;
+  const { curso, nome, whatsapp, mensagem, melhorDiaHorario } = req.body;
   if (!curso || !nome || !whatsapp) {
     return res.status(400).json({ ok: false, erro: 'Preencha nome e WhatsApp.' });
   }
@@ -3121,13 +3121,14 @@ app.post('/interesse-curso', async (req, res) => {
           'Curso': { select: { name: curso } },
           'Nome': { rich_text: [{ text: { content: nome } }] },
           'WhatsApp': { phone_number: whatsapp },
+          'Melhor Dia Horario': { rich_text: [{ text: { content: melhorDiaHorario || '' } }] },
           'Mensagem': { rich_text: [{ text: { content: mensagem || '' } }] },
           'Contatado': { checkbox: false },
         },
       }),
     });
 
-    const msgFabio = '📋 *Novo interesse — ' + curso + '*\n\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + (mensagem ? ('\nMensagem: ' + mensagem) : '');
+    const msgFabio = '📋 *Novo interesse — ' + curso + '*\n\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + (melhorDiaHorario ? ('\nMelhor dia/horário: ' + melhorDiaHorario) : '') + (mensagem ? ('\nMensagem: ' + mensagem) : '');
     try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch (e) {}
 
     res.json({ ok: true });
