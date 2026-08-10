@@ -3102,6 +3102,42 @@ app.post('/webhook-cache-pago', async (req, res) => {
 
 
 
+// ===== LISTA DE INTERESSE — CURSOS SEM TURMA ABERTA =====
+const LISTA_INTERESSE_DB = 'd0ffcc65-5f9b-4206-8312-6d288fd56ad9';
+
+app.post('/interesse-curso', async (req, res) => {
+  const { curso, nome, whatsapp, mensagem } = req.body;
+  if (!curso || !nome || !whatsapp) {
+    return res.status(400).json({ ok: false, erro: 'Preencha nome e WhatsApp.' });
+  }
+  try {
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: LISTA_INTERESSE_DB },
+        properties: {
+          'Título': { title: [{ text: { content: nome + ' — ' + curso } }] },
+          'Curso': { select: { name: curso } },
+          'Nome': { rich_text: [{ text: { content: nome } }] },
+          'WhatsApp': { phone_number: whatsapp },
+          'Mensagem': { rich_text: [{ text: { content: mensagem || '' } }] },
+          'Contatado': { checkbox: false },
+        },
+      }),
+    });
+
+    const msgFabio = '📋 *Novo interesse — ' + curso + '*\n\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + (mensagem ? ('\nMensagem: ' + mensagem) : '');
+    try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch (e) {}
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[interesse-curso] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao registrar interesse.' });
+  }
+});
+// ===== FIM LISTA DE INTERESSE =====
+
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
 async function buscarAprovacaoPorId(pageId) {
