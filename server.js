@@ -3308,6 +3308,10 @@ app.post('/residencia/:pageId/aceitar', async (req, res) => {
 });
 // ===== FIM TERMO DE RESIDÊNCIA ARTÍSTICA =====
 
+
+
+
+
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
 async function buscarAprovacaoPorId(pageId) {
