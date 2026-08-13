@@ -198,6 +198,19 @@ async function enviarWhatsApp(numero, texto) {
   return response.json();
 }
 
+// Envia mensagem com imagem anexada de verdade (nao so um link no texto).
+// fileUrl precisa ser um link de download direto do conteudo (ex: @microsoft.graph.downloadUrl do OneDrive).
+async function enviarWhatsAppComImagem(numero, texto, fileUrl) {
+  const contactId = await getOrCreateContactId(numero);
+  const response = await fetch(`${DIGISAC_BASE}/messages`, {
+    method: 'POST',
+    headers: digisacHeaders,
+    body: JSON.stringify({ text: texto, file: fileUrl, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot' })
+  });
+  if (!response.ok) { const t = await response.text(); throw new Error(`Digisac ${response.status}: ${t}`); }
+  return response.json();
+}
+
 async function calcularProximoHorarioComercial() {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Sao_Paulo',
@@ -5664,7 +5677,7 @@ app.get('/mural/turmas-disponiveis', (req, res) => {
 });
 
 app.post('/mural/postar', async (req, res) => {
-  const { titulo, mensagem, turmasAlvo } = req.body;
+  const { titulo, mensagem, turmasAlvo, imagemBase64, imagemNomeArquivo } = req.body;
   if (!titulo || !mensagem || !Array.isArray(turmasAlvo) || turmasAlvo.length === 0) {
     return res.status(400).json({ ok: false, erro: 'Preencha título, mensagem e ao menos uma turma.' });
   }
@@ -5686,11 +5699,34 @@ app.post('/mural/postar', async (req, res) => {
       if (contato) contatos.add(contato.replace(/\D/g, ''));
     });
 
+    // Se veio imagem, sobe pro OneDrive e pega um link de download direto
+    // (necessário pro Digisac conseguir buscar e anexar o arquivo de verdade).
+    let fileUrl = null;
+    if (imagemBase64) {
+      try {
+        const msToken = await getMicrosoftToken();
+        const nomePasta = 'Mural-Imagens';
+        const folderId = await criarOuObterSubpasta(msToken, nomePasta);
+        const nomeArquivo = (Date.now() + '_' + (imagemNomeArquivo || 'imagem.jpg')).replace(/[^a-zA-Z0-9._-]/g, '-');
+        const uploaded = await uploadFotoParaPasta(msToken, folderId, imagemBase64, nomeArquivo);
+        fileUrl = uploaded['@microsoft.graph.downloadUrl'] || null;
+      } catch (eImg) {
+        console.error('[mural/postar] erro ao subir imagem:', eImg.message);
+      }
+    }
+
     const msgCompleta = '📢 *' + titulo + '*\n\n' + mensagem;
     let enviados = 0;
     for (const numLimpo of contatos) {
       const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
-      try { await enviarWhatsAppComHorarioComercial(numBr, msgCompleta); enviados++; } catch(e) {}
+      try {
+        if (fileUrl) {
+          await enviarWhatsAppComImagem(numBr, msgCompleta, fileUrl);
+        } else {
+          await enviarWhatsAppComHorarioComercial(numBr, msgCompleta);
+        }
+        enviados++;
+      } catch(e) {}
     }
 
     await fetch('https://api.notion.com/v1/pages', {
