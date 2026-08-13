@@ -3212,8 +3212,68 @@ function montarTextoTermoResidencia({ nomeResponsavel, rgResponsavel, cpfRespons
     '11.1. Fica eleito o foro da Comarca de São Paulo/SP para dirimir quaisquer controvérsias oriundas deste Termo, com renúncia a qualquer outro, por mais privilegiado que seja.';
 }
 
-app.get('/residencia/:pageId', async (req, res) => {
-  const { pageId } = req.params;
+async function buscarProjetoResidenciaPorCpf(cpfLimpo) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + RESIDENCIA_INSCRICOES_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ page_size: 100 }),
+  });
+  const d = await r.json();
+  const pagina = (d.results || []).find(pag => {
+    const cpfArmazenado = (pag.properties['CPF']?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
+    return cpfArmazenado === cpfLimpo;
+  });
+  if (!pagina) return null;
+  const p = pagina.properties;
+  return {
+    pageId: pagina.id,
+    nome: p['Nome Civil']?.rich_text?.[0]?.plain_text || '',
+    telefone: (p['Telefone']?.phone_number || '').replace(/\D/g, ''),
+    status: p['Status']?.select?.name || '',
+  };
+}
+
+app.post('/residencia-termo/login/solicitar', async (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
+  try {
+    const projeto = await buscarProjetoResidenciaPorCpf(cpfLimpo);
+    if (!projeto) return res.json({ ok: false, erro: 'CPF não encontrado entre os responsáveis. Fale com o Fábio.' });
+    if (projeto.status !== 'Selecionada') return res.json({ ok: false, erro: 'Esse CPF não corresponde a um projeto selecionado.' });
+    if (!projeto.telefone) return res.json({ ok: false, erro: 'Telefone não cadastrado. Fale com o Fábio.' });
+    await enviarOtp('residencia_' + cpfLimpo, projeto.telefone, projeto.nome);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[residencia-termo/login/solicitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/residencia-termo/login/verificar', async (req, res) => {
+  const cpfLimpo = (req.body.cpf || '').replace(/\D/g, '');
+  const verificacao = verificarOtp('residencia_' + cpfLimpo, req.body.codigo);
+  if (!verificacao.ok) return res.json(verificacao);
+  try {
+    const projeto = await buscarProjetoResidenciaPorCpf(cpfLimpo);
+    if (!projeto) return res.json({ ok: false, erro: 'Projeto não encontrado.' });
+    const dadosLogin = { nome: projeto.nome, cpf: cpfLimpo, projetoPageId: projeto.pageId };
+    const sessionToken = criarSessao('residencia_' + cpfLimpo, dadosLogin);
+    res.json({ ok: true, ...dadosLogin, sessionToken });
+  } catch (err) {
+    console.error('[residencia-termo/login/verificar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/residencia-termo/sessao/verificar', (req, res) => {
+  const dados = verificarSessao(req.body.sessionToken);
+  if (!dados) return res.json({ ok: false, erro: 'Sessão expirada.' });
+  res.json({ ok: true, ...dados });
+});
+
+app.get('/residencia-termo/dados', async (req, res) => {
+  const dadosSessao = verificarSessao(req.query.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  const pageId = dadosSessao.projetoPageId;
   try {
     const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
@@ -3240,14 +3300,17 @@ app.get('/residencia/:pageId', async (req, res) => {
   }
 });
 
-app.post('/residencia/:pageId/aceitar', async (req, res) => {
-  const { pageId } = req.params;
+app.post('/residencia-termo/aceitar', async (req, res) => {
+  const dadosSessao = verificarSessao(req.body.sessionToken);
+  if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  const pageId = dadosSessao.projetoPageId;
   const { enderecoResponsavel, detalhamentoAtividade, assinaturaDigitada, aceite, dispositivo } = req.body;
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
 
-  if (!enderecoResponsavel || !detalhamentoAtividade || !assinaturaDigitada || !aceite) {
+  if (!enderecoResponsavel || !assinaturaDigitada || !aceite) {
     return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
   }
+  const detalhamentoFinal = (detalhamentoAtividade || '').trim() || 'a ser definido entre as partes ao longo do período de residência, com antecedência mínima de 15 dias da data da atividade';
 
   try {
     const rPagina = await fetch('https://api.notion.com/v1/pages/' + pageId, {
@@ -3267,7 +3330,7 @@ app.post('/residencia/:pageId/aceitar', async (req, res) => {
 
     const textoTermo = montarTextoTermoResidencia({
       nomeResponsavel, rgResponsavel, cpfResponsavel, enderecoResponsavel,
-      nomeProjeto, datasPretendidas, detalhamentoAtividade,
+      nomeProjeto, datasPretendidas, detalhamentoAtividade: detalhamentoFinal,
     });
 
     const dataHoraISO = new Date().toISOString();
@@ -3285,7 +3348,7 @@ app.post('/residencia/:pageId/aceitar', async (req, res) => {
       body: JSON.stringify({
         properties: {
           'Endereco Responsavel': { rich_text: [{ text: { content: enderecoResponsavel } }] },
-          'Detalhamento Atividade Formativa': { rich_text: [{ text: { content: detalhamentoAtividade } }] },
+          'Detalhamento Atividade Formativa': { rich_text: [{ text: { content: detalhamentoFinal } }] },
           'Termo Residencia Assinado': { checkbox: true },
           'Link Termo PDF': { url: linkPdf },
         },
