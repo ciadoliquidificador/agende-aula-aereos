@@ -3231,7 +3231,7 @@ app.get('/residencia/:pageId', async (req, res) => {
       nomeColetivo: p['Nome do Coletivo']?.rich_text?.[0]?.plain_text || '',
       datasPretendidas: p['Datas Pretendidas']?.select?.name || '',
       propostaContrapartida: p['Proposta de Contrapartida']?.rich_text?.[0]?.plain_text || '',
-      termoJaAceito: p['Termo Aceito']?.checkbox || false,
+      termoJaAceito: p['Termo Residencia Assinado']?.checkbox || false,
       linkTermoPdf: p['Link Termo PDF']?.url || '',
     });
   } catch (err) {
@@ -3286,7 +3286,7 @@ app.post('/residencia/:pageId/aceitar', async (req, res) => {
         properties: {
           'Endereco Responsavel': { rich_text: [{ text: { content: enderecoResponsavel } }] },
           'Detalhamento Atividade Formativa': { rich_text: [{ text: { content: detalhamentoAtividade } }] },
-          'Termo Aceito': { checkbox: true },
+          'Termo Residencia Assinado': { checkbox: true },
           'Link Termo PDF': { url: linkPdf },
         },
       }),
