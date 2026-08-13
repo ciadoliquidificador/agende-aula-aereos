@@ -3139,6 +3139,175 @@ app.post('/interesse-curso', async (req, res) => {
 });
 // ===== FIM LISTA DE INTERESSE =====
 
+// ===== TERMO DE RESIDÊNCIA ARTÍSTICA 2026 =====
+const RESIDENCIA_INSCRICOES_DB = 'a514d3c1-1a83-40ff-bc73-fa30582f6296';
+
+function mapaDatasPretendidas(valor) {
+  return {
+    terca: valor === 'Terça',
+    quinta: valor === 'Quinta',
+    ambas: valor === 'Ambas',
+  };
+}
+
+function montarTextoTermoResidencia({ nomeResponsavel, rgResponsavel, cpfResponsavel, enderecoResponsavel, nomeProjeto, datasPretendidas, detalhamentoAtividade }) {
+  const datas = mapaDatasPretendidas(datasPretendidas);
+  const checkboxDatas =
+    '(' + (datas.terca ? 'X' : ' ') + ') Terças-feiras, das 10h às 13h\n' +
+    '(' + (datas.quinta ? 'X' : ' ') + ') Quintas-feiras, das 10h às 13h\n' +
+    '(' + (datas.ambas ? 'X' : ' ') + ') Terças e quintas-feiras, das 10h às 13h';
+
+  return 'TERMO DE RESIDÊNCIA ARTÍSTICA\nEspaço Liquidificador — 2º semestre de 2026\n\n' +
+    'ESPAÇO/CONTRATANTE: ESPAÇO LIQUIDIFICADOR, nome fantasia de LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS, pessoa jurídica inscrita no CNPJ sob nº 28.398.119/0001-83, com sede na Rua Dr. Carvalho de Mendonça, 67, Campos Elíseos, São Paulo/SP, neste ato representada por Cristiane Socci Leonel, doravante denominado simplesmente "ESPAÇO".\n\n' +
+    'RESPONSÁVEL PELO PROJETO/RESIDENTE: ' + nomeResponsavel + ', RG ' + rgResponsavel + ', CPF ' + cpfResponsavel + ', residente e domiciliado(a) em ' + enderecoResponsavel + ', atuando em nome próprio e representando o coletivo/projeto "' + nomeProjeto + '", composto pelos integrantes listados no Anexo II, doravante denominado simplesmente "RESIDENTE".\n\n' +
+    'As partes acima identificadas celebram o presente Termo de Residência Artística, decorrente da seleção do projeto no Chamamento de Residência Artística — Espaço Liquidificador 2º semestre de 2026 ("Chamamento"), que mediante as cláusulas a seguir reciprocamente outorgam e aceitam.\n\n' +
+    'CLÁUSULA PRIMEIRA — DO OBJETO\n\n' +
+    '1.1. O presente Termo tem por objeto formalizar a cessão de uso não onerosa, pelo ESPAÇO ao RESIDENTE, do espaço físico descrito no item 1.8 do Chamamento, para fins exclusivos de pesquisa, elaboração e/ou ensaio do projeto "' + nomeProjeto + '", nos termos e condições do Chamamento, que integra este instrumento como Anexo III, independentemente de transcrição.\n\n' +
+    '1.2. Em caso de conflito entre este Termo e o Chamamento, prevalecerão as disposições deste Termo quanto às condições específicas da residência do RESIDENTE.\n\n' +
+    'CLÁUSULA SEGUNDA — DA VIGÊNCIA E DAS DATAS DE USO\n\n' +
+    '2.1. Este Termo vigora de 11 de agosto a 17 de dezembro de 2026.\n\n' +
+    '2.2. O uso do espaço ocorrerá nas seguintes datas e horários, conforme resultado da seleção:\n\n' + checkboxDatas + '\n\n' +
+    '2.3. Eventuais alterações pontuais de data ou horário observarão o item 1.5 do Chamamento, buscando-se sempre o comum acordo e a reposição, sem prejuízo à continuidade do projeto.\n\n' +
+    '2.4. O uso do espaço fora das datas e horários acima, ou a extensão do período de residência, dependerá de acordo específico entre as partes, com cobrança de valor à parte, conforme disponibilidade de agenda do ESPAÇO (item 1.4 do Chamamento).\n\n' +
+    'CLÁUSULA TERCEIRA — DA NATUREZA DA RELAÇÃO\n\n' +
+    '3.1. O presente Termo formaliza cessão de uso de espaço para fins culturais, no contexto de residência artística selecionada por chamamento público, não configurando relação de trabalho, prestação de serviços onerosa, sociedade, associação ou vínculo empregatício de qualquer natureza entre o ESPAÇO e o RESIDENTE ou seus integrantes.\n\n' +
+    '3.2. Não há entre as partes relação de subordinação, pessoalidade, habitualidade remunerada ou exclusividade. O RESIDENTE exerce as atividades do projeto com plena autonomia artística, técnica e organizacional, sem qualquer supervisão, direção ou fiscalização de conteúdo por parte do ESPAÇO, cabendo a este apenas a gestão do uso do espaço físico e a verificação do cumprimento das contrapartidas pactuadas.\n\n' +
+    '3.3. O uso gratuito do espaço não constitui contraprestação por trabalho, e as contrapartidas previstas na Cláusula Quinta não têm natureza de prestação de serviço oneroso, mas de condição de reciprocidade cultural e comunitária inerente ao programa de residência.\n\n' +
+    'CLÁUSULA QUARTA — DAS CONDIÇÕES DE USO DO ESPAÇO\n\n' +
+    '4.1. O RESIDENTE terá acesso à sala de ensaio, banheiros, cozinha e à área de armazenamento de materiais indicada pelo ESPAÇO, conforme item 1.6 do Chamamento, sendo vedado o acesso ao escritório/mezanino e às demais dependências do acervo (item 1.7 do Chamamento).\n\n' +
+    '4.2. O RESIDENTE compromete-se a utilizar o espaço e os equipamentos disponibilizados (item 1.8 do Chamamento) de forma cuidadosa e conforme sua finalidade, respondendo por danos nos termos da Cláusula Sétima.\n\n' +
+    '4.3. O uso de aparelhos aéreos e demais equipamentos de risco rege-se pelo Anexo I — Termo de Responsabilidade, Uso e Riscos, assinado em conjunto com este Termo e dele parte integrante.\n\n' +
+    'CLÁUSULA QUINTA — DAS CONTRAPARTIDAS\n\n' +
+    '5.1. Contrapartidas artísticas e de divulgação. O RESIDENTE compromete-se a:\n' +
+    'a) registrar a residência e enviar ao ESPAÇO relatório final das atividades realizadas, acompanhado de fotos e vídeos, até 30 (trinta) dias após o encerramento da vigência;\n' +
+    'b) realizar 1 (uma) atividade de formação aberta (oficina, roda de conversa, palestra, workshop ou similar), na seguinte carga horária, dia(s) e horário(s): ' + detalhamentoAtividade + ', conforme proposta apresentada na inscrição, podendo ser ajustada de comum acordo quanto à data;\n' +
+    'c) inserir a logomarca do Espaço Liquidificador em todo material de divulgação do projeto, na condição de "apoio";\n' +
+    'd) mencionar/marcar os perfis oficiais do Espaço Liquidificador nas publicações em redes sociais relativas ao registro da residência.\n\n' +
+    '5.2. Contrapartida de cuidado coletivo do espaço. O RESIDENTE assume a co-responsabilidade pelo cuidado do ambiente compartilhado, nos exatos termos do item 4.2 do Chamamento, aqui incorporado por referência, destacando-se que:\n' +
+    'a) a contribuição corresponde a aproximadamente 2 (duas) horas semanais totais, independentemente do número de datas utilizadas;\n' +
+    'b) não inclui manutenção técnica, estrutural ou de equipamentos de risco, reparos, nem tarefas que substituam pessoal contratado do ESPAÇO;\n' +
+    'c) tem caráter colaborativo, não configurando relação de trabalho, subordinação, pessoalidade ou vínculo de qualquer natureza, em reforço ao disposto na Cláusula Terceira.\n\n' +
+    '5.3. O descumprimento reiterado e não justificado das contrapartidas desta cláusula poderá ensejar as consequências previstas na Cláusula Oitava.\n\n' +
+    'CLÁUSULA SEXTA — DA AUTORIZAÇÃO DE USO DE IMAGEM E DIREITOS DE DIVULGAÇÃO\n\n' +
+    '6.1. O RESIDENTE autoriza, a título gratuito e não exclusivo, o uso pelo ESPAÇO de fotos, vídeos e demais registros da residência — inclusive os enviados no relatório final (item 5.1, "a") e os produzidos pelo próprio ESPAÇO durante o período de uso do espaço — para fins de divulgação institucional do Espaço Liquidificador e da Cia. do Liquidificador em suas redes sociais, site e materiais de prestação de contas, com a devida atribuição de crédito ao projeto e a seus integrantes.\n\n' +
+    '6.2. Reciprocamente, o ESPAÇO autoriza o RESIDENTE a utilizar, para fins de divulgação do próprio projeto, imagens do espaço físico captadas durante o período de residência, vedada a associação a conteúdo que prejudique a imagem do ESPAÇO.\n\n' +
+    '6.3. Esta autorização não transfere direitos autorais sobre a obra artística em desenvolvimento, que permanecem integralmente com o RESIDENTE e seus integrantes.\n\n' +
+    'CLÁUSULA SÉTIMA — DA VISTORIA E DOS DANOS\n\n' +
+    '7.1. Será realizada vistoria de entrada, no início da residência, e vistoria de saída, ao término da vigência ou da última data de uso, registrando o estado da sala e dos equipamentos, conforme item 7.3 do Chamamento.\n\n' +
+    '7.2. Danos causados ao espaço ou a seus equipamentos, apurados por comparação entre as vistorias de entrada e saída, serão ressarcidos pelo RESIDENTE, mediante notificação e orçamento apresentado pelo ESPAÇO, no prazo de 15 (quinze) dias corridos.\n\n' +
+    'CLÁUSULA OITAVA — DA RESCISÃO E DAS PENALIDADES\n\n' +
+    '8.1. Constituem hipóteses de rescisão deste Termo, mediante notificação por escrito:\n' +
+    'a) descumprimento do item 3.4 do Chamamento (realização de apresentações, oficinas ou cursos como objeto da residência), hipótese em que será também aplicada multa de R$ 500,00 (quinhentos reais), conforme item 8.2 do Chamamento;\n' +
+    'b) descumprimento reiterado e não sanado, após notificação e prazo de 10 (dez) dias corridos para regularização, das contrapartidas previstas na Cláusula Quinta;\n' +
+    'c) uso do espaço em desacordo com sua finalidade, com risco à integridade física de terceiros ou ao patrimônio do ESPAÇO;\n' +
+    'd) acordo entre as partes ou desistência formal do RESIDENTE, mediante comunicação com antecedência mínima de 15 (quinze) dias.\n\n' +
+    '8.2. A rescisão não gera direito a indenização entre as partes, ressalvado o ressarcimento de danos eventualmente apurados nos termos da Cláusula Sétima.\n\n' +
+    'CLÁUSULA NONA — DA PROTEÇÃO DE DADOS PESSOAIS (LGPD)\n\n' +
+    '9.1. O tratamento de dados pessoais do RESIDENTE e de seus integrantes no âmbito da residência observa a Lei nº 13.709/2018 (LGPD) e segue as finalidades e condições descritas na Seção 6 do Chamamento, aqui incorporadas por referência.\n\n' +
+    'CLÁUSULA DÉCIMA — DAS DISPOSIÇÕES GERAIS\n\n' +
+    '10.1. Este Termo, seu Anexo I (Termo de Responsabilidade, Uso e Riscos) e o Chamamento constituem o inteiro acordo entre as partes quanto à residência artística ora formalizada.\n\n' +
+    '10.2. O ESPAÇO é identificado publicamente pelo nome fantasia "Espaço Liquidificador", sendo LIQUIDIFICADOR PRODUÇÕES ARTÍSTICAS a pessoa jurídica signatária e responsável pelas obrigações aqui assumidas.\n\n' +
+    '10.3. Este Termo não poderá ser cedido ou transferido pelo RESIDENTE a terceiros sem prévia anuência por escrito do ESPAÇO.\n\n' +
+    'CLÁUSULA DÉCIMA PRIMEIRA — DO FORO\n\n' +
+    '11.1. Fica eleito o foro da Comarca de São Paulo/SP para dirimir quaisquer controvérsias oriundas deste Termo, com renúncia a qualquer outro, por mais privilegiado que seja.';
+}
+
+app.get('/residencia/:pageId', async (req, res) => {
+  const { pageId } = req.params;
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    if (!r.ok) return res.json({ ok: false, erro: 'Projeto não encontrado.' });
+    const pagina = await r.json();
+    const p = pagina.properties;
+
+    res.json({
+      ok: true,
+      nomeCivil: p['Nome Civil']?.rich_text?.[0]?.plain_text || '',
+      rg: p['RG']?.rich_text?.[0]?.plain_text || '',
+      cpf: p['CPF']?.rich_text?.[0]?.plain_text || '',
+      nomeProjeto: p['Nome do Projeto']?.rich_text?.[0]?.plain_text || '',
+      nomeColetivo: p['Nome do Coletivo']?.rich_text?.[0]?.plain_text || '',
+      datasPretendidas: p['Datas Pretendidas']?.select?.name || '',
+      propostaContrapartida: p['Proposta de Contrapartida']?.rich_text?.[0]?.plain_text || '',
+      termoJaAceito: p['Termo Aceito']?.checkbox || false,
+      linkTermoPdf: p['Link Termo PDF']?.url || '',
+    });
+  } catch (err) {
+    console.error('[residencia] erro ao buscar projeto:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar projeto.' });
+  }
+});
+
+app.post('/residencia/:pageId/aceitar', async (req, res) => {
+  const { pageId } = req.params;
+  const { enderecoResponsavel, detalhamentoAtividade, assinaturaDigitada, aceite, dispositivo } = req.body;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+
+  if (!enderecoResponsavel || !detalhamentoAtividade || !assinaturaDigitada || !aceite) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+
+  try {
+    const rPagina = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    if (!rPagina.ok) return res.json({ ok: false, erro: 'Projeto não encontrado.' });
+    const pagina = await rPagina.json();
+    const p = pagina.properties;
+
+    const nomeResponsavel = p['Nome Civil']?.rich_text?.[0]?.plain_text || '';
+    const rgResponsavel = p['RG']?.rich_text?.[0]?.plain_text || '';
+    const cpfResponsavel = p['CPF']?.rich_text?.[0]?.plain_text || '';
+    const nomeProjeto = p['Nome do Projeto']?.rich_text?.[0]?.plain_text || '';
+    const datasPretendidas = p['Datas Pretendidas']?.select?.name || '';
+    const telefone = p['Telefone']?.phone_number || '';
+    const email = p['Email']?.email || '';
+
+    const textoTermo = montarTextoTermoResidencia({
+      nomeResponsavel, rgResponsavel, cpfResponsavel, enderecoResponsavel,
+      nomeProjeto, datasPretendidas, detalhamentoAtividade,
+    });
+
+    const dataHoraISO = new Date().toISOString();
+    const pdfBuffer = await gerarPdfContrato(textoTermo, { nome: nomeResponsavel, dataHoraISO, ip, dispositivo, assinaturaDigitada });
+
+    const msToken = await getMicrosoftToken();
+    const nomePasta = 'Residencia-' + slugify(nomeProjeto);
+    const folderId = await criarOuObterSubpasta(msToken, nomePasta);
+    const pdfUploaded = await uploadBufferOneDrive(msToken, folderId, pdfBuffer, 'termo-residencia-assinado-' + slugify(nomeProjeto) + '.pdf');
+    const linkPdf = await criarLinkCompartilhamento(msToken, pdfUploaded.id);
+
+    await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Endereco Responsavel': { rich_text: [{ text: { content: enderecoResponsavel } }] },
+          'Detalhamento Atividade Formativa': { rich_text: [{ text: { content: detalhamentoAtividade } }] },
+          'Termo Aceito': { checkbox: true },
+          'Link Termo PDF': { url: linkPdf },
+        },
+      }),
+    });
+
+    const primeiroNome = nomeResponsavel.split(' ')[0];
+    const numLimpo = telefone.replace(/\D/g, '');
+    const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
+    if (numBr) {
+      try { await enviarWhatsApp(numBr, 'Prontinho, ' + primeiroNome + '! ✅\n\nO Termo de Residência Artística do projeto "' + nomeProjeto + '" foi assinado com sucesso. Aqui está o PDF:\n' + linkPdf); } catch(e) {}
+    }
+    try { await enviarWhatsApp(WHATSAPP_FABIO, '📜 Termo de Residência assinado — "' + nomeProjeto + '" (' + nomeResponsavel + ')\nPDF: ' + linkPdf); } catch(e) {}
+
+    res.json({ ok: true, linkPdf });
+  } catch (err) {
+    console.error('[residencia] erro ao aceitar:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+// ===== FIM TERMO DE RESIDÊNCIA ARTÍSTICA =====
+
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
 async function buscarAprovacaoPorId(pageId) {
