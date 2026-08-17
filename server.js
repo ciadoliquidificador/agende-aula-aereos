@@ -1323,7 +1323,6 @@ const PROFESSORES_SUB = {
   ],
   'Acrobacia': [
     { nome: 'André', telefone: '5511981578744', turmas: ['Segunda 10h'] },
-    { nome: 'Renata', telefone: '5511987317741', turmas: ['Segunda 10h'] },
   ],
   'Circo Infantil': [
     { nome: 'Titzi', telefone: '5511951780877', turmas: ['Terça 18h', 'Quarta 9h30'] },
@@ -1390,7 +1389,6 @@ const POOL_SUBSTITUTOS_SUB = {
   'Circo Infantil': [
     { nome: 'Gustra', telefone: '5511988485740' },
     { nome: 'Guilherme', telefone: '5511989538880' },
-    { nome: 'Renata', telefone: '5511987317741' },
     { nome: 'André', telefone: '5511981578744' },
     { nome: 'Talita', telefone: '5511989142791' },
     { nome: 'Gabi', telefone: '5511961416621' },
@@ -2246,7 +2244,6 @@ const PROFESSORES_PORTAL = [
   { nome: 'Gustra', cpf: '45486626851', telefone: '5511988485740' },
   { nome: 'Guilherme', cpf: '', telefone: '5511989538880' },
   { nome: 'André', cpf: '36268818814', telefone: '5511981578744' },
-  { nome: 'Renata', cpf: '', telefone: '5511987317741' },
   { nome: 'Titzi', cpf: '30814279830', telefone: '5511951780877' },
   { nome: 'Giulia', cpf: '51310549826', telefone: '5512988222584' },
   { nome: 'Roberta', cpf: '21811238882', telefone: '5511971918173' },
@@ -3878,7 +3875,7 @@ function turmasDoProfessor(nome) {
   const encontradas = [];
   for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
     dados.turmas.forEach(t => {
-      const ehDoProfessor = t.professor === nome || (nome === 'Renata' && t.professor === 'André' && modalidade === 'Circo - Acrobacia');
+      const ehDoProfessor = t.professor === nome;
       if (ehDoProfessor) encontradas.push({ modalidade, ...t });
     });
   }
@@ -6314,7 +6311,7 @@ const WHATSAPP_CIA = '5511986899433';
 
 const PROFESSORES_PRESENCA = [
   {
-    nome: 'André / Renata',
+    nome: 'André',
     turmas: [
       { turma: 'Segunda 10h', dia: 'Segunda', horario: '10:00', modalidade: 'Circo - Acrobacia' },
     ],
