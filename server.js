@@ -1989,6 +1989,26 @@ app.get('/aluno/:cpf', async (req, res) => {
   }
 });
 
+async function buscarCapacidadeDaTurma(modalidade) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + CAPACIDADE_TURMAS_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { property: 'Modalidade', select: { equals: modalidade } },
+      page_size: 100,
+    }),
+  });
+  const d = await r.json();
+  const mapa = {};
+  (d.results || []).forEach(pagina => {
+    const p = pagina.properties;
+    const turmaNome = p['Título']?.title?.[0]?.plain_text || '';
+    const capacidade = p['Capacidade Regular']?.number;
+    if (turmaNome && capacidade != null) mapa[turmaNome] = capacidade;
+  });
+  return mapa;
+}
+
 app.get('/vagas-modalidade/:modalidade', async (req, res) => {
   const modalidade = decodeURIComponent(req.params.modalidade);
   const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
@@ -2013,9 +2033,11 @@ app.get('/vagas-modalidade/:modalidade', async (req, res) => {
       if (turma) ocupacaoPorTurma[turma] = (ocupacaoPorTurma[turma] || 0) + 1;
     });
 
+    const capacidadeReal = await buscarCapacidadeDaTurma(modalidade);
     const turmas = dadosModalidade.turmas.map(t => {
       const ocupadas = ocupacaoPorTurma[t.nome] || 0;
-      return { ...t, ocupadas, vagasRestantes: Math.max(0, t.limite - ocupadas) };
+      const limiteReal = capacidadeReal[t.nome] ?? t.limite;
+      return { ...t, limite: limiteReal, ocupadas, vagasRestantes: Math.max(0, limiteReal - ocupadas) };
     });
 
     res.json({ ok: true, modalidade, turmas, precos: dadosModalidade.precos, permiteFrequenciaDupla: dadosModalidade.permiteFrequenciaDupla });
@@ -3885,7 +3907,16 @@ app.get('/portal/turmas/:nome', async (req, res) => {
         }),
       });
       const d = await r.json();
-      resultado.push({ modalidade: t.modalidade, turma: t.nome, dia: t.dia, horario: t.horario, alunasAtivas: (d.results || []).length, limite: t.limite });
+      const alunos = (d.results || []).map(pagina => {
+        const pp = pagina.properties;
+        return {
+          nome: pp['Nome']?.title?.[0]?.plain_text || '',
+          telefone: (pp['Contato']?.phone_number || '').replace(/\D/g, ''),
+        };
+      }).filter(a => a.nome);
+      const capacidadeReal = await buscarCapacidadeDaTurma(t.modalidade);
+      const limiteReal = capacidadeReal[t.nome] ?? t.limite;
+      resultado.push({ modalidade: t.modalidade, turma: t.nome, dia: t.dia, horario: t.horario, alunasAtivas: alunos.length, limite: limiteReal, alunos });
     }
     res.json({ ok: true, turmas: resultado });
   } catch (err) {
