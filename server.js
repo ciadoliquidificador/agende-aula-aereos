@@ -1354,14 +1354,12 @@ async function agendarLembreteSub(numeroSubstituto, nomeSubstituto, professorFal
     const enviarLembreteEm = new Date(aulaDate.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const primeiroNome = (nomeSubstituto || '').split(' ')[0];
     const dataFmt = data.split('-').reverse().join('/');
-    const msg = 'Olá, ' + primeiroNome + '! 🔔\n\nLembrete: amanhã você vai substituir ' + professorFaltante + ' na turma de ' + turma + ' (' + modalidade + ')!\n\n📅 ' + dataFmt + '\n🏠 Local: Espaço Liquidificador\n\nQualquer dúvida, chama a gente!';
+    const msg = 'Olá, ' + primeiroNome + '! 🔔\n\nLembrete: amanhã você vai substituir ' + professorFaltante + ' na turma de ' + turma + ' (' + modalidade + ')!\n\n📅 ' + dataFmt + '\n🏠 Local: Espaço Liquidificador\n💰 Valor: R$ 80,00 por aula, pago pelo ' + professorFaltante + ' direto pra você.\n\nQualquer dúvida, chama a gente!';
 
-    const contactId = await getOrCreateContactId(numeroSubstituto);
-    if (!contactId) return;
-    await fetch(DIGISAC_BASE + '/messages', {
-      method: 'POST', headers: digisacHeaders,
-      body: JSON.stringify({ text: msg, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot', scheduledAt: enviarLembreteEm }),
-    });
+    // Usa a fila de mensagens (Notion + processamento programado) em vez do scheduledAt
+    // direto do Digisac, que se mostrou nao confiavel pra esse tipo de agendamento
+    // (disparava na hora em vez de esperar o horario certo).
+    await agendarMensagemFila(numeroSubstituto, msg, enviarLembreteEm);
   } catch (e) {
     console.error('[sub] erro ao agendar lembrete 24h:', e.message);
   }
@@ -1451,6 +1449,21 @@ app.post('/sub-resolvido', async (req, res) => {
       const numLimpoSub = whatsappSubstituto.replace(/\D/g, '');
       const numBrSub = numLimpoSub.length === 11 ? '55' + numLimpoSub : numLimpoSub;
       agendarLembreteSub(numBrSub, substituto, professorFaltante, turma, modalidade, data).catch(()=>{});
+
+      // Confirmação imediata pro substituto, já com o valor
+      const dataFmtSub = data.split('-').reverse().join('/');
+      const primeiroNomeSub = (substituto || '').split(' ')[0];
+      const msgConfirmaSub = 'Olá, ' + primeiroNomeSub + '! ✅\n\nVocê foi combinado(a) como substituto(a) de ' + professorFaltante + ' na turma de ' + turma + ' (' + modalidade + ') no dia ' + dataFmtSub + '.\n\n💰 Valor: R$ 80,00 por aula, pago pelo(a) ' + professorFaltante + ' direto pra você.';
+      try { await enviarWhatsApp(numBrSub, msgConfirmaSub); } catch(e) {}
+
+      // Lembrete pro titular de que ele deve pagar o substituto
+      try {
+        const telTitular = await buscarTelefoneProfessorPorNome(professorFaltante);
+        if (telTitular) {
+          const msgTitular = 'Combinado! ✅\n\nSua substituição com ' + substituto + ' na turma de ' + turma + ' (' + modalidade + ') no dia ' + dataFmtSub + ' foi registrada.\n\n💰 Lembrete: o valor de R$ 80,00 por aula deve ser pago por você diretamente ao(à) ' + substituto + '.';
+          await enviarWhatsApp(telTitular, msgTitular);
+        }
+      } catch (e) {}
     }
 
     const dataFmt = data.split('-').reverse().join('/');
@@ -1489,7 +1502,7 @@ app.post('/sub-broadcast', async (req, res) => {
 
     const broadcastId = 'SUB-' + Date.now();
     const dataFmt = data.split('-').reverse().join('/');
-    const msg = 'Olá! 🎪\n\n' + professorFaltante + ' vai faltar na turma de ' + turma + ' (' + modalidade + ') no dia ' + dataFmt + '.\n\nVocê pode cobrir essa aula?\n\nResponda *SIM* ou *NÃO*.';
+    const msg = 'Olá! 🎪\n\n' + professorFaltante + ' vai faltar na turma de ' + turma + ' (' + modalidade + ') no dia ' + dataFmt + '.\n\nVocê pode cobrir essa aula?\n\n💰 Valor: R$ 80,00 por aula, pago pelo(a) ' + professorFaltante + ' direto pra você.\n\nResponda *SIM* ou *NÃO*.';
 
     SUBSTITUICOES_BROADCAST[broadcastId] = {
       professorFaltante, modalidade, turma, data, dataFmt, notionPageId: pageId,
@@ -6781,9 +6794,18 @@ app.post('/webhook-digisac', async (req, res) => {
             status: 'Resolvido - Confirmado por Broadcast', whatsappSubstituto: numero,
           });
         } catch(e) {}
-        await enviarWhatsApp(numero, 'Show, muito obrigado(a)! ✅\n\nVocê está confirmado(a) na turma de ' + broadcast.turma + ' no dia ' + broadcast.dataFmt + '.');
+        await enviarWhatsApp(numero, 'Show, muito obrigado(a)! ✅\n\nVocê está confirmado(a) na turma de ' + broadcast.turma + ' no dia ' + broadcast.dataFmt + '.\n\n💰 Valor: R$ 80,00 por aula, pago pelo(a) ' + broadcast.professorFaltante + ' direto pra você.');
         const msgFabio = '✅ *Substituição resolvida (broadcast)*\n\nProfessor: ' + broadcast.professorFaltante + '\nTurma: ' + broadcast.turma + ' (' + broadcast.modalidade + ')\nData: ' + broadcast.dataFmt + '\nSubstituto: ' + numero;
         try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch(e) {}
+
+        // Avisa o professor titular quem vai cobrir, e lembra do pagamento
+        try {
+          const telTitular = await buscarTelefoneProfessorPorNome(broadcast.professorFaltante);
+          if (telTitular) {
+            const msgTitular = 'Boa notícia! ✅\n\nSua substituição na turma de ' + broadcast.turma + ' (' + broadcast.modalidade + ') no dia ' + broadcast.dataFmt + ' foi resolvida.\n\n💰 Lembrete: o valor de R$ 80,00 por aula deve ser pago por você diretamente ao(à) professor(a) substituto(a).';
+            await enviarWhatsApp(telTitular, msgTitular);
+          }
+        } catch (e) {}
         const nomeSubstitutoConfirmado = (PROFESSORES_SUB[broadcast.modalidade] || []).find(p => p.telefone === numero)?.nome || 'Professor(a)';
         agendarLembreteSub(numero, nomeSubstitutoConfirmado, broadcast.professorFaltante, broadcast.turma, broadcast.modalidade, broadcast.data).catch(()=>{});
         broadcast.telefonesConsultados.forEach(tel => {
