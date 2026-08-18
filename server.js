@@ -1914,21 +1914,33 @@ function diasNoIntervaloFerias(inicioISO, fimISO) {
   return Math.round((fim.getTime() - inicio.getTime()) / 86400000) + 1;
 }
 
-// Janela do ciclo atual do plano (inicio/fim) que contem dataReferencia, calculada a
-// partir da data de inicio da matricula e da duracao do plano (renovacoes sucessivas).
-function calcularCicloAtualFerias(dataInicioISO, plano, dataReferencia) {
+// Janela do ciclo atual do plano (inicio/fim) que contem dataReferencia. Caminha ciclo a
+// ciclo a partir da data de inicio da matricula; cada ciclo tem seu fim nominal (inicio +
+// duracao do plano) estendido pelos dias de ferias tirados DENTRO daquele ciclo, e o ciclo
+// seguinte comeca exatamente onde o anterior terminou (ja com a extensao). Assim o calculo
+// acompanha a extensao real do plano, sem depender do campo "Vencimento do Contrato".
+function calcularCicloAtualFerias(dataInicioISO, plano, periodosFerias, dataReferencia) {
   const duracao = DURACAO_FIDELIDADE_MESES[plano] || 1;
-  const inicioMatricula = new Date(dataInicioISO);
+  const periodos = periodosFerias || [];
   const ref = dataReferencia || new Date();
-  let cursor = new Date(inicioMatricula.getTime());
-  let proximo = new Date(cursor.getTime());
-  proximo.setMonth(proximo.getMonth() + duracao);
-  while (proximo <= ref) {
-    cursor = proximo;
-    proximo = new Date(cursor.getTime());
-    proximo.setMonth(proximo.getMonth() + duracao);
+  let cursor = new Date(dataInicioISO);
+  while (true) {
+    const nominalFim = new Date(cursor.getTime());
+    nominalFim.setMonth(nominalFim.getMonth() + duracao);
+    const diasFeriasNesteCiclo = periodos.reduce((total, p) => {
+      const inicioPeriodo = new Date(p.inicio);
+      if (inicioPeriodo >= cursor && inicioPeriodo < nominalFim) {
+        return total + diasNoIntervaloFerias(p.inicio, p.fim);
+      }
+      return total;
+    }, 0);
+    const fimReal = new Date(nominalFim.getTime());
+    fimReal.setDate(fimReal.getDate() + diasFeriasNesteCiclo);
+    if (fimReal > ref) {
+      return { inicioCiclo: cursor, fimCiclo: fimReal };
+    }
+    cursor = fimReal;
   }
-  return { inicioCiclo: cursor, fimCiclo: proximo };
 }
 
 // Extrai os periodos de ferias ja registrados no texto de Observacoes da matricula
@@ -5987,8 +5999,8 @@ app.get('/portal-aluna/simular-ferias/:cpf', async (req, res) => {
           motivo: !m.dataInicio ? 'Data de início da matrícula não encontrada.' : 'Plano ' + m.plano + ' não possui direito a férias.',
         };
       }
-      const ciclo = calcularCicloAtualFerias(m.dataInicio, m.plano);
       const periodos = extrairPeriodosFerias(m.observacoes);
+      const ciclo = calcularCicloAtualFerias(m.dataInicio, m.plano, periodos);
       const diasUsados = diasFeriasUsadosNoCiclo(periodos, ciclo.inicioCiclo, ciclo.fimCiclo);
       const diasDisponiveis = Math.max(0, diasPorCiclo - diasUsados);
       return {
@@ -6055,7 +6067,7 @@ app.post('/portal-aluna/solicitar-ferias', async (req, res) => {
     }
 
     const diasSolicitados = diasNoIntervaloFerias(dataInicioFerias, dataFimFerias);
-    const ciclo = calcularCicloAtualFerias(alvo.dataInicio, alvo.plano, inicioFerias);
+    const ciclo = calcularCicloAtualFerias(alvo.dataInicio, alvo.plano, periodosExistentes, inicioFerias);
     const diasUsados = diasFeriasUsadosNoCiclo(periodosExistentes, ciclo.inicioCiclo, ciclo.fimCiclo);
     const diasDisponiveis = diasPorCiclo - diasUsados;
 
