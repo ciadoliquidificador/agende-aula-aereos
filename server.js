@@ -1893,8 +1893,13 @@ function calcularVencimentoContrato(dataInicioISO, plano) {
 }
 
 // Multa de cancelamento (Clausula Sexta, item 6.3): so incide em planos semestral/anual, e so antes de
-// cumprida a fidelidade. multa = (valor mensal da mesma frequencia - valor do plano contratado) x meses cursados.
+// cumprida a fidelidade. Formula (regra final, substitui a antiga baseada em desconto perdido):
+//   multa = minimo( valor_plano x meses_restantes x 0,30 ; valor_plano x 2 )
+// meses_restantes = meses que faltam para completar a fidelidade, contados a partir do FIM do aviso
+// previo de 30 dias (nao da data de hoje) — Clausula 6.3.1. Teto: 2 mensalidades do plano contratado.
 // Reutilizavel: chamada tanto pelo Portal Aluna (simular/solicitar cancelamento) quanto, futuramente, pelo Portal Admin.
+const AVISO_PREVIO_DIAS_CANCELAMENTO = 30;
+
 function calcularMultaCancelamento(modalidade, frequencia, plano, dataInicio, dataReferencia) {
   const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
   if (!dadosModalidade) return { ok: false, erro: 'Modalidade inválida.' };
@@ -1904,27 +1909,33 @@ function calcularMultaCancelamento(modalidade, frequencia, plano, dataInicio, da
   if (valorPlanoContratado === undefined) return { ok: false, erro: 'Plano inválido para esta frequência/modalidade.' };
 
   const duracaoFidelidadeMeses = DURACAO_FIDELIDADE_MESES[plano] || 1;
-  const mesesCursados = Math.min(contarMesesCursados(dataInicio, dataReferencia), duracaoFidelidadeMeses);
+
+  // Fim do aviso previo: referencia (hoje, por padrao) + 30 dias. E a partir dessa data que se contam
+  // os meses restantes de fidelidade (Clausula 6.3.1).
+  const refBase = dataReferencia || new Date();
+  const dataFimAvisoPrevio = new Date(refBase.getTime());
+  dataFimAvisoPrevio.setDate(dataFimAvisoPrevio.getDate() + AVISO_PREVIO_DIAS_CANCELAMENTO);
+
+  const mesesCursados = Math.min(contarMesesCursados(dataInicio, dataFimAvisoPrevio), duracaoFidelidadeMeses);
+  const mesesRestantes = Math.max(0, duracaoFidelidadeMeses - mesesCursados);
 
   if (plano === 'Mensal') {
     return {
-      ok: true, multa: 0, mesesCursados, duracaoFidelidadeMeses, fidelidadeCumprida: true,
-      valorMensalMesmaFrequencia: valorPlanoContratado, valorPlanoContratado,
+      ok: true, multa: 0, mesesCursados, mesesRestantes: 0, duracaoFidelidadeMeses, fidelidadeCumprida: true,
+      valorPlanoContratado, tetoAplicado: false,
       motivo: 'Plano mensal não possui período de fidelidade nem multa de cancelamento.',
     };
   }
 
-  const valorMensalMesmaFrequencia = precoTabela['Mensal'];
-  if (valorMensalMesmaFrequencia === undefined) {
-    return { ok: false, erro: 'Não há preço do plano mensal cadastrado para esta frequência/modalidade — não é possível calcular a multa.' };
-  }
-
-  const fidelidadeCumprida = mesesCursados >= duracaoFidelidadeMeses;
-  const multa = fidelidadeCumprida ? 0 : Math.max(0, Math.round((valorMensalMesmaFrequencia - valorPlanoContratado) * mesesCursados * 100) / 100);
+  const fidelidadeCumprida = mesesRestantes <= 0;
+  const multaSemTeto = valorPlanoContratado * mesesRestantes * 0.30;
+  const tetoMulta = valorPlanoContratado * 2;
+  const tetoAplicado = !fidelidadeCumprida && multaSemTeto > tetoMulta;
+  const multa = fidelidadeCumprida ? 0 : Math.round(Math.min(multaSemTeto, tetoMulta) * 100) / 100;
 
   return {
-    ok: true, multa, mesesCursados, duracaoFidelidadeMeses, fidelidadeCumprida,
-    valorMensalMesmaFrequencia, valorPlanoContratado,
+    ok: true, multa, mesesCursados, mesesRestantes, duracaoFidelidadeMeses, fidelidadeCumprida,
+    valorPlanoContratado, tetoAplicado,
     motivo: fidelidadeCumprida ? 'Período de fidelidade já cumprido — cancelamento sem multa.' : null,
   };
 }
