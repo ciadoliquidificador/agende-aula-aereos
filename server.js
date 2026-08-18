@@ -2352,6 +2352,190 @@ app.post('/matricula/inscrever', async (req, res) => {
 });
 
 // ============================================================
+// MIGRAÇÃO DE CADASTRO — alunas com contrato antigo, ja ativas no sistema
+// ============================================================
+// Completa os dados que faltam (RG, endereco, saude, emergencia, consentimentos,
+// aceite do Anexo I) e gera o PDF assinado, SEM criar pagina nova e SEM checar vaga
+// (a aluna ja esta Ativa e ja ocupa a vaga). Nao mexe em "Data/Hora Aceite Contrato"
+// nem em plano/turma/valor ja existentes — so completa o que falta.
+app.post('/portal-aluna/completar-migracao', async (req, res) => {
+  const {
+    cpf, sessionToken, modalidade, turma,
+    rg, endereco, email, dataNascimento, contatoEmergenciaNome, contatoEmergenciaTelefone,
+    possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos,
+    condicaoSaude, qualCondicao, cirurgiasLesoes, detalhesCirurgias, liberadaAtividadeFisica,
+    nomeResponsavel, rgResponsavel, cpfResponsavel, parentesco, autorizadosRetirar,
+    consentimentoDadosPessoais, consentimentoDadosSaude, consentimentoUsoImagem,
+    anexoAceites, assinaturaDigitada, dispositivo,
+  } = req.body;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+
+  const cpfLimpoMig = (cpf || '').replace(/\D/g, '');
+  const dadosSessaoMig = verificarSessao(sessionToken);
+  if (!dadosSessaoMig) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoMig.cpf !== cpfLimpoMig) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
+
+  if (!modalidade || !turma || !contatoEmergenciaNome || !contatoEmergenciaTelefone ||
+      !endereco || !email || !dataNascimento || !assinaturaDigitada ||
+      !consentimentoDadosPessoais || !consentimentoDadosSaude) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  if (!Array.isArray(anexoAceites) || anexoAceites.length === 0 || anexoAceites.some(v => !v)) {
+    return res.status(400).json({ ok: false, erro: 'Você precisa marcar todos os itens do Anexo I (Termo de Responsabilidade).' });
+  }
+
+  const ehInfantil = modalidade === 'Circo Infantil';
+  if (ehInfantil && (!nomeResponsavel || !rgResponsavel || !cpfResponsavel)) {
+    return res.status(400).json({ ok: false, erro: 'Preencha os dados do responsável legal.' });
+  }
+  if (!ehInfantil && !rg) {
+    return res.status(400).json({ ok: false, erro: 'Preencha o RG.' });
+  }
+
+  try {
+    const matriculasMig = await buscarMatriculasPorCpf(cpfLimpoMig);
+    const alvoMig = localizarMatricula(matriculasMig, modalidade, turma)[0] || null;
+    if (!alvoMig) return res.status(404).json({ ok: false, erro: 'Matrícula não encontrada.' });
+
+    const dadosModalidadeMig = MODALIDADES_MATRICULA[modalidade];
+    if (!dadosModalidadeMig) return res.status(400).json({ ok: false, erro: 'Modalidade inválida.' });
+
+    const precoTabelaMig = dadosModalidadeMig.precos[alvoMig.frequencia];
+    const valorTabela = precoTabelaMig ? precoTabelaMig[alvoMig.plano] : undefined;
+    const valorFinal = (alvoMig.valor && alvoMig.valor > 0) ? alvoMig.valor : valorTabela;
+    if (valorFinal === undefined) {
+      return res.status(400).json({ ok: false, erro: 'Não foi possível determinar o valor do plano — confira Plano/Frequência no Notion.' });
+    }
+
+    const ehMensal = alvoMig.plano === 'Mensal';
+    let dataInicioReal = alvoMig.dataInicio;
+
+    if (ehMensal) {
+      dataInicioReal = dataInicioReal || new Date().toISOString();
+    } else if (!dataInicioReal) {
+      return res.status(400).json({
+        ok: false,
+        erro: 'Aguarde o Fábio preencher a data de início do seu contrato antes de continuar.',
+      });
+    }
+
+    const agoraISO = new Date().toISOString();
+    const dataValidadeFmt = new Date(dataInicioReal).toLocaleDateString('pt-BR');
+    const dataNascCriancaFmt = ehInfantil ? new Date(dataNascimento).toLocaleDateString('pt-BR') : '';
+    const nomeParaContrato = alvoMig.nome;
+
+    const dadosContratoBaseMig = {
+      modalidade, plano: alvoMig.plano, frequencia: alvoMig.frequencia, turmas: [turma], valorMensal: valorFinal,
+      nome: nomeParaContrato, rg, cpf: cpfLimpoMig, endereco,
+      nomeResponsavel, rgResponsavel, cpfResponsavel,
+      nomeCrianca: ehInfantil ? nomeParaContrato : '', dataNascCrianca: dataNascCriancaFmt,
+      dataValidade: dataValidadeFmt,
+    };
+    const textoCorpoMig = montarTextoContratoMatricula(dadosContratoBaseMig);
+    const anexoMig = montarAnexoIItens(dadosContratoBaseMig);
+    const anexoTextoNumeradoMig = anexoMig.itens.map((item, i) => (i + 1) + '. ' + item).join('\n');
+    const textoContratoMig = textoCorpoMig + '\n\nANEXO I — TERMO DE RESPONSABILIDADE E DECLARAÇÃO DE APTIDÃO\n\n' + anexoMig.cabecalho + '\n\n' + anexoTextoNumeradoMig;
+    const crypto = require('crypto');
+    const versaoCalculadaMig = crypto.createHash('sha256').update(textoContratoMig).digest('hex').slice(0, 16);
+
+    const anexoTrilhaAuditoriaMig = anexoMig.itens.map((item, i) =>
+      (i + 1) + '. ' + item +
+      '\n   [item ' + (i + 1) + '/' + anexoMig.itens.length + ' | aceito=' + (anexoAceites[i] ? 'SIM' : 'NÃO') +
+      ' | versão=' + versaoCalculadaMig + ' | ' + agoraISO + ' | IP ' + ip + ']'
+    ).join('\n');
+
+    let linkContratoPdfMig = '';
+    try {
+      const pdfBufferMig = await gerarPdfContratoMatricula(textoContratoMig, {
+        assinaturaDigitada, dataHoraISO: agoraISO, ip, dispositivo: dispositivo || '', versao: versaoCalculadaMig,
+      });
+      const msTokenMig = await getMicrosoftToken();
+      const nomePastaContratoMig = 'Matriculas-' + slugify(modalidade) + '-' + slugify(nomeParaContrato);
+      const folderIdMig = await criarOuObterSubpasta(msTokenMig, nomePastaContratoMig);
+      const pdfUploadedMig = await uploadBufferOneDrive(msTokenMig, folderIdMig, pdfBufferMig, 'contrato-migracao-' + Date.now() + '.pdf');
+      linkContratoPdfMig = await criarLinkCompartilhamento(msTokenMig, pdfUploadedMig.id);
+    } catch (e) {
+      console.error('[completar-migracao] erro ao gerar/subir PDF do contrato:', e.message);
+    }
+
+    const propsMigracao = {
+      'RG': { rich_text: [{ text: { content: rg || '' } }] },
+      'Endereço': { rich_text: [{ text: { content: endereco } }] },
+      'Email': { email: email },
+      'Data de Nascimento': { date: { start: dataNascimento } },
+      'Contato de Emergência': { rich_text: [{ text: { content: contatoEmergenciaNome } }] },
+      'Tel. Emergência': { phone_number: contatoEmergenciaTelefone },
+      'Possui alergias?': { select: { name: possuiAlergias || 'Não' } },
+      'Quais alergias?': { rich_text: [{ text: { content: quaisAlergias || '' } }] },
+      'Usa medicamentos?': { select: { name: usaMedicamentos || 'Não' } },
+      'Quais medicamentos?': { rich_text: [{ text: { content: quaisMedicamentos || '' } }] },
+      'Condição de saúde?': { select: { name: condicaoSaude || 'Não' } },
+      'Qual condição?': { rich_text: [{ text: { content: qualCondicao || '' } }] },
+      'Cirurgias ou lesões?': { select: { name: cirurgiasLesoes || 'Não' } },
+      'Detalhes cirurgias/lesões': { rich_text: [{ text: { content: detalhesCirurgias || '' } }] },
+      'Liberada p/ atividade física?': { select: { name: liberadaAtividadeFisica || 'Sim' } },
+      'Nome do Responsável': { rich_text: [{ text: { content: ehInfantil ? nomeResponsavel : '' } }] },
+      'RG do Responsável': { rich_text: [{ text: { content: ehInfantil ? rgResponsavel : '' } }] },
+      'Parentesco': { rich_text: [{ text: { content: ehInfantil ? (parentesco || '') : '' } }] },
+      'Autorizados a Retirar': { rich_text: [{ text: { content: ehInfantil ? (autorizadosRetirar || '') : '' } }] },
+      'Consentimento Dados Pessoais': { checkbox: !!consentimentoDadosPessoais },
+      'Consentimento Dados de Saúde': { checkbox: !!consentimentoDadosSaude },
+      'Consentimento Uso de Imagem': { checkbox: !!consentimentoUsoImagem },
+      'IP Aceite': { rich_text: [{ text: { content: ip } }] },
+      'User-Agent Aceite': { rich_text: [{ text: { content: dispositivo || '' } }] },
+      'Versão do Contrato': { rich_text: [{ text: { content: versaoCalculadaMig } }] },
+      'Link do Contrato PDF': { url: linkContratoPdfMig || null },
+      'Anexo I - Itens Aceitos': { rich_text: paraRichTextEmBlocos(anexoTrilhaAuditoriaMig) },
+      'Data Aceite Migracao': { date: { start: agoraISO } },
+    };
+    if (!alvoMig.valor || alvoMig.valor <= 0) {
+      propsMigracao['Valor'] = { number: valorFinal };
+    }
+    if (!alvoMig.vencimentoContrato) {
+      propsMigracao['Vencimento do Contrato'] = { date: { start: calcularVencimentoContrato(dataInicioReal, alvoMig.plano) } };
+    }
+    if (ehMensal && !alvoMig.dataInicio) {
+      propsMigracao['Data/Hora Aceite Contrato'] = { date: { start: dataInicioReal } };
+    }
+
+    const rPatchMig = await fetch('https://api.notion.com/v1/pages/' + alvoMig.pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: propsMigracao }),
+    });
+    if (!rPatchMig.ok) {
+      const eBodyMig = await rPatchMig.text();
+      console.error('[completar-migracao] Notion recusou atualizar matricula:', eBodyMig);
+      return res.status(500).json({ ok: false, erro: 'Notion recusou gravar os dados — ver logs.' });
+    }
+
+    try {
+      await enviarWhatsApp(
+        WHATSAPP_FABIO,
+        '📋 *Cadastro migrado* — ' + modalidade + '\nAluna: ' + nomeParaContrato +
+        '\nTurma: ' + turma + '\nCadastro completo e contrato assinado digitalmente.'
+      );
+    } catch (eNotifMig) {
+      console.error('[completar-migracao] erro ao notificar Fábio:', eNotifMig.message);
+    }
+    if (alvoMig.contato) {
+      const numLimpoMig = alvoMig.contato.replace(/\D/g, '');
+      const numBrMig = numLimpoMig.length === 11 ? '55' + numLimpoMig : numLimpoMig;
+      if (numBrMig) {
+        try {
+          await enviarWhatsApp(numBrMig, 'Olá, ' + nomeParaContrato.split(' ')[0] + '! ✅\n\nSeu cadastro foi atualizado com sucesso e seu contrato digital foi gerado. Obrigado por completar as informações!');
+        } catch (e) {}
+      }
+    }
+
+    res.json({ ok: true, linkContratoPdf: linkContratoPdfMig });
+  } catch (err) {
+    console.error('[portal-aluna/completar-migracao] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// ============================================================
 // PORTAL PROFESSORES — Login por CPF, Minhas Turmas, Feriados
 // ============================================================
 const DECISOES_FERIADO_DB = 'ef0e4140-26a0-4829-bf68-7a24e4ba7618';
