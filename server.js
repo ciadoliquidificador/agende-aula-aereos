@@ -1892,6 +1892,88 @@ function calcularVencimentoContrato(dataInicioISO, plano) {
   return inicio.toISOString();
 }
 
+// ---------------------------------------------------------------------------
+// FERIAS / SUSPENSAO DO PLANO (Portal Aluna)
+// ---------------------------------------------------------------------------
+// Dias de ferias por ciclo do plano (Clausula Segunda). Mensal nao tem direito.
+const FERIAS_DIAS_POR_PLANO = { Mensal: 0, Semestral: 15, Anual: 30 };
+// Antecedencia minima, em dias, para solicitar um periodo de ferias.
+const FERIAS_AVISO_MINIMO_DIAS = 7;
+
+// Zera a hora de uma data, para comparar apenas dia/mes/ano.
+function apenasData(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+// Quantidade de dias corridos entre duas datas ISO (inclusive nas duas pontas).
+function diasNoIntervaloFerias(inicioISO, fimISO) {
+  const inicio = apenasData(inicioISO);
+  const fim = apenasData(fimISO);
+  return Math.round((fim.getTime() - inicio.getTime()) / 86400000) + 1;
+}
+
+// Janela do ciclo atual do plano (inicio/fim) que contem dataReferencia, calculada a
+// partir da data de inicio da matricula e da duracao do plano (renovacoes sucessivas).
+function calcularCicloAtualFerias(dataInicioISO, plano, dataReferencia) {
+  const duracao = DURACAO_FIDELIDADE_MESES[plano] || 1;
+  const inicioMatricula = new Date(dataInicioISO);
+  const ref = dataReferencia || new Date();
+  let cursor = new Date(inicioMatricula.getTime());
+  let proximo = new Date(cursor.getTime());
+  proximo.setMonth(proximo.getMonth() + duracao);
+  while (proximo <= ref) {
+    cursor = proximo;
+    proximo = new Date(cursor.getTime());
+    proximo.setMonth(proximo.getMonth() + duracao);
+  }
+  return { inicioCiclo: cursor, fimCiclo: proximo };
+}
+
+// Extrai os periodos de ferias ja registrados no texto de Observacoes da matricula
+// (linhas no formato "FERIAS: AAAA-MM-DD a AAAA-MM-DD (...)").
+function extrairPeriodosFerias(observacoes) {
+  if (!observacoes) return [];
+  const regex = /FERIAS:\s*(\d{4}-\d{2}-\d{2})\s*a\s*(\d{4}-\d{2}-\d{2})/g;
+  const periodos = [];
+  let m;
+  while ((m = regex.exec(observacoes)) !== null) {
+    periodos.push({ inicio: m[1], fim: m[2] });
+  }
+  return periodos;
+}
+
+// Soma os dias dos periodos de ferias cujo inicio cai dentro do ciclo informado.
+function diasFeriasUsadosNoCiclo(periodos, inicioCiclo, fimCiclo) {
+  return periodos.reduce((total, p) => {
+    const inicioPeriodo = new Date(p.inicio);
+    if (inicioPeriodo >= inicioCiclo && inicioPeriodo < fimCiclo) {
+      return total + diasNoIntervaloFerias(p.inicio, p.fim);
+    }
+    return total;
+  }, 0);
+}
+
+// Verifica se um novo periodo [inicio,fim] se sobrepoe a algum periodo ja registrado.
+function periodoFeriasSobrepoe(periodos, inicioISO, fimISO) {
+  const novoInicio = apenasData(inicioISO);
+  const novoFim = apenasData(fimISO);
+  return periodos.some(p => {
+    const pInicio = apenasData(p.inicio);
+    const pFim = apenasData(p.fim);
+    return novoInicio <= pFim && pInicio <= novoFim;
+  });
+}
+
+// Verifica se a data informada (AAAA-MM-DD) cai dentro de algum periodo de ferias.
+function dataEstaEmFerias(periodos, dataISO) {
+  if (!dataISO) return false;
+  const alvo = apenasData(dataISO);
+  return periodos.some(p => alvo >= apenasData(p.inicio) && alvo <= apenasData(p.fim));
+}
+
+
 // Multa de cancelamento (Clausula Sexta, item 6.3): so incide em planos semestral/anual, e so antes de
 // cumprida a fidelidade. Formula (regra final, substitui a antiga baseada em desconto perdido):
 //   multa = minimo( valor_plano x meses_restantes x 0,30 ; valor_plano x 2 )
@@ -5881,6 +5963,160 @@ app.get('/portal-aluna/simular-cancelamento/:cpf', async (req, res) => {
   }
 });
 
+// GET /portal-aluna/simular-ferias/:cpf?modalidade=...&turma=...
+// Retorna, por matricula, quantos dias de ferias a aluna ainda tem disponiveis no ciclo atual.
+app.get('/portal-aluna/simular-ferias/:cpf', async (req, res) => {
+  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  const { modalidade, turma } = req.query;
+  const dadosSessaoAlunaSF = verificarSessao(req.query.sessionToken);
+  if (!dadosSessaoAlunaSF) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAlunaSF.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
+  try {
+    const matriculas = await buscarMatriculasPorCpf(cpfLimpo);
+    if (matriculas.length === 0) return res.json({ ok: false, erro: 'Cadastro não encontrado ou sem matrícula ativa.' });
+
+    const alvos = modalidade ? localizarMatricula(matriculas, modalidade, turma) : matriculas;
+    if (alvos.length === 0) return res.json({ ok: false, erro: 'Matrícula não encontrada para os filtros informados.' });
+
+    const simulacoes = alvos.map(m => {
+      const diasPorCiclo = FERIAS_DIAS_POR_PLANO[m.plano] || 0;
+      if (diasPorCiclo === 0 || !m.dataInicio) {
+        return {
+          modalidade: m.modalidade, turma: m.turma, plano: m.plano,
+          diasPorCiclo: 0, diasUsados: 0, diasDisponiveis: 0,
+          motivo: !m.dataInicio ? 'Data de início da matrícula não encontrada.' : 'Plano ' + m.plano + ' não possui direito a férias.',
+        };
+      }
+      const ciclo = calcularCicloAtualFerias(m.dataInicio, m.plano);
+      const periodos = extrairPeriodosFerias(m.observacoes);
+      const diasUsados = diasFeriasUsadosNoCiclo(periodos, ciclo.inicioCiclo, ciclo.fimCiclo);
+      const diasDisponiveis = Math.max(0, diasPorCiclo - diasUsados);
+      return {
+        modalidade: m.modalidade, turma: m.turma, plano: m.plano,
+        diasPorCiclo, diasUsados, diasDisponiveis,
+        inicioCiclo: ciclo.inicioCiclo.toISOString(), fimCiclo: ciclo.fimCiclo.toISOString(),
+        avisoMinimoDias: FERIAS_AVISO_MINIMO_DIAS,
+        motivo: null,
+      };
+    });
+
+    res.json({ ok: true, simulacoes });
+  } catch (err) {
+    console.error('[portal-aluna/simular-ferias] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// POST /portal-aluna/solicitar-ferias
+// Registra um periodo de ferias, prorroga o Vencimento do Contrato automaticamente e
+// notifica o Fabio. Nao depende de aprovacao formal (e um direito ja previsto em contrato).
+app.post('/portal-aluna/solicitar-ferias', async (req, res) => {
+  const { cpf, nome, contato, modalidade, turma, dataInicioFerias, dataFimFerias, sessionToken } = req.body;
+  if (!cpf || !modalidade || !dataInicioFerias || !dataFimFerias) {
+    return res.status(400).json({ ok: false, erro: 'Preencha todos os campos obrigatórios.' });
+  }
+  const cpfLimpoSF = (cpf || '').replace(/\D/g, '');
+  const dadosSessaoAlunaSF2 = verificarSessao(sessionToken);
+  if (!dadosSessaoAlunaSF2) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAlunaSF2.cpf !== cpfLimpoSF) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
+
+  try {
+    const inicioFerias = new Date(dataInicioFerias);
+    const fimFerias = new Date(dataFimFerias);
+    if (isNaN(inicioFerias.getTime()) || isNaN(fimFerias.getTime())) {
+      return res.status(400).json({ ok: false, erro: 'Datas inválidas.' });
+    }
+    if (fimFerias < inicioFerias) {
+      return res.status(400).json({ ok: false, erro: 'A data final não pode ser anterior à data inicial.' });
+    }
+
+    const hojeMaisAviso = apenasData(new Date());
+    hojeMaisAviso.setDate(hojeMaisAviso.getDate() + FERIAS_AVISO_MINIMO_DIAS);
+    if (apenasData(inicioFerias) < hojeMaisAviso) {
+      return res.status(400).json({
+        ok: false,
+        erro: 'As férias precisam ser solicitadas com pelo menos ' + FERIAS_AVISO_MINIMO_DIAS + ' dias de antecedência.',
+      });
+    }
+
+    const matriculas = await buscarMatriculasPorCpf(cpfLimpoSF);
+    const alvo = localizarMatricula(matriculas, modalidade, turma)[0] || null;
+    if (!alvo) return res.status(404).json({ ok: false, erro: 'Matrícula não encontrada.' });
+    if (!alvo.dataInicio) return res.status(400).json({ ok: false, erro: 'Data de início da matrícula não encontrada — fale com a gente.' });
+
+    const diasPorCiclo = FERIAS_DIAS_POR_PLANO[alvo.plano] || 0;
+    if (diasPorCiclo === 0) {
+      return res.status(400).json({ ok: false, erro: 'Plano ' + alvo.plano + ' não possui direito a férias.' });
+    }
+
+    const periodosExistentes = extrairPeriodosFerias(alvo.observacoes);
+    if (periodoFeriasSobrepoe(periodosExistentes, dataInicioFerias, dataFimFerias)) {
+      return res.status(400).json({ ok: false, erro: 'Esse período se sobrepõe a férias já registradas.' });
+    }
+
+    const diasSolicitados = diasNoIntervaloFerias(dataInicioFerias, dataFimFerias);
+    const ciclo = calcularCicloAtualFerias(alvo.dataInicio, alvo.plano, inicioFerias);
+    const diasUsados = diasFeriasUsadosNoCiclo(periodosExistentes, ciclo.inicioCiclo, ciclo.fimCiclo);
+    const diasDisponiveis = diasPorCiclo - diasUsados;
+
+    if (diasSolicitados > diasDisponiveis) {
+      return res.status(400).json({
+        ok: false,
+        erro: 'Saldo insuficiente: restam ' + diasDisponiveis + ' dia(s) de férias neste ciclo (solicitado: ' + diasSolicitados + ').',
+        diasDisponiveis,
+      });
+    }
+
+    const registroTexto = 'FERIAS: ' + dataInicioFerias + ' a ' + dataFimFerias +
+      ' (' + diasSolicitados + ' dias, solicitado em ' + new Date().toLocaleString('pt-BR') + ')';
+    const observacoesAtualizadas = (alvo.observacoes ? alvo.observacoes + '\n\n' : '') + registroTexto;
+
+    const vencimentoBase = alvo.vencimentoContrato
+      ? new Date(alvo.vencimentoContrato)
+      : new Date(calcularVencimentoContrato(alvo.dataInicio, alvo.plano));
+    const novoVencimento = new Date(vencimentoBase.getTime());
+    novoVencimento.setDate(novoVencimento.getDate() + diasSolicitados);
+
+    const rPatchFerias = await fetch('https://api.notion.com/v1/pages/' + alvo.pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          'Observações': { rich_text: [{ text: { content: observacoesAtualizadas.slice(-1900) } }] },
+          'Vencimento do Contrato': { date: { start: novoVencimento.toISOString() } },
+        },
+      }),
+    });
+    if (!rPatchFerias.ok) {
+      const eBody = await rPatchFerias.text();
+      console.error('[portal-aluna/solicitar-ferias] Notion recusou atualizar matricula:', eBody);
+      return res.status(500).json({ ok: false, erro: 'Notion recusou gravar as férias — ver logs.' });
+    }
+
+    try {
+      await enviarWhatsApp(
+        WHATSAPP_FABIO,
+        '🏖️ *Férias registradas*\n\nAluna: ' + (nome || alvo.nome || '') +
+        '\nModalidade: ' + modalidade + (turma ? ' — ' + turma : '') +
+        '\nPeríodo: ' + dataInicioFerias + ' a ' + dataFimFerias + ' (' + diasSolicitados + ' dias)' +
+        '\nNovo vencimento do contrato: ' + novoVencimento.toLocaleDateString('pt-BR')
+      );
+    } catch (eNotif) {
+      console.error('[portal-aluna/solicitar-ferias] erro ao notificar Fábio:', eNotif.message);
+    }
+
+    res.json({
+      ok: true,
+      diasSolicitados,
+      diasDisponiveisRestantes: diasDisponiveis - diasSolicitados,
+      novoVencimento: novoVencimento.toISOString(),
+    });
+  } catch (err) {
+    console.error('[portal-aluna/solicitar-ferias] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/portal-aluna/solicitar-cancelamento', async (req, res) => {
   const { cpf, nome, contato, modalidade, turma, motivo, sessionToken } = req.body;
   if (!cpf || !modalidade) {
@@ -6412,11 +6648,16 @@ app.get('/alunas-turma', async (req, res) => {
     });
     const dataAtivas = await rAtivas.json();
     const ativas = (dataAtivas.results || [])
-      .map(p => ({
-        id: p.id,
-        nome: p.properties?.Nome?.title?.[0]?.plain_text || '',
-        tipo: 'Regular',
-      }))
+      .map(p => {
+        const observacoesAluna = p.properties?.Observações?.rich_text?.[0]?.plain_text || '';
+        const periodosFeriasAluna = extrairPeriodosFerias(observacoesAluna);
+        const emFerias = data ? dataEstaEmFerias(periodosFeriasAluna, data) : false;
+        return {
+          id: p.id,
+          nome: p.properties?.Nome?.title?.[0]?.plain_text || '',
+          tipo: emFerias ? 'Ferias' : 'Regular',
+        };
+      })
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
     let experimentais = [];
