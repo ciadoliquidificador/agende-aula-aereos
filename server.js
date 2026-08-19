@@ -2125,6 +2125,31 @@ async function buscarCapacidadeDaTurma(modalidade) {
   return mapa;
 }
 
+// Busca o(s) professor(es) de cada turma de uma modalidade no banco "Capacidade de
+// Turmas" (campo multi_select "Professor" — permite mais de um nome por turma, ex.:
+// substitutos ou testes). Usada por turmasDoProfessor() para nao depender mais so do
+// valor fixo em MODALIDADES_MATRICULA — permite trocar professor de turma direto no
+// Notion, sem precisar de patch no server.js.
+async function buscarProfessorDaTurma(modalidade) {
+  const r = await fetch('https://api.notion.com/v1/databases/' + CAPACIDADE_TURMAS_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { property: 'Modalidade', select: { equals: modalidade } },
+      page_size: 100,
+    }),
+  });
+  const d = await r.json();
+  const mapa = {};
+  (d.results || []).forEach(pagina => {
+    const p = pagina.properties;
+    const turmaNome = p['Título']?.title?.[0]?.plain_text || '';
+    const professores = (p['Professor']?.multi_select || []).map(opt => opt.name).filter(Boolean);
+    if (turmaNome && professores.length > 0) mapa[turmaNome] = professores;
+  });
+  return mapa;
+}
+
 app.get('/vagas-modalidade/:modalidade', async (req, res) => {
   const modalidade = decodeURIComponent(req.params.modalidade);
   const dadosModalidade = MODALIDADES_MATRICULA[modalidade];
@@ -4181,12 +4206,25 @@ app.post('/portal/atualizar-cadastro', async (req, res) => {
   }
 });
 
-function turmasDoProfessor(nome) {
+async function turmasDoProfessor(nome) {
   const encontradas = [];
+  const cacheProfessorPorModalidade = {};
   for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
+    if (!cacheProfessorPorModalidade[modalidade]) {
+      try {
+        cacheProfessorPorModalidade[modalidade] = await buscarProfessorDaTurma(modalidade);
+      } catch (e) {
+        console.error('[turmasDoProfessor] erro ao buscar professor no Notion, usando fallback fixo:', e.message);
+        cacheProfessorPorModalidade[modalidade] = {};
+      }
+    }
+    const mapaProfessores = cacheProfessorPorModalidade[modalidade];
     dados.turmas.forEach(t => {
-      const ehDoProfessor = t.professor === nome;
-      if (ehDoProfessor) encontradas.push({ modalidade, ...t });
+      // Prioriza o(s) professor(es) cadastrado(s) no Notion (multi_select); se a
+      // turma ainda nao estiver migrada la (lista vazia), usa o valor fixo do
+      // codigo como fallback seguro.
+      const professoresAtual = mapaProfessores[t.nome] || [t.professor];
+      if (professoresAtual.includes(nome)) encontradas.push({ modalidade, ...t, professor: professoresAtual[0], professores: professoresAtual });
     });
   }
   return encontradas;
@@ -4198,7 +4236,7 @@ app.get('/portal/turmas/:nome', async (req, res) => {
   if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
   if (dadosSessao.nome !== nome) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
-    const turmasEncontradas = turmasDoProfessor(nome);
+    const turmasEncontradas = await turmasDoProfessor(nome);
     const resultado = [];
     for (const t of turmasEncontradas) {
       const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
@@ -4238,7 +4276,7 @@ app.get('/portal/feriados/:nome', async (req, res) => {
   if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
   if (dadosSessao.nome !== nome) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   try {
-    const diasDoProfessor = new Set(turmasDoProfessor(nome).map(t => t.dia));
+    const diasDoProfessor = new Set((await turmasDoProfessor(nome)).map(t => t.dia));
     if (diasDoProfessor.size === 0) return res.json({ ok: true, feriados: [] });
 
     const hoje = new Date();
@@ -4281,7 +4319,7 @@ app.get('/portal/rendimento/:nome', async (req, res) => {
   if (!valorAula) return res.json({ ok: true, disponivel: false });
 
   try {
-    const turmas = turmasDoProfessor(nome);
+    const turmas = await turmasDoProfessor(nome);
     if (turmas.length === 0) return res.json({ ok: true, disponivel: false });
 
     const hoje = new Date();
