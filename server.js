@@ -2360,7 +2360,7 @@ app.post('/matricula/inscrever', async (req, res) => {
 // nem em plano/turma/valor ja existentes — so completa o que falta.
 app.post('/portal-aluna/completar-migracao', async (req, res) => {
   const {
-    cpf, sessionToken, modalidade, turma,
+    cpf, sessionToken, modalidade, turma, menorDeIdade,
     rg, endereco, email, dataNascimento, contatoEmergenciaNome, contatoEmergenciaTelefone,
     possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos,
     condicaoSaude, qualCondicao, cirurgiasLesoes, detalhesCirurgias, liberadaAtividadeFisica,
@@ -2385,10 +2385,13 @@ app.post('/portal-aluna/completar-migracao', async (req, res) => {
   }
 
   const ehInfantil = modalidade === 'Circo Infantil';
-  if (ehInfantil && (!nomeResponsavel || !rgResponsavel || !cpfResponsavel)) {
+  // representaResponsavel cobre tanto Circo Infantil quanto qualquer outra modalidade
+  // em que a matricula seja de uma pessoa menor de idade (flag enviada pelo formulario).
+  const representaResponsavel = ehInfantil || !!menorDeIdade;
+  if (representaResponsavel && (!nomeResponsavel || !rgResponsavel)) {
     return res.status(400).json({ ok: false, erro: 'Preencha os dados do responsável legal.' });
   }
-  if (!ehInfantil && !rg) {
+  if (!representaResponsavel && !rg) {
     return res.status(400).json({ ok: false, erro: 'Preencha o RG.' });
   }
 
@@ -2407,6 +2410,10 @@ app.post('/portal-aluna/completar-migracao', async (req, res) => {
       return res.status(400).json({ ok: false, erro: 'Não foi possível determinar o valor do plano — confira Plano/Frequência no Notion.' });
     }
 
+    // CPF do responsavel: sempre o CPF usado no login (mesmo padrao ja usado para
+    // Circo Infantil, onde o campo "CPF" da matricula guarda o CPF do responsavel).
+    const cpfResponsavelFinal = representaResponsavel ? (cpfResponsavel || cpfLimpoMig) : cpfResponsavel;
+
     const ehMensal = alvoMig.plano === 'Mensal';
     let dataInicioReal = alvoMig.dataInicio;
 
@@ -2421,14 +2428,14 @@ app.post('/portal-aluna/completar-migracao', async (req, res) => {
 
     const agoraISO = new Date().toISOString();
     const dataValidadeFmt = new Date(dataInicioReal).toLocaleDateString('pt-BR');
-    const dataNascCriancaFmt = ehInfantil ? new Date(dataNascimento).toLocaleDateString('pt-BR') : '';
+    const dataNascCriancaFmt = representaResponsavel ? new Date(dataNascimento).toLocaleDateString('pt-BR') : '';
     const nomeParaContrato = alvoMig.nome;
 
     const dadosContratoBaseMig = {
       modalidade, plano: alvoMig.plano, frequencia: alvoMig.frequencia, turmas: [turma], valorMensal: valorFinal,
       nome: nomeParaContrato, rg, cpf: cpfLimpoMig, endereco,
-      nomeResponsavel, rgResponsavel, cpfResponsavel,
-      nomeCrianca: ehInfantil ? nomeParaContrato : '', dataNascCrianca: dataNascCriancaFmt,
+      nomeResponsavel, rgResponsavel, cpfResponsavel: cpfResponsavelFinal,
+      nomeCrianca: representaResponsavel ? nomeParaContrato : '', dataNascCrianca: dataNascCriancaFmt,
       dataValidade: dataValidadeFmt,
     };
     const textoCorpoMig = montarTextoContratoMatricula(dadosContratoBaseMig);
@@ -2474,10 +2481,11 @@ app.post('/portal-aluna/completar-migracao', async (req, res) => {
       'Cirurgias ou lesões?': { select: { name: cirurgiasLesoes || 'Não' } },
       'Detalhes cirurgias/lesões': { rich_text: [{ text: { content: detalhesCirurgias || '' } }] },
       'Liberada p/ atividade física?': { select: { name: liberadaAtividadeFisica || 'Sim' } },
-      'Nome do Responsável': { rich_text: [{ text: { content: ehInfantil ? nomeResponsavel : '' } }] },
-      'RG do Responsável': { rich_text: [{ text: { content: ehInfantil ? rgResponsavel : '' } }] },
-      'Parentesco': { rich_text: [{ text: { content: ehInfantil ? (parentesco || '') : '' } }] },
-      'Autorizados a Retirar': { rich_text: [{ text: { content: ehInfantil ? (autorizadosRetirar || '') : '' } }] },
+      'Nome do Responsável': { rich_text: [{ text: { content: representaResponsavel ? nomeResponsavel : '' } }] },
+      'RG do Responsável': { rich_text: [{ text: { content: representaResponsavel ? rgResponsavel : '' } }] },
+      'Parentesco': { rich_text: [{ text: { content: representaResponsavel ? (parentesco || '') : '' } }] },
+      'Autorizados a Retirar': { rich_text: [{ text: { content: representaResponsavel ? (autorizadosRetirar || '') : '' } }] },
+      'Data de Nascimento da Criança': representaResponsavel ? { date: { start: dataNascimento } } : { date: null },
       'Consentimento Dados Pessoais': { checkbox: !!consentimentoDadosPessoais },
       'Consentimento Dados de Saúde': { checkbox: !!consentimentoDadosSaude },
       'Consentimento Uso de Imagem': { checkbox: !!consentimentoUsoImagem },
