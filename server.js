@@ -4971,6 +4971,49 @@ app.post('/contrato-professor/aceitar', async (req, res) => {
 
     try { await enviarWhatsApp(WHATSAPP_FABIO, '✅ *Contrato aceito* — ' + assinaturaDigitada + ' (' + dadosCompletos.modalidade + ', ' + dadosCompletos.trilha + ')'); } catch(e) {}
 
+    // Auto-cadastro no Portal Profs (banco "Professores — Cadastro"), evitando
+    // digitacao duplicada manual. So cria se ainda nao existir um cadastro com
+    // esse CPF; nunca sobrescreve um cadastro ja existente.
+    try {
+      const cpfParaCadastro = (
+        dadosCompletos.trilha === 'PF-RPA' ? dadosCompletos.cpf :
+        dadosCompletos.trilha === 'PJ-MEI' ? dadosCompletos.titularCpf :
+        dadosCompletos.trilha === 'PJ-ME' ? dadosCompletos.repCpf : ''
+      ) || '';
+      const cpfLimpoCadastro = cpfParaCadastro.replace(/\D/g, '');
+
+      if (cpfLimpoCadastro) {
+        const jaCadastrado = await buscarProfessorPorCpf(cpfLimpoCadastro);
+        if (!jaCadastrado) {
+          const rCriarCadastro = await fetch('https://api.notion.com/v1/pages', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              parent: { database_id: PROFESSORES_CADASTRO_DB },
+              properties: {
+                'Nome': { title: [{ text: { content: assinaturaDigitada } }] },
+                'CPF': { rich_text: [{ text: { content: cpfLimpoCadastro } }] },
+                'Telefone': { phone_number: dadosCompletos.professorTelefone || null },
+                'Endereço': { rich_text: [{ text: { content: dadosCompletos.endereco || '' } }] },
+              },
+            }),
+          });
+          if (rCriarCadastro.ok) {
+            try {
+              await enviarWhatsApp(WHATSAPP_FABIO, '👤 Cadastro criado automaticamente no Portal Profs para ' + assinaturaDigitada + ' — já pode fazer login.');
+            } catch (eNotifCad) {}
+          } else {
+            const eBodyCad = await rCriarCadastro.text();
+            console.error('[contrato-professor/aceitar] Notion recusou criar cadastro automático:', eBodyCad);
+          }
+        }
+      } else {
+        console.error('[contrato-professor/aceitar] sem CPF disponível para auto-cadastro (trilha: ' + dadosCompletos.trilha + ').');
+      }
+    } catch (eAutoCad) {
+      console.error('[contrato-professor/aceitar] erro no auto-cadastro:', eAutoCad.message);
+    }
+
     res.json({ ok: true, linkPdf });
   } catch (err) {
     console.error('[contrato-professor/aceitar] erro:', err.message);
