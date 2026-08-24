@@ -8028,7 +8028,8 @@ app.post('/reservar-sala', async (req, res) => {
       console.error('[residentes] erro no fluxo de notificacao:', e.message);
     }
 
-    const msgInterna = '🎭 *Novo pré-agendamento — Sala de Ensaio*\n\nProjeto: ' + projeto + '\nColetivo: ' + (coletivo || '-') + '\nResponsável: ' + (diretor || '-') + '\nContato: ' + (contatoNome || '-') + ' (' + whatsapp + ')\nPessoas: ' + qtdPessoas + '\n' + resumoDias + '\n\nValor: R$ ' + totalFinal.toFixed(2) + ' (sinal R$ ' + deposito.toFixed(2) + ')\nReserva: ' + reservaId;
+    const notaFiscalTextoInterno = notaFiscal ? '\n📄 Nota fiscal solicitada — CPF/CNPJ: ' + (cpfCnpj || 'A informar') : '';
+    const msgInterna = '🎭 *Novo pré-agendamento — Sala de Ensaio*\n\nProjeto: ' + projeto + '\nColetivo: ' + (coletivo || '-') + '\nResponsável: ' + (diretor || '-') + '\nContato: ' + (contatoNome || '-') + ' (' + whatsapp + ')\nPessoas: ' + qtdPessoas + '\n' + resumoDias + '\n\nValor: R$ ' + totalFinal.toFixed(2) + ' (sinal R$ ' + deposito.toFixed(2) + ')' + notaFiscalTextoInterno + '\nReserva: ' + reservaId;
     try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) { console.error('[sala-ensaio] wpp fabio:', e.message); }
     try { await enviarWhatsApp(WHATSAPP_CIA, msgInterna); } catch(e) { console.error('[sala-ensaio] wpp cia:', e.message); }
 
