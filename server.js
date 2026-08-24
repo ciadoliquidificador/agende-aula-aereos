@@ -7755,8 +7755,8 @@ app.get('/contrato/:reservaId', async (req, res) => {
       const fimISO = pp['Fim']?.date?.start || '';
       return {
         data: inicioISO.split('T')[0],
-        inicio: inicioISO ? new Date(inicioISO).toISOString().slice(11, 16) : '',
-        fim: fimISO ? new Date(fimISO).toISOString().slice(11, 16) : '',
+        inicio: inicioISO ? inicioISO.slice(11, 16) : '',
+        fim: fimISO ? fimISO.slice(11, 16) : '',
       };
     });
 
@@ -7806,7 +7806,7 @@ app.post('/contrato/:reservaId/aceitar', async (req, res) => {
       const pp = page.properties;
       const inicioISO = pp['Início']?.date?.start || '';
       const fimISO = pp['Fim']?.date?.start || '';
-      return { data: inicioISO.split('T')[0], inicio: new Date(inicioISO).toISOString().slice(11, 16), fim: new Date(fimISO).toISOString().slice(11, 16) };
+      return { data: inicioISO.split('T')[0], inicio: inicioISO.slice(11, 16), fim: fimISO.slice(11, 16) };
     });
     const valorTotal = p0['Valor Total']?.number || 0;
     const tipoEnsaio = p0['Tipo de Ensaio']?.select?.name || '';
