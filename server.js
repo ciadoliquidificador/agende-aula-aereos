@@ -3886,6 +3886,103 @@ app.get('/preco-combustivel-medio', async (req, res) => {
 });
 // ===== FIM PREÇO MÉDIO DE COMBUSTÍVEL =====
 
+// ===== PREÇO MÉDIO DE COMBUSTÍVEL — PLANILHA OFICIAL DA ANP =====
+function normalizarTexto(txt) {
+  return (txt || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+}
+
+app.get('/preco-combustivel-anp', async (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+
+    // 1. Acha o link da planilha mais recente na página de listagem da ANP
+    const rListagem = await fetch('https://www.gov.br/anp/pt-br/assuntos/precos-e-defesa-da-concorrencia/precos/levantamento-de-precos-de-combustiveis-ultimas-semanas-pesquisadas');
+    const htmlListagem = await rListagem.text();
+    const match = htmlListagem.match(/https:\/\/www\.gov\.br\/anp\/pt-br\/assuntos\/precos-e-defesa-da-concorrencia\/precos\/arquivos-lpc\/\d{4}\/resumo_semanal_lpc[^"'\s)]+\.xlsx/i);
+    if (!match) {
+      console.error('[preco-combustivel-anp] não achou link da planilha na página da ANP.');
+      return res.json({ ok: false, erro: 'Não foi possível localizar a planilha mais recente da ANP.' });
+    }
+    const urlPlanilha = match[0];
+    console.log('[preco-combustivel-anp] DEBUG url planilha encontrada: ' + urlPlanilha);
+
+    // 2. Baixa e faz o parse da planilha
+    const rPlanilha = await fetch(urlPlanilha);
+    if (!rPlanilha.ok) {
+      console.error('[preco-combustivel-anp] erro ao baixar planilha: ' + rPlanilha.status);
+      return res.json({ ok: false, erro: 'Erro ao baixar a planilha da ANP.' });
+    }
+    const bufferPlanilha = Buffer.from(await rPlanilha.arrayBuffer());
+    const workbook = XLSX.read(bufferPlanilha, { type: 'buffer' });
+
+    console.log('[preco-combustivel-anp] DEBUG abas encontradas: ' + JSON.stringify(workbook.SheetNames));
+
+    let linhaSP = null;
+    let cabecalhos = null;
+    let abaUsada = null;
+
+    // 3. Procura em todas as abas por uma linha referente a "São Paulo" (o estado, não a capital)
+    for (const nomeAba of workbook.SheetNames) {
+      const sheet = workbook.Sheets[nomeAba];
+      const linhas = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      for (let i = 0; i < linhas.length; i++) {
+        const linha = linhas[i];
+        const temSP = linha.some(cel => normalizarTexto(cel) === 'SAO PAULO' || normalizarTexto(cel) === 'SP');
+        if (temSP) {
+          // acha a linha de cabecalho mais proxima acima (a que tem mais texto, tipicamente a primeira linha nao vazia antes)
+          for (let h = i - 1; h >= 0; h--) {
+            const linhaAcima = linhas[h];
+            const temTexto = linhaAcima.some(cel => normalizarTexto(cel).length > 2);
+            if (temTexto) { cabecalhos = linhaAcima; break; }
+          }
+          linhaSP = linha;
+          abaUsada = nomeAba;
+          break;
+        }
+      }
+      if (linhaSP) break;
+    }
+
+    if (!linhaSP || !cabecalhos) {
+      console.error('[preco-combustivel-anp] DEBUG não encontrou linha de São Paulo. Abas verificadas: ' + JSON.stringify(workbook.SheetNames));
+      return res.json({ ok: false, erro: 'Não foi possível localizar os dados de São Paulo na planilha da ANP.' });
+    }
+
+    console.log('[preco-combustivel-anp] DEBUG aba usada=' + abaUsada + ' | cabecalhos=' + JSON.stringify(cabecalhos) + ' | linhaSP=' + JSON.stringify(linhaSP));
+
+    // 4. Acha as colunas de Gasolina Comum e Etanol Hidratado pelo texto do cabeçalho
+    let idxGasolina = -1, idxEtanol = -1;
+    cabecalhos.forEach((cel, i) => {
+      const txt = normalizarTexto(cel);
+      if (idxGasolina === -1 && txt.includes('GASOLINA') && !txt.includes('ADITIVADA')) idxGasolina = i;
+      if (idxEtanol === -1 && txt.includes('ETANOL')) idxEtanol = i;
+    });
+
+    const precoGasolina = idxGasolina >= 0 ? parseFloat(String(linhaSP[idxGasolina]).replace(',', '.')) : null;
+    const precoEtanol = idxEtanol >= 0 ? parseFloat(String(linhaSP[idxEtanol]).replace(',', '.')) : null;
+
+    if ((!precoGasolina || isNaN(precoGasolina)) && (!precoEtanol || isNaN(precoEtanol))) {
+      return res.json({
+        ok: false,
+        erro: 'Encontrou a linha de São Paulo, mas não conseguiu identificar as colunas de preço. Veja o log do servidor pra ajustar.',
+      });
+    }
+
+    res.json({
+      ok: true,
+      precoGasolina: (precoGasolina && !isNaN(precoGasolina)) ? precoGasolina : null,
+      precoEtanol: (precoEtanol && !isNaN(precoEtanol)) ? precoEtanol : null,
+      fonte: 'ANP',
+      urlPlanilha,
+    });
+  } catch (err) {
+    console.error('[preco-combustivel-anp] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+// ===== FIM PREÇO MÉDIO DE COMBUSTÍVEL (ANP) =====
+
+
 
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
