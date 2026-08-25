@@ -3849,6 +3849,8 @@ app.get('/preco-combustivel-medio', async (req, res) => {
       return res.status(500).json({ ok: false, erro: d.error?.message || 'Erro ao consultar postos.' });
     }
 
+    console.log('[preco-combustivel-medio] DEBUG total de lugares retornados=' + (d.places || []).length + ' | amostra=' + JSON.stringify((d.places || []).slice(0, 3)));
+
     const precosGasolina = [];
     const precosEtanol = [];
 
