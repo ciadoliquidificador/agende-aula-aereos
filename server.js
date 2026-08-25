@@ -3769,7 +3769,7 @@ app.post('/calcular-distancia-deslocamento', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': GOOGLE_ROUTES_API_KEY,
-        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.travelAdvisory.tollInfo,routes.legs',
+        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.travelAdvisory.tollInfo,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration',
       },
       body: JSON.stringify(body),
     });
@@ -3795,11 +3795,29 @@ app.post('/calcular-distancia-deslocamento', async (req, res) => {
     }
     const pedagioTotal = pedagioIda * 2; // ida + volta
 
+    // Estima %cidade vs %estrada olhando a velocidade de cada trecho (step) da rota.
+    // Acima de 60km/h no trecho, consideramos rodovia; abaixo, consideramos cidade.
+    const LIMIAR_VELOCIDADE_RODOVIA_KMH = 60;
+    let metrosCidade = 0;
+    let metrosEstrada = 0;
+    const steps = (rota.legs || []).flatMap(leg => leg.steps || []);
+    steps.forEach(step => {
+      const metros = step.distanceMeters || 0;
+      const duracaoSeg = parseInt(step.staticDuration) || 0;
+      if (metros === 0) return;
+      const velocidadeKmh = duracaoSeg > 0 ? (metros / 1000) / (duracaoSeg / 3600) : 0;
+      if (velocidadeKmh >= LIMIAR_VELOCIDADE_RODOVIA_KMH) metrosEstrada += metros;
+      else metrosCidade += metros;
+    });
+    const totalMetrosClassificados = metrosCidade + metrosEstrada;
+    const pctCidade = totalMetrosClassificados > 0 ? Math.round((metrosCidade / totalMetrosClassificados) * 100) : null;
+
     res.json({
       ok: true,
       distanciaTotalKm: Math.round(distanciaTotalKm * 10) / 10,
       pedagioTotalEstimado: Math.round(pedagioTotal * 100) / 100,
       duracaoIdaSegundos: parseInt(rota.duration) || null,
+      pctCidadeEstimado: pctCidade,
     });
   } catch (err) {
     console.error('[calcular-distancia-deslocamento] erro:', err.message);
