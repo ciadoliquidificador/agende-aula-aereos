@@ -3923,19 +3923,34 @@ app.get('/preco-combustivel-anp', async (req, res) => {
     const sheet = workbook.Sheets[nomeAbaEstados];
     const linhas = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
-    const linhasSP = linhas.filter(linha => normalizarTexto(linha[2]) === 'SAO PAULO');
-    console.log('[preco-combustivel-anp] DEBUG aba=' + nomeAbaEstados + ' | linhas de SP encontradas=' + linhasSP.length + ' | amostra=' + JSON.stringify(linhasSP.slice(0, 6)));
+    // Busca sem depender de posição fixa de coluna: acha linhas onde ALGUMA célula é "SAO PAULO"
+    const linhasSP = linhas.filter(linha => linha.some(cel => normalizarTexto(cel) === 'SAO PAULO'));
+    console.log('[preco-combustivel-anp] DEBUG aba=' + nomeAbaEstados + ' | total linhas na aba=' + linhas.length + ' | linhas de SP encontradas=' + linhasSP.length + ' | amostra=' + JSON.stringify(linhasSP.slice(0, 6)));
 
     if (!linhasSP.length) {
+      console.log('[preco-combustivel-anp] DEBUG primeiras 5 linhas da aba (pra conferir estrutura): ' + JSON.stringify(linhas.slice(0, 5)));
       return res.json({ ok: false, erro: 'Não foi possível localizar os dados de São Paulo na planilha da ANP.' });
     }
 
     let precoGasolina = null;
     let precoEtanol = null;
     linhasSP.forEach(linha => {
-      const produto = normalizarTexto(linha[4]);
-      const preco = parseFloat(String(linha[7]).replace(',', '.'));
-      if (isNaN(preco)) return;
+      // Acha qual célula da linha é o nome do produto (contém GASOLINA ou ETANOL)
+      const idxProduto = linha.findIndex(cel => {
+        const t = normalizarTexto(cel);
+        return t.includes('GASOLINA') || t.includes('ETANOL');
+      });
+      if (idxProduto === -1) return;
+      const produto = normalizarTexto(linha[idxProduto]);
+
+      // O preço é o primeiro número plausível (entre 1 e 15) depois da célula do produto
+      let preco = null;
+      for (let i = idxProduto + 1; i < linha.length; i++) {
+        const v = parseFloat(String(linha[i]).replace(',', '.'));
+        if (!isNaN(v) && v > 1 && v < 15) { preco = v; break; }
+      }
+      if (preco === null) return;
+
       if (produto.includes('GASOLINA') && !produto.includes('ADITIVADA')) precoGasolina = preco;
       if (produto.includes('ETANOL')) precoEtanol = preco;
     });
