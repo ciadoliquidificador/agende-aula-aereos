@@ -3825,6 +3825,65 @@ app.post('/calcular-distancia-deslocamento', async (req, res) => {
   }
 });
 // ===== FIM CALCULADORA DE DESLOCAMENTO =====
+// ===== PREÇO MÉDIO DE COMBUSTÍVEL — GOOGLE PLACES API =====
+app.get('/preco-combustivel-medio', async (req, res) => {
+  if (!GOOGLE_ROUTES_API_KEY) return res.status(500).json({ ok: false, erro: 'Chave da API do Google não configurada no servidor.' });
+
+  try {
+    const r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_ROUTES_API_KEY,
+        'X-Goog-FieldMask': 'places.displayName,places.fuelOptions',
+      },
+      body: JSON.stringify({
+        textQuery: 'postos de gasolina em São Paulo, SP',
+        maxResultCount: 20,
+      }),
+    });
+
+    const d = await r.json();
+    if (!r.ok) {
+      console.error('[preco-combustivel-medio] erro Google:', JSON.stringify(d));
+      return res.status(500).json({ ok: false, erro: d.error?.message || 'Erro ao consultar postos.' });
+    }
+
+    const precosGasolina = [];
+    const precosEtanol = [];
+
+    (d.places || []).forEach(place => {
+      const fuelPrices = place.fuelOptions?.fuelPrices || [];
+      fuelPrices.forEach(fp => {
+        const valor = Number(fp.price?.units || 0) + Number(fp.price?.nanos || 0) / 1e9;
+        if (valor <= 0) return;
+        if (fp.type === 'REGULAR_UNLEADED') precosGasolina.push(valor);
+        if (fp.type === 'E100') precosEtanol.push(valor);
+      });
+    });
+
+    const media = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+    const mediaGasolina = media(precosGasolina);
+    const mediaEtanol = media(precosEtanol);
+
+    if (mediaGasolina === null && mediaEtanol === null) {
+      return res.json({ ok: false, erro: 'Nenhum posto com preço de combustível disponível encontrado. Tente novamente mais tarde.' });
+    }
+
+    res.json({
+      ok: true,
+      precoGasolina: mediaGasolina !== null ? Math.round(mediaGasolina * 100) / 100 : null,
+      precoEtanol: mediaEtanol !== null ? Math.round(mediaEtanol * 100) / 100 : null,
+      amostraGasolina: precosGasolina.length,
+      amostraEtanol: precosEtanol.length,
+    });
+  } catch (err) {
+    console.error('[preco-combustivel-medio] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+// ===== FIM PREÇO MÉDIO DE COMBUSTÍVEL =====
+
 
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
