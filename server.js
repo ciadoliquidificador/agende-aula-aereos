@@ -3917,61 +3917,40 @@ app.get('/preco-combustivel-anp', async (req, res) => {
 
     console.log('[preco-combustivel-anp] DEBUG abas encontradas: ' + JSON.stringify(workbook.SheetNames));
 
-    let linhaSP = null;
-    let cabecalhos = null;
-    let abaUsada = null;
+    // 3. A aba "ESTADOS" tem uma linha por Estado+Produto (formato longo), não colunas separadas por combustível.
+    // Colunas: [0]data-ini [1]data-fim [2]ESTADO [3]MUNICIPIO(vazio aqui) [4]PRODUTO [5]nº postos [6]unidade [7]PRECO MEDIO REVENDA [8]desvio [9]min [10]max [11]coef.variação
+    const nomeAbaEstados = workbook.SheetNames.find(n => normalizarTexto(n) === 'ESTADOS') || workbook.SheetNames[0];
+    const sheet = workbook.Sheets[nomeAbaEstados];
+    const linhas = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
-    // 3. Procura em todas as abas por uma linha referente a "São Paulo" (o estado, não a capital)
-    for (const nomeAba of workbook.SheetNames) {
-      const sheet = workbook.Sheets[nomeAba];
-      const linhas = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-      for (let i = 0; i < linhas.length; i++) {
-        const linha = linhas[i];
-        const temSP = linha.some(cel => normalizarTexto(cel) === 'SAO PAULO' || normalizarTexto(cel) === 'SP');
-        if (temSP) {
-          // acha a linha de cabecalho mais proxima acima (a que tem mais texto, tipicamente a primeira linha nao vazia antes)
-          for (let h = i - 1; h >= 0; h--) {
-            const linhaAcima = linhas[h];
-            const temTexto = linhaAcima.some(cel => normalizarTexto(cel).length > 2);
-            if (temTexto) { cabecalhos = linhaAcima; break; }
-          }
-          linhaSP = linha;
-          abaUsada = nomeAba;
-          break;
-        }
-      }
-      if (linhaSP) break;
-    }
+    const linhasSP = linhas.filter(linha => normalizarTexto(linha[2]) === 'SAO PAULO');
+    console.log('[preco-combustivel-anp] DEBUG aba=' + nomeAbaEstados + ' | linhas de SP encontradas=' + linhasSP.length + ' | amostra=' + JSON.stringify(linhasSP.slice(0, 6)));
 
-    if (!linhaSP || !cabecalhos) {
-      console.error('[preco-combustivel-anp] DEBUG não encontrou linha de São Paulo. Abas verificadas: ' + JSON.stringify(workbook.SheetNames));
+    if (!linhasSP.length) {
       return res.json({ ok: false, erro: 'Não foi possível localizar os dados de São Paulo na planilha da ANP.' });
     }
 
-    console.log('[preco-combustivel-anp] DEBUG aba usada=' + abaUsada + ' | cabecalhos=' + JSON.stringify(cabecalhos) + ' | linhaSP=' + JSON.stringify(linhaSP));
-
-    // 4. Acha as colunas de Gasolina Comum e Etanol Hidratado pelo texto do cabeçalho
-    let idxGasolina = -1, idxEtanol = -1;
-    cabecalhos.forEach((cel, i) => {
-      const txt = normalizarTexto(cel);
-      if (idxGasolina === -1 && txt.includes('GASOLINA') && !txt.includes('ADITIVADA')) idxGasolina = i;
-      if (idxEtanol === -1 && txt.includes('ETANOL')) idxEtanol = i;
+    let precoGasolina = null;
+    let precoEtanol = null;
+    linhasSP.forEach(linha => {
+      const produto = normalizarTexto(linha[4]);
+      const preco = parseFloat(String(linha[7]).replace(',', '.'));
+      if (isNaN(preco)) return;
+      if (produto.includes('GASOLINA') && !produto.includes('ADITIVADA')) precoGasolina = preco;
+      if (produto.includes('ETANOL')) precoEtanol = preco;
     });
 
-    const precoGasolina = idxGasolina >= 0 ? parseFloat(String(linhaSP[idxGasolina]).replace(',', '.')) : null;
-    const precoEtanol = idxEtanol >= 0 ? parseFloat(String(linhaSP[idxEtanol]).replace(',', '.')) : null;
-
-    if ((!precoGasolina || isNaN(precoGasolina)) && (!precoEtanol || isNaN(precoEtanol))) {
+    if (precoGasolina === null && precoEtanol === null) {
       return res.json({
         ok: false,
-        erro: 'Encontrou a linha de São Paulo, mas não conseguiu identificar as colunas de preço. Veja o log do servidor pra ajustar.',
+        erro: 'Encontrou linhas de São Paulo, mas não conseguiu identificar Gasolina/Etanol entre os produtos. Veja o log do servidor pra ajustar.',
       });
     }
 
     res.json({
       ok: true,
-      precoGasolina: (precoGasolina && !isNaN(precoGasolina)) ? precoGasolina : null,
-      precoEtanol: (precoEtanol && !isNaN(precoEtanol)) ? precoEtanol : null,
+      precoGasolina,
+      precoEtanol,
       fonte: 'ANP',
       urlPlanilha,
     });
