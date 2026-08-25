@@ -3742,6 +3742,72 @@ app.post('/residencia-termo/aceitar', async (req, res) => {
 
 
 
+// ===== CALCULADORA DE DESLOCAMENTO — DISTÂNCIA E PEDÁGIO VIA GOOGLE ROUTES API =====
+const GOOGLE_ROUTES_API_KEY = process.env.GOOGLE_ROUTES_API_KEY;
+const ENDERECO_ORIGEM_ESPACO = 'Rua Dr. Carvalho de Mendonça, 67, Campos Elíseos, São Paulo, SP, Brasil';
+
+app.post('/calcular-distancia-deslocamento', async (req, res) => {
+  const { enderecoDestino } = req.body;
+  if (!enderecoDestino) return res.status(400).json({ ok: false, erro: 'Informe o endereço de destino.' });
+  if (!GOOGLE_ROUTES_API_KEY) return res.status(500).json({ ok: false, erro: 'Chave da Google Routes API não configurada no servidor.' });
+
+  try {
+    const body = {
+      origin: { address: ENDERECO_ORIGEM_ESPACO },
+      destination: { address: enderecoDestino },
+      travelMode: 'DRIVE',
+      routingPreference: 'TRAFFIC_AWARE',
+      extraComputations: ['TOLLS'],
+      routeModifiers: {
+        vehicleInfo: { emissionType: 'GASOLINE' },
+      },
+      units: 'METRIC',
+    };
+
+    const r = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_ROUTES_API_KEY,
+        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.travelAdvisory.tollInfo,routes.legs',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const d = await r.json();
+    if (!r.ok) {
+      console.error('[calcular-distancia-deslocamento] erro Google:', JSON.stringify(d));
+      return res.status(500).json({ ok: false, erro: d.error?.message || 'Erro ao consultar rota.' });
+    }
+
+    const rota = (d.routes || [])[0];
+    if (!rota) return res.json({ ok: false, erro: 'Não foi possível calcular a rota até esse endereço.' });
+
+    const distanciaIdaKm = rota.distanceMeters / 1000;
+    const distanciaTotalKm = distanciaIdaKm * 2; // ida + volta
+
+    const tollInfo = rota.travelAdvisory?.tollInfo;
+    let pedagioIda = 0;
+    if (tollInfo?.estimatedPrice?.length) {
+      // Soma todas as moedas retornadas (normalmente só BRL)
+      const brl = tollInfo.estimatedPrice.find(p => p.currencyCode === 'BRL');
+      if (brl) pedagioIda = Number(brl.units || 0) + Number(brl.nanos || 0) / 1e9;
+    }
+    const pedagioTotal = pedagioIda * 2; // ida + volta
+
+    res.json({
+      ok: true,
+      distanciaTotalKm: Math.round(distanciaTotalKm * 10) / 10,
+      pedagioTotalEstimado: Math.round(pedagioTotal * 100) / 100,
+      duracaoIdaSegundos: parseInt(rota.duration) || null,
+    });
+  } catch (err) {
+    console.error('[calcular-distancia-deslocamento] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+// ===== FIM CALCULADORA DE DESLOCAMENTO =====
+
 // ===== PORTAL ADMIN — APROVAÇÕES DE ALUNAS =====
 
 async function buscarAprovacaoPorId(pageId) {
