@@ -9119,3 +9119,50 @@ async function notificarResidenteSobreposicao(blocosAfetados) {
     }
   }
 }
+
+// ============================================================
+// CALCULADORA DE ORÇAMENTO — integração com Notion (2026 - PROPOSTAS E CONTRATOS)
+// ============================================================
+const ORCAMENTO_PROPOSTAS_DB = '2c6c45031f73804f8f90e6e7439d7e1c';
+const ORCAMENTO_TRABALHOS_DB = '4589d769656b41149e9bf6300b30d886';
+
+// GET /orcamento/opcoes-notion — listas reais para alimentar os dropdowns da calculadora
+app.get('/orcamento/opcoes-notion', async (req, res) => {
+  try {
+    const rTrabalhos = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_TRABALHOS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_size: 100, sorts: [{ property: 'Nome', direction: 'ascending' }] }),
+    });
+    const dTrabalhos = await rTrabalhos.json();
+    const trabalhos = (dTrabalhos.results || []).map(p => ({
+      id: p.id,
+      nome: p.properties?.Nome?.title?.[0]?.plain_text || '(sem nome)',
+    }));
+
+    const rIntegrantes = await fetch('https://api.notion.com/v1/databases/' + INTEGRANTES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_size: 100, sorts: [{ property: 'Nome', direction: 'ascending' }] }),
+    });
+    const dIntegrantes = await rIntegrantes.json();
+    const integrantes = (dIntegrantes.results || []).map(p => ({
+      id: p.id,
+      nome: p.properties?.Nome?.title?.[0]?.plain_text || '(sem nome)',
+    }));
+
+    const rSchema = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const dSchema = await rSchema.json();
+    const contratanteOpcoes = (dSchema.properties?.['Contratante']?.multi_select?.options || [])
+      .map(o => o.name)
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const tipoOpcoes = (dSchema.properties?.['Tipo']?.select?.options || []).map(o => o.name);
+
+    res.json({ ok: true, trabalhos, integrantes, contratante: contratanteOpcoes, tipo: tipoOpcoes });
+  } catch (err) {
+    console.error('[orcamento/opcoes-notion] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
