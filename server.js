@@ -9230,6 +9230,25 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       console.error('[orcamento/salvar-notion] erro ao gerar/subir planilha:', eXlsx.message);
     }
 
+    // Geocodifica o endereço (necessário para o campo "place" do Notion, que exige
+    // latitude/longitude — confirmado ao vivo via teste). Melhor esforço: se falhar,
+    // o campo Endereço simplesmente não é gravado (fallback já existente).
+    let coordenadasEndereco = null;
+    if (endereco && GOOGLE_ROUTES_API_KEY) {
+      try {
+        const rGeocode = await fetch('https://maps.googleapis.com/maps/api/geocode/json?address=' + encodeURIComponent(endereco) + '&key=' + GOOGLE_ROUTES_API_KEY);
+        const dGeocode = await rGeocode.json();
+        const local0 = dGeocode.results?.[0]?.geometry?.location;
+        if (local0) {
+          coordenadasEndereco = { latitude: local0.lat, longitude: local0.lng };
+        } else {
+          console.error('[orcamento/salvar-notion] geocoding sem resultado para endereço:', endereco, JSON.stringify(dGeocode).slice(0, 300));
+        }
+      } catch (eGeo) {
+        console.error('[orcamento/salvar-notion] erro ao geocodificar endereço:', eGeo.message);
+      }
+    }
+
     const paginasCriadas = [];
     let enderecoGravadoEmAlgumaPagina = false;
 
@@ -9266,14 +9285,21 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       const paginaCriada = await rCriar.json();
       paginasCriadas.push({ id: paginaCriada.id, url: paginaCriada.url, data: apresentacao.data });
 
-      if (endereco) {
+      if (endereco && coordenadasEndereco) {
         try {
           const rEndereco = await fetch('https://api.notion.com/v1/pages/' + paginaCriada.id, {
             method: 'PATCH',
             headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
             body: JSON.stringify({
               properties: {
-                'Endereço': { place: { name: local, address: endereco } },
+                'Endereço': {
+                  place: {
+                    name: local,
+                    address: endereco,
+                    latitude: coordenadasEndereco.latitude,
+                    longitude: coordenadasEndereco.longitude,
+                  },
+                },
               },
             }),
           });
