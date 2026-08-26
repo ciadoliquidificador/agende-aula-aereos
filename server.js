@@ -205,7 +205,7 @@ async function enviarWhatsAppComImagem(numero, texto, fileUrl) {
   const response = await fetch(`${DIGISAC_BASE}/messages`, {
     method: 'POST',
     headers: digisacHeaders,
-    body: JSON.stringify({ text: texto, file: fileUrl, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot' })
+    body: JSON.stringify({ text: texto, fileUrl: fileUrl, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot' })
   });
   if (!response.ok) { const t = await response.text(); throw new Error(`Digisac ${response.status}: ${t}`); }
   return response.json();
