@@ -9297,7 +9297,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
                     name: local,
                     address: endereco,
                     lat: coordenadasEndereco.latitude,
-                    lng: coordenadasEndereco.longitude,
+                    lon: coordenadasEndereco.longitude,
                   },
                 },
               },
