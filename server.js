@@ -877,6 +877,29 @@ app.get('/vagas-dancas', async (req, res) => {
 });
 
 // ===== CURSO DE MEDITAÇÃO — INSCRIÇÃO GRATUITA =====
+app.get('/meditacao/vagas-disponiveis', async (req, res) => {
+  const LIMITE_VAGAS_MEDITACAO = 10;
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Modalidade', select: { equals: 'Meditação' } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: 100,
+      }),
+    });
+    const d = await r.json();
+    const inscritos = (d.results || []).length;
+    res.json({ ok: true, limite: LIMITE_VAGAS_MEDITACAO, inscritos, vagasRestantes: Math.max(0, LIMITE_VAGAS_MEDITACAO - inscritos) });
+  } catch (err) {
+    console.error('[meditacao/vagas-disponiveis] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/meditacao/inscrever', async (req, res) => {
   const { nomeCompleto, nomeSocial, rg, cpf, telefone, email, rua, numero, complemento, bairro, cep, cidade, estado, assinatura, consentimentoUsoImagem } = req.body;
   if (!nomeCompleto || !cpf || !telefone || !email || !assinatura) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
@@ -884,6 +907,29 @@ app.post('/meditacao/inscrever', async (req, res) => {
   if (cpfLimpo.length < 11) return res.status(400).json({ error: 'CPF inválido' });
   const numLimpo = telefone.replace(/\D/g, '');
   if (numLimpo.length < 11) return res.status(400).json({ error: 'Telefone inválido' });
+
+  const LIMITE_VAGAS_MEDITACAO = 10;
+  try {
+    const rVagas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Modalidade', select: { equals: 'Meditação' } },
+          { property: 'Status', select: { equals: 'Ativa' } },
+        ]},
+        page_size: LIMITE_VAGAS_MEDITACAO + 1,
+      }),
+    });
+    const dVagas = await rVagas.json();
+    const inscritosAtuais = (dVagas.results || []).length;
+    if (inscritosAtuais >= LIMITE_VAGAS_MEDITACAO) {
+      return res.json({ ok: false, error: 'As vagas do curso de Meditação já se esgotaram. Fale com a gente pelo WhatsApp para entrar na lista de espera.' });
+    }
+  } catch (eVagas) {
+    console.error('[meditacao/inscrever] erro ao checar vagas:', eVagas.message);
+  }
+
   try {
     const notionResp = await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
