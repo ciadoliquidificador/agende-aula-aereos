@@ -9336,3 +9336,147 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
+
+// Codifica uma URL de compartilhamento do OneDrive/SharePoint no formato que o
+// Microsoft Graph exige para resolvê-la de volta a um DriveItem (endpoint /shares).
+function encodarShareId(url) {
+  const base64 = Buffer.from(url).toString('base64');
+  const base64url = base64.replace(/=/g, '').replace(/\//g, '_').replace(/\+/g, '-');
+  return 'u!' + base64url;
+}
+
+// Reconstrói percentuais/custosPessoais/custosMateriais a partir das linhas (AOA) da
+// planilha gerada por /orcamento/salvar-notion — mesma estrutura de seções usada lá.
+function parseDetalhamentoDaPlanilha(linhas) {
+  const resultado = { percentuais: [], custosPessoais: [], custosMateriais: [] };
+  let secaoAtual = null;
+  for (const linha of linhas) {
+    const primeiraCel = (linha[0] || '').toString().trim();
+    if (primeiraCel === 'Percentuais') { secaoAtual = 'percentuais'; continue; }
+    if (primeiraCel === 'Custos Pessoais') { secaoAtual = 'custosPessoais'; continue; }
+    if (primeiraCel === 'Custos Materiais') { secaoAtual = 'custosMateriais'; continue; }
+    if (primeiraCel === 'Nome' || primeiraCel === 'Categoria' || primeiraCel === 'Item') continue;
+    if (!primeiraCel) { secaoAtual = null; continue; }
+    if (secaoAtual === 'percentuais') {
+      resultado.percentuais.push({ nome: primeiraCel, valor: parseFloat(linha[1]) || 0 });
+    } else if (secaoAtual === 'custosPessoais') {
+      resultado.custosPessoais.push({ nome: primeiraCel, qtd: parseFloat(linha[1]) || 0, valor: parseFloat(linha[2]) || 0 });
+    } else if (secaoAtual === 'custosMateriais') {
+      resultado.custosMateriais.push({ nome: primeiraCel, valor: parseFloat(linha[1]) || 0 });
+    }
+  }
+  return resultado;
+}
+
+// GET /orcamento/buscar?q=texto — lista curta de orçamentos já salvos que casam com o texto
+app.get('/orcamento/buscar', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json({ ok: true, grupos: [] });
+  try {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { property: 'Local', title: { contains: q } },
+        page_size: 50,
+        sorts: [{ property: 'Data', direction: 'descending' }],
+      }),
+    });
+    const d = await r.json();
+    const grupos = {};
+    (d.results || []).forEach(p => {
+      const props = p.properties;
+      const local = props['Local']?.title?.[0]?.plain_text || '';
+      const linkPlanilha = props['Link da Planilha']?.url || '';
+      const chave = linkPlanilha || (local + '|' + ((props['Contratante']?.multi_select || [])[0]?.name || ''));
+      if (!grupos[chave]) {
+        grupos[chave] = {
+          local,
+          contratante: (props['Contratante']?.multi_select || []).map(o => o.name).join(', '),
+          tipo: props['Tipo']?.select?.name || '',
+          valor: props['Valor']?.number || 0,
+          linkPlanilha,
+          datas: [],
+        };
+      }
+      grupos[chave].datas.push(props['Data']?.date?.start || '');
+    });
+    res.json({ ok: true, grupos: Object.values(grupos) });
+  } catch (err) {
+    console.error('[orcamento/buscar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// GET /orcamento/carregar?local=texto&linkPlanilha=url — carrega um orçamento específico
+app.get('/orcamento/carregar', async (req, res) => {
+  const local = (req.query.local || '').trim();
+  const linkPlanilha = (req.query.linkPlanilha || '').trim();
+  if (!local) return res.status(400).json({ ok: false, erro: 'Local é obrigatório.' });
+  try {
+    const filtroAnd = [{ property: 'Local', title: { equals: local } }];
+    if (linkPlanilha) filtroAnd.push({ property: 'Link da Planilha', url: { equals: linkPlanilha } });
+
+    const r = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { and: filtroAnd }, page_size: 50 }),
+    });
+    const d = await r.json();
+    const paginas = d.results || [];
+    if (paginas.length === 0) return res.json({ ok: false, erro: 'Nenhuma página encontrada.' });
+
+    const p0 = paginas[0].properties;
+    const resultado = {
+      local: p0['Local']?.title?.[0]?.plain_text || '',
+      endereco: p0['Endereço']?.place?.address || '',
+      contratante: (p0['Contratante']?.multi_select || [])[0]?.name || '',
+      tipo: p0['Tipo']?.select?.name || '',
+      contato: p0['Contato']?.rich_text?.[0]?.plain_text || '',
+      valor: p0['Valor']?.number || 0,
+      cacheElenco: p0['Cachê Elenco']?.number || 0,
+      cacheProducao: p0['Cachê Produção']?.number || 0,
+      cacheTecnicos: p0['Cachê Técnicos']?.number || 0,
+      trabalhoId: (p0['🎭 Trabalhos']?.relation || [])[0]?.id || null,
+      integrantesIds: (p0['Integrantes']?.relation || []).map(rel => rel.id),
+      linkPlanilha: p0['Link da Planilha']?.url || '',
+      apresentacoes: paginas.map(pg => ({
+        data: pg.properties['Data']?.date?.start || '',
+        horario: pg.properties['Horário Apresentação']?.rich_text?.[0]?.plain_text || '',
+      })),
+      detalhamento: null,
+      avisoDetalhamento: '',
+    };
+
+    if (resultado.linkPlanilha) {
+      try {
+        const msToken = await getMicrosoftToken();
+        const shareId = encodarShareId(resultado.linkPlanilha);
+        const rArquivo = await fetch('https://graph.microsoft.com/v1.0/shares/' + shareId + '/driveItem/content', {
+          headers: { 'Authorization': 'Bearer ' + msToken },
+        });
+        if (rArquivo.ok) {
+          const buffer = Buffer.from(await rArquivo.arrayBuffer());
+          const XLSX = require('xlsx');
+          const wb = XLSX.read(buffer, { type: 'buffer' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+          resultado.detalhamento = parseDetalhamentoDaPlanilha(linhas);
+        } else {
+          console.error('[orcamento/carregar] falha ao baixar planilha:', rArquivo.status);
+          resultado.avisoDetalhamento = 'Não foi possível reler a planilha — detalhamento não recuperado.';
+        }
+      } catch (eXlsx) {
+        console.error('[orcamento/carregar] erro ao ler planilha:', eXlsx.message);
+        resultado.avisoDetalhamento = 'Não foi possível reler a planilha — detalhamento não recuperado.';
+      }
+    } else {
+      resultado.avisoDetalhamento = 'Este orçamento não tem planilha vinculada — detalhamento não disponível.';
+    }
+
+    res.json({ ok: true, ...resultado });
+  } catch (err) {
+    console.error('[orcamento/carregar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
