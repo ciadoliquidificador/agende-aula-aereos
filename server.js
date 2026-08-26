@@ -9242,7 +9242,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
         'Data': { date: { start: apresentacao.data } },
         'Horário Apresentação': { rich_text: [{ text: { content: apresentacao.horario || '' } }] },
         'Valor': { number: Number(valorPorApresentacao) },
-        'Status': { select: { name: 'Orçamento' } },
+        'Status': { status: { name: 'Orçamento' } },
       };
       if (cacheElenco !== undefined) propsBase['Cachê Elenco'] = { number: Number(cacheElenco) || 0 };
       if (cacheProducao !== undefined) propsBase['Cachê Produção'] = { number: Number(cacheProducao) || 0 };
