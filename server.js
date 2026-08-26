@@ -6488,6 +6488,7 @@ app.post('/mural/postar', async (req, res) => {
 
     const msgCompleta = '📢 *' + titulo + '*\n\n' + mensagem;
     let enviados = 0;
+    let falhas = 0;
     for (const numLimpo of contatos) {
       const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
       try {
@@ -6497,7 +6498,13 @@ app.post('/mural/postar', async (req, res) => {
           await enviarWhatsAppComHorarioComercial(numBr, msgCompleta);
         }
         enviados++;
-      } catch(e) {}
+      } catch(e) {
+        falhas++;
+        console.error('[mural/postar] falha ao enviar para ' + numBr + ':', e.message);
+      }
+    }
+    if (falhas > 0) {
+      console.error('[mural/postar] resumo: ' + enviados + ' enviados, ' + falhas + ' falhas, ' + contatos.size + ' contatos encontrados. fileUrl=' + (fileUrl || '(sem imagem)'));
     }
 
     await fetch('https://api.notion.com/v1/pages', {
@@ -6516,7 +6523,7 @@ app.post('/mural/postar', async (req, res) => {
       }),
     });
 
-    res.json({ ok: true, totalDestinatarios: enviados });
+    res.json({ ok: true, totalDestinatarios: enviados, contatosEncontrados: contatos.size, falhas });
   } catch (err) {
     console.error('[mural/postar] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
