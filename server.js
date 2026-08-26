@@ -876,6 +876,76 @@ app.get('/vagas-dancas', async (req, res) => {
   }
 });
 
+// ===== CURSO DE MEDITAÇÃO — INSCRIÇÃO GRATUITA =====
+app.post('/meditacao/inscrever', async (req, res) => {
+  const { nomeCompleto, nomeSocial, rg, cpf, telefone, email, rua, numero, complemento, bairro, cep, cidade, estado, assinatura, consentimentoUsoImagem } = req.body;
+  if (!nomeCompleto || !cpf || !telefone || !email || !assinatura) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
+  const cpfLimpo = cpf.replace(/\D/g, '');
+  if (cpfLimpo.length < 11) return res.status(400).json({ error: 'CPF inválido' });
+  const numLimpo = telefone.replace(/\D/g, '');
+  if (numLimpo.length < 11) return res.status(400).json({ error: 'Telefone inválido' });
+  try {
+    const notionResp = await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN_COMMEDIA}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent: { database_id: NOTION_DB_COMMEDIA }, properties: {
+        'Nome Completo':      { title:        [{ text: { content: nomeCompleto } }] },
+        'Nome Social':        { rich_text:    [{ text: { content: nomeSocial || '' } }] },
+        'CPF':                { rich_text:    [{ text: { content: cpfLimpo } }] },
+        'RG':                 { rich_text:    [{ text: { content: rg || '' } }] },
+        'Telefone':           { phone_number: telefone },
+        'Email':              { email:        email },
+        'CEP':                { rich_text:    [{ text: { content: cep || '' } }] },
+        'Rua':                { rich_text:    [{ text: { content: rua || '' } }] },
+        'Número':             { rich_text:    [{ text: { content: numero || '' } }] },
+        'Complemento':        { rich_text:    [{ text: { content: complemento || '' } }] },
+        'Bairro':             { rich_text:    [{ text: { content: bairro || '' } }] },
+        'Cidade':             { rich_text:    [{ text: { content: cidade || '' } }] },
+        'Estado':             { rich_text:    [{ text: { content: estado || '' } }] },
+        'Forma de Pagamento': { select:       { name: 'Gratuito' } },
+        'Status':             { select:       { name: 'Pendente' } },
+        'Assinatura':         { rich_text:    [{ text: { content: assinatura } }] },
+        'Observações':        { rich_text:    [{ text: { content: consentimentoUsoImagem ? 'Autorizou uso de imagem' : 'Não autorizou uso de imagem' } }] },
+        'Curso de Origem':    { select:       { name: 'Meditação' } },
+      }}),
+    });
+    if (!notionResp.ok) { const err = await notionResp.json(); console.error('[meditacao]', err); return res.status(500).json({ error: 'Erro Notion' }); }
+
+    // Dual-write no banco Alunas principal, pra Ocupação de Turmas enxergar essa inscrição.
+    try {
+      await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: { database_id: ALUNAS_DB },
+          properties: {
+            'Nome': { title: [{ text: { content: nomeCompleto } }] },
+            'CPF': { rich_text: [{ text: { content: cpfLimpo } }] },
+            'Contato': { phone_number: telefone },
+            'Email': { email: email || null },
+            'Modalidade': { select: { name: 'Meditação' } },
+            'Turma': { select: { name: 'Turma Única 2026' } },
+            'Professor': { select: { name: 'Bárbara Mazzola' } },
+            'Plano': { select: { name: 'Gratuito' } },
+            'Valor': { number: 0 },
+            'Status': { select: { name: 'Ativa' } },
+          },
+        }),
+      });
+    } catch (eAlunasMeditacao) {
+      console.error('[meditacao/inscrever] erro ao gravar em Alunas (dual-write):', eAlunasMeditacao.message);
+    }
+
+    const primeiroNome = nomeCompleto.split(' ')[0];
+    const msgAdmin = `🧘 *Nova inscrição — Curso de Meditação*\n\n👤 ${nomeCompleto}\n📱 ${telefone}\n📧 ${email}`;
+    const msgUser = `Olá, ${primeiroNome}! 🧘\n\nSua inscrição no curso gratuito *Corpo e Meditação*, com Bárbara Mazzola, foi recebida!\n\n8 encontros, em 3 momentos: Corpo Terreno, Corpo Sutil e Corpo Verdadeiro.\n\nEm breve entraremos em contato com as datas e horários. Qualquer dúvida é só responder aqui! ✨`;
+    try { const adminId = await getOrCreateContactId('5511986899433'); if (adminId) await enviarWhatsApp('5511986899433', msgAdmin); } catch(e) {}
+    try { await enviarWhatsApp('55' + numLimpo, msgUser); } catch(e) {}
+    return res.json({ ok: true });
+  } catch (err) { console.error('[meditacao]', err.message); return res.status(500).json({ error: 'Erro interno' }); }
+});
+// ===== FIM CURSO DE MEDITAÇÃO =====
+
 app.post('/inscricao-dancas', async (req, res) => {
   const { nomeCompleto, nomeSocial, rg, cpf, telefone, email, rua, numero, complemento, bairro, cep, cidade, estado, formaPagamento, assinatura, observacoes } = req.body;
   if (!nomeCompleto || !cpf || !telefone || !email || !formaPagamento || !assinatura) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
