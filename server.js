@@ -9166,3 +9166,147 @@ app.get('/orcamento/opcoes-notion', async (req, res) => {
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
+
+// POST /orcamento/salvar-notion — cria as páginas da apresentação (uma por data/horário),
+// gera a planilha .xlsx, sobe pro OneDrive e grava o link em cada página criada.
+app.post('/orcamento/salvar-notion', async (req, res) => {
+  const {
+    local, endereco, contratante, tipo, trabalhoId, integrantesIds, contato,
+    apresentacoes, valorPorApresentacao, cacheElenco, cacheProducao, cacheTecnicos,
+    detalhamento,
+  } = req.body;
+
+  if (!local || !tipo || !contratante || !Array.isArray(apresentacoes) || apresentacoes.length === 0) {
+    return res.status(400).json({ ok: false, erro: 'Preencha local, contratante, tipo e ao menos uma data/horário.' });
+  }
+  if (valorPorApresentacao === undefined || valorPorApresentacao === null) {
+    return res.status(400).json({ ok: false, erro: 'Valor por apresentação é obrigatório.' });
+  }
+
+  try {
+    const XLSX = require('xlsx');
+    const linhasResumo = [
+      ['Orçamento — ' + local],
+      [],
+      ['Contratante', contratante],
+      ['Tipo', tipo],
+      ['Contato', contato || ''],
+      [],
+      ['Datas e horários'],
+      ...apresentacoes.map(a => [a.data || '', a.horario || '']),
+      [],
+      ['Valor por apresentação', valorPorApresentacao],
+      ['Quantidade de apresentações', apresentacoes.length],
+      ['Valor total', Math.round(valorPorApresentacao * apresentacoes.length * 100) / 100],
+      ['Cachê Elenco', cacheElenco || 0],
+      ['Cachê Produção', cacheProducao || 0],
+      ['Cachê Técnicos', cacheTecnicos || 0],
+    ];
+    if (detalhamento && detalhamento.percentuais && detalhamento.percentuais.length) {
+      linhasResumo.push([], ['Percentuais'], ['Nome', '%']);
+      detalhamento.percentuais.forEach(p => linhasResumo.push([p.nome, p.valor]));
+    }
+    if (detalhamento && detalhamento.custosPessoais && detalhamento.custosPessoais.length) {
+      linhasResumo.push([], ['Custos Pessoais'], ['Categoria', 'Qtd. pessoas', 'Valor/pessoa']);
+      detalhamento.custosPessoais.forEach(c => linhasResumo.push([c.nome, c.qtd, c.valor]));
+    }
+    if (detalhamento && detalhamento.custosMateriais && detalhamento.custosMateriais.length) {
+      linhasResumo.push([], ['Custos Materiais'], ['Item', 'Valor']);
+      detalhamento.custosMateriais.forEach(m => linhasResumo.push([m.nome, m.valor]));
+    }
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(linhasResumo);
+    XLSX.utils.book_append_sheet(wb, ws, 'Orçamento');
+    const xlsxBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    let linkPlanilha = '';
+    try {
+      const msToken = await getMicrosoftToken();
+      const nomePasta = 'Orcamentos-Propostas-' + slugify(local);
+      const folderId = await criarOuObterSubpasta(msToken, nomePasta);
+      const uploaded = await uploadBufferOneDrive(msToken, folderId, xlsxBuffer, 'orcamento-' + Date.now() + '.xlsx');
+      linkPlanilha = await criarLinkCompartilhamento(msToken, uploaded.id);
+    } catch (eXlsx) {
+      console.error('[orcamento/salvar-notion] erro ao gerar/subir planilha:', eXlsx.message);
+    }
+
+    const paginasCriadas = [];
+    let enderecoGravadoEmAlgumaPagina = false;
+
+    for (const apresentacao of apresentacoes) {
+      const propsBase = {
+        'Local': { title: [{ text: { content: local } }] },
+        'Tipo': { select: { name: tipo } },
+        'Contratante': { multi_select: [{ name: contratante }] },
+        'Contato': { rich_text: [{ text: { content: contato || '' } }] },
+        'Data': { date: { start: apresentacao.data } },
+        'Horário Apresentação': { rich_text: [{ text: { content: apresentacao.horario || '' } }] },
+        'Valor': { number: Number(valorPorApresentacao) },
+        'Status': { select: { name: 'Orçamento' } },
+      };
+      if (cacheElenco !== undefined) propsBase['Cachê Elenco'] = { number: Number(cacheElenco) || 0 };
+      if (cacheProducao !== undefined) propsBase['Cachê Produção'] = { number: Number(cacheProducao) || 0 };
+      if (cacheTecnicos !== undefined) propsBase['Cachê Técnicos'] = { number: Number(cacheTecnicos) || 0 };
+      if (trabalhoId) propsBase['🎭 Trabalhos'] = { relation: [{ id: trabalhoId }] };
+      if (Array.isArray(integrantesIds) && integrantesIds.length) {
+        propsBase['Integrantes'] = { relation: integrantesIds.map(id => ({ id })) };
+      }
+      if (linkPlanilha) propsBase['Link da Planilha'] = { url: linkPlanilha };
+
+      const rCriar = await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent: { database_id: ORCAMENTO_PROPOSTAS_DB }, properties: propsBase }),
+      });
+      if (!rCriar.ok) {
+        const eBody = await rCriar.text();
+        console.error('[orcamento/salvar-notion] Notion recusou criar página para ' + apresentacao.data + ':', eBody);
+        continue;
+      }
+      const paginaCriada = await rCriar.json();
+      paginasCriadas.push({ id: paginaCriada.id, url: paginaCriada.url, data: apresentacao.data });
+
+      if (endereco) {
+        try {
+          const rEndereco = await fetch('https://api.notion.com/v1/pages/' + paginaCriada.id, {
+            method: 'PATCH',
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              properties: {
+                'Endereço': { place: { name: local, address: endereco } },
+              },
+            }),
+          });
+          if (rEndereco.ok) {
+            enderecoGravadoEmAlgumaPagina = true;
+          } else {
+            const eBodyEnd = await rEndereco.text();
+            console.error('[orcamento/salvar-notion] falha ao gravar Endereço (place) na página ' + paginaCriada.id + ':', eBodyEnd);
+          }
+        } catch (eEnd) {
+          console.error('[orcamento/salvar-notion] erro ao tentar gravar Endereço:', eEnd.message);
+        }
+      }
+    }
+
+    if (paginasCriadas.length === 0) {
+      return res.status(500).json({ ok: false, erro: 'Nenhuma página foi criada — ver logs para detalhes.' });
+    }
+
+    try {
+      const linhasDatas = apresentacoes.map(a => '📅 ' + a.data + ' — ' + (a.horario || '')).join('\n');
+      const avisoEndereco = endereco ? ('\n📍 Endereço: ' + endereco + (enderecoGravadoEmAlgumaPagina ? '' : ' (não gravou automaticamente no campo — confira/preencha manualmente)')) : '';
+      const msg = '💰 *Orçamento salvo* — ' + local + '\n\nContratante: ' + contratante + '\nTipo: ' + tipo + '\n' + linhasDatas +
+        '\n\nValor por apresentação: R$ ' + Number(valorPorApresentacao).toFixed(2) + avisoEndereco +
+        (linkPlanilha ? ('\n📄 Planilha: ' + linkPlanilha) : '');
+      await enviarWhatsApp(WHATSAPP_FABIO, msg);
+    } catch (eNotif) {
+      console.error('[orcamento/salvar-notion] erro ao notificar Fábio:', eNotif.message);
+    }
+
+    res.json({ ok: true, paginas: paginasCriadas, linkPlanilha, enderecoGravado: enderecoGravadoEmAlgumaPagina });
+  } catch (err) {
+    console.error('[orcamento/salvar-notion] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
