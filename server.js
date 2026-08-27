@@ -9138,6 +9138,7 @@ app.get('/orcamento/opcoes-notion', async (req, res) => {
     const trabalhos = (dTrabalhos.results || []).map(p => ({
       id: p.id,
       nome: p.properties?.Nome?.title?.[0]?.plain_text || '(sem nome)',
+      tags: (p.properties?.Tipo?.multi_select || []).map(o => o.name),
     }));
 
     const rIntegrantes = await fetch('https://api.notion.com/v1/databases/' + INTEGRANTES_DB + '/query', {
