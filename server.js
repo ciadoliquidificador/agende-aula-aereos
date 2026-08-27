@@ -9368,8 +9368,8 @@ function parseDetalhamentoDaPlanilha(linhas) {
       const especialPessoal = (linha[3] || '').toString().trim();
       resultado.custosPessoais.push({ nome: primeiraCel, qtd: parseFloat(linha[1]) || 0, valor: parseFloat(linha[2]) || 0, especial: especialPessoal || undefined });
     } else if (secaoAtual === 'custosMateriais') {
-      const especialMaterial = (linha[3] || '').toString().trim();
-      const valorBasicoStr = (linha[4] || '').toString().trim();
+      const especialMaterial = (linha[2] || '').toString().trim();
+      const valorBasicoStr = (linha[3] || '').toString().trim();
       resultado.custosMateriais.push({
         nome: primeiraCel, valor: parseFloat(linha[1]) || 0,
         especial: especialMaterial || undefined,
