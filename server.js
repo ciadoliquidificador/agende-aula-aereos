@@ -9174,7 +9174,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
   const {
     local, endereco, contratante, tipo, trabalhoId, integrantesIds, contato,
     apresentacoes, valorPorApresentacao, cacheElenco, cacheProducao, cacheTecnicos,
-    detalhamento, modo,
+    detalhamento, modo, qtdApresentacoes,
   } = req.body;
 
   if (!local || !tipo || !contratante || !Array.isArray(apresentacoes) || apresentacoes.length === 0) {
@@ -9203,6 +9203,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       ['Cachê Produção', cacheProducao || 0],
       ['Cachê Técnicos', cacheTecnicos || 0],
       ['Modo', modo || 2],
+      ['Quantidade de Apresentacoes', qtdApresentacoes || apresentacoes.length || 1],
     ];
     if (detalhamento && detalhamento.percentuais && detalhamento.percentuais.length) {
       linhasResumo.push([], ['Percentuais'], ['Nome', '%', 'Travado']);
@@ -9350,11 +9351,12 @@ function encodarShareId(url) {
 // Reconstrói percentuais/custosPessoais/custosMateriais a partir das linhas (AOA) da
 // planilha gerada por /orcamento/salvar-notion — mesma estrutura de seções usada lá.
 function parseDetalhamentoDaPlanilha(linhas) {
-  const resultado = { percentuais: [], custosPessoais: [], custosMateriais: [], modo: 2 };
+  const resultado = { percentuais: [], custosPessoais: [], custosMateriais: [], modo: 2, qtdApresentacoes: 1 };
   let secaoAtual = null;
   for (const linha of linhas) {
     const primeiraCel = (linha[0] || '').toString().trim();
     if (primeiraCel === 'Modo') { resultado.modo = parseInt(linha[1], 10) || 2; continue; }
+    if (primeiraCel === 'Quantidade de Apresentacoes') { resultado.qtdApresentacoes = parseFloat(linha[1]) || 1; continue; }
     if (primeiraCel === 'Percentuais') { secaoAtual = 'percentuais'; continue; }
     if (primeiraCel === 'Custos Pessoais') { secaoAtual = 'custosPessoais'; continue; }
     if (primeiraCel === 'Custos Materiais') { secaoAtual = 'custosMateriais'; continue; }
@@ -9500,6 +9502,7 @@ app.get('/orcamento/carregar', async (req, res) => {
           const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
           resultado.detalhamento = parseDetalhamentoDaPlanilha(linhas);
           resultado.modo = resultado.detalhamento.modo || 2;
+          resultado.qtdApresentacoes = resultado.detalhamento.qtdApresentacoes || 1;
         } else {
           console.error('[orcamento/carregar] falha ao baixar planilha:', rArquivo.status);
           resultado.avisoDetalhamento = 'Não foi possível reler a planilha — detalhamento não recuperado.';
