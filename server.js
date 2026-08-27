@@ -9209,12 +9209,12 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       detalhamento.percentuais.forEach(p => linhasResumo.push([p.nome, p.valor, p.travado ? 'sim' : 'nao']));
     }
     if (detalhamento && detalhamento.custosPessoais && detalhamento.custosPessoais.length) {
-      linhasResumo.push([], ['Custos Pessoais'], ['Categoria', 'Qtd. pessoas', 'Valor/pessoa']);
-      detalhamento.custosPessoais.forEach(c => linhasResumo.push([c.nome, c.qtd, c.valor]));
+      linhasResumo.push([], ['Custos Pessoais'], ['Categoria', 'Qtd. pessoas', 'Valor/pessoa', 'Especial']);
+      detalhamento.custosPessoais.forEach(c => linhasResumo.push([c.nome, c.qtd, c.valor, c.especial || '']));
     }
     if (detalhamento && detalhamento.custosMateriais && detalhamento.custosMateriais.length) {
-      linhasResumo.push([], ['Custos Materiais'], ['Item', 'Valor']);
-      detalhamento.custosMateriais.forEach(m => linhasResumo.push([m.nome, m.valor]));
+      linhasResumo.push([], ['Custos Materiais'], ['Item', 'Valor', 'Especial', 'ValorBasico']);
+      detalhamento.custosMateriais.forEach(m => linhasResumo.push([m.nome, m.valor, m.especial || '', m.valorBasico != null ? m.valorBasico : '']));
     }
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(linhasResumo);
@@ -9363,9 +9363,16 @@ function parseDetalhamentoDaPlanilha(linhas) {
     if (secaoAtual === 'percentuais') {
       resultado.percentuais.push({ nome: primeiraCel, valor: parseFloat(linha[1]) || 0, travado: (linha[2] || '').toString().trim().toLowerCase() === 'sim' });
     } else if (secaoAtual === 'custosPessoais') {
-      resultado.custosPessoais.push({ nome: primeiraCel, qtd: parseFloat(linha[1]) || 0, valor: parseFloat(linha[2]) || 0 });
+      const especialPessoal = (linha[3] || '').toString().trim();
+      resultado.custosPessoais.push({ nome: primeiraCel, qtd: parseFloat(linha[1]) || 0, valor: parseFloat(linha[2]) || 0, especial: especialPessoal || undefined });
     } else if (secaoAtual === 'custosMateriais') {
-      resultado.custosMateriais.push({ nome: primeiraCel, valor: parseFloat(linha[1]) || 0 });
+      const especialMaterial = (linha[3] || '').toString().trim();
+      const valorBasicoStr = (linha[4] || '').toString().trim();
+      resultado.custosMateriais.push({
+        nome: primeiraCel, valor: parseFloat(linha[1]) || 0,
+        especial: especialMaterial || undefined,
+        valorBasico: valorBasicoStr !== '' ? parseFloat(valorBasicoStr) : undefined,
+      });
     }
   }
   return resultado;
