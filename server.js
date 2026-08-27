@@ -9174,7 +9174,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
   const {
     local, endereco, contratante, tipo, trabalhoId, integrantesIds, contato,
     apresentacoes, valorPorApresentacao, cacheElenco, cacheProducao, cacheTecnicos,
-    detalhamento,
+    detalhamento, modo,
   } = req.body;
 
   if (!local || !tipo || !contratante || !Array.isArray(apresentacoes) || apresentacoes.length === 0) {
@@ -9202,10 +9202,11 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       ['Cachê Elenco', cacheElenco || 0],
       ['Cachê Produção', cacheProducao || 0],
       ['Cachê Técnicos', cacheTecnicos || 0],
+      ['Modo', modo || 2],
     ];
     if (detalhamento && detalhamento.percentuais && detalhamento.percentuais.length) {
-      linhasResumo.push([], ['Percentuais'], ['Nome', '%']);
-      detalhamento.percentuais.forEach(p => linhasResumo.push([p.nome, p.valor]));
+      linhasResumo.push([], ['Percentuais'], ['Nome', '%', 'Travado']);
+      detalhamento.percentuais.forEach(p => linhasResumo.push([p.nome, p.valor, p.travado ? 'sim' : 'nao']));
     }
     if (detalhamento && detalhamento.custosPessoais && detalhamento.custosPessoais.length) {
       linhasResumo.push([], ['Custos Pessoais'], ['Categoria', 'Qtd. pessoas', 'Valor/pessoa']);
@@ -9349,17 +9350,18 @@ function encodarShareId(url) {
 // Reconstrói percentuais/custosPessoais/custosMateriais a partir das linhas (AOA) da
 // planilha gerada por /orcamento/salvar-notion — mesma estrutura de seções usada lá.
 function parseDetalhamentoDaPlanilha(linhas) {
-  const resultado = { percentuais: [], custosPessoais: [], custosMateriais: [] };
+  const resultado = { percentuais: [], custosPessoais: [], custosMateriais: [], modo: 2 };
   let secaoAtual = null;
   for (const linha of linhas) {
     const primeiraCel = (linha[0] || '').toString().trim();
+    if (primeiraCel === 'Modo') { resultado.modo = parseInt(linha[1], 10) || 2; continue; }
     if (primeiraCel === 'Percentuais') { secaoAtual = 'percentuais'; continue; }
     if (primeiraCel === 'Custos Pessoais') { secaoAtual = 'custosPessoais'; continue; }
     if (primeiraCel === 'Custos Materiais') { secaoAtual = 'custosMateriais'; continue; }
     if (primeiraCel === 'Nome' || primeiraCel === 'Categoria' || primeiraCel === 'Item') continue;
     if (!primeiraCel) { secaoAtual = null; continue; }
     if (secaoAtual === 'percentuais') {
-      resultado.percentuais.push({ nome: primeiraCel, valor: parseFloat(linha[1]) || 0 });
+      resultado.percentuais.push({ nome: primeiraCel, valor: parseFloat(linha[1]) || 0, travado: (linha[2] || '').toString().trim().toLowerCase() === 'sim' });
     } else if (secaoAtual === 'custosPessoais') {
       resultado.custosPessoais.push({ nome: primeiraCel, qtd: parseFloat(linha[1]) || 0, valor: parseFloat(linha[2]) || 0 });
     } else if (secaoAtual === 'custosMateriais') {
@@ -9490,6 +9492,7 @@ app.get('/orcamento/carregar', async (req, res) => {
           const ws = wb.Sheets[wb.SheetNames[0]];
           const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
           resultado.detalhamento = parseDetalhamentoDaPlanilha(linhas);
+          resultado.modo = resultado.detalhamento.modo || 2;
         } else {
           console.error('[orcamento/carregar] falha ao baixar planilha:', rArquivo.status);
           resultado.avisoDetalhamento = 'Não foi possível reler a planilha — detalhamento não recuperado.';
