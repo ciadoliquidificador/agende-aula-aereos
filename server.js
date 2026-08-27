@@ -9368,16 +9368,43 @@ function parseDetalhamentoDaPlanilha(linhas) {
   return resultado;
 }
 
-// GET /orcamento/buscar?q=texto — lista curta de orçamentos já salvos que casam com o texto
-app.get('/orcamento/buscar', async (req, res) => {
-  const q = (req.query.q || '').trim();
-  if (!q) return res.json({ ok: true, grupos: [] });
+// GET /orcamento/datas-disponiveis — lista de datas distintas com orçamento salvo (pro dropdown)
+app.get('/orcamento/datas-disponiveis', async (req, res) => {
   try {
     const r = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        filter: { property: 'Local', title: { contains: q } },
+        page_size: 100,
+        sorts: [{ property: 'Data', direction: 'descending' }],
+        filter: { property: 'Data', date: { is_not_empty: true } },
+      }),
+    });
+    const d = await r.json();
+    const datas = [...new Set((d.results || []).map(p => p.properties['Data']?.date?.start || '').filter(Boolean))];
+    res.json({ ok: true, datas });
+  } catch (err) {
+    console.error('[orcamento/datas-disponiveis] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// GET /orcamento/buscar?data=YYYY-MM-DD (e opcionalmente &q=texto) — lista curta de
+// orçamentos já salvos naquela data, agrupados por planilha
+app.get('/orcamento/buscar', async (req, res) => {
+  const data = (req.query.data || '').trim();
+  const q = (req.query.q || '').trim();
+  if (!data && !q) return res.json({ ok: true, grupos: [] });
+  try {
+    const filtroAnd = [];
+    if (data) filtroAnd.push({ property: 'Data', date: { equals: data } });
+    if (q) filtroAnd.push({ property: 'Local', title: { contains: q } });
+
+    const r = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: filtroAnd.length === 1 ? filtroAnd[0] : { and: filtroAnd },
         page_size: 50,
         sorts: [{ property: 'Data', direction: 'descending' }],
       }),
@@ -9388,7 +9415,7 @@ app.get('/orcamento/buscar', async (req, res) => {
       const props = p.properties;
       const local = props['Local']?.title?.[0]?.plain_text || '';
       const linkPlanilha = props['Link da Planilha']?.url || '';
-      const chave = linkPlanilha || (local + '|' + ((props['Contratante']?.multi_select || [])[0]?.name || ''));
+      const chave = linkPlanilha || p.id;
       if (!grupos[chave]) {
         grupos[chave] = {
           local,
