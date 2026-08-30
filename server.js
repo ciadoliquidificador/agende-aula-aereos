@@ -4409,6 +4409,218 @@ app.post('/portal-admin/ocupacao/salvar', async (req, res) => {
 });
 // ===== FIM PORTAL ADMIN — OCUPAÇÃO DE TURMAS =====
 
+// ===== PORTAL ADMIN — PAGAMENTOS =====
+const PAGAMENTOS_DB = '5b85a30acc9f406d81c082bdf521d5a8';
+
+function pgtNormalizar(str) {
+  return String(str || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+async function pgtBuscarRegistros(filtro) {
+  const registros = [];
+  let cursor;
+  do {
+    const body = { page_size: 100 };
+    if (filtro) body.filter = filtro;
+    if (cursor) body.start_cursor = cursor;
+    const r = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error('Erro ao buscar pagamentos: ' + JSON.stringify(d));
+    for (const pagina of d.results) {
+      const p = pagina.properties;
+      registros.push({
+        id: pagina.id,
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        professor: p['Professor']?.select?.name || null,
+        turma: p['Turma']?.select?.name || null,
+        modalidade: p['Modalidade']?.select?.name || null,
+        mes: p['Mês']?.select?.name || null,
+        status: p['Status']?.select?.name || null,
+        aPagar: p['À Pagar']?.number ?? null,
+        valorPago: p['Valor Pago']?.number ?? null,
+        dataPagamento: p['Data Pagamento']?.date?.start || null,
+        observacoes: p['Observações']?.rich_text?.[0]?.plain_text || null,
+      });
+    }
+    cursor = d.has_more ? d.next_cursor : null;
+  } while (cursor);
+  return registros;
+}
+
+// GET /portal-admin/pagamentos?mes=Jul/26&professor=Talita&status=Pendente
+app.get('/portal-admin/pagamentos', async (req, res) => {
+  try {
+    const { mes, professor, status } = req.query;
+    const condicoes = [];
+    if (mes) condicoes.push({ property: 'Mês', select: { equals: mes } });
+    if (professor) condicoes.push({ property: 'Professor', select: { equals: professor } });
+    if (status) condicoes.push({ property: 'Status', select: { equals: status } });
+    const filtro = condicoes.length ? (condicoes.length === 1 ? condicoes[0] : { and: condicoes }) : null;
+
+    const registros = await pgtBuscarRegistros(filtro);
+
+    const resumo = {};
+    for (const r of registros) {
+      if (!resumo[r.status]) resumo[r.status] = { qtd: 0, valor: 0 };
+      resumo[r.status].qtd += 1;
+      resumo[r.status].valor += r.status === 'Pago' ? (r.valorPago || 0) : (r.aPagar || 0);
+    }
+
+    registros.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
+
+    res.json({ ok: true, registros, resumo });
+  } catch (err) {
+    console.error('[portal-admin/pagamentos] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar pagamentos.' });
+  }
+});
+
+// POST /portal-admin/pagamentos/conciliar { csv: "Data,Valor,Identificador,Descrição\n..." }
+// Lê um extrato Nubank, cruza recebimentos (Pix) com pagamentos "Pendente" por nome+valor
+// e devolve os matches propostos — não grava nada no Notion ainda.
+app.post('/portal-admin/pagamentos/conciliar', async (req, res) => {
+  try {
+    const { csv } = req.body;
+    if (!csv || typeof csv !== 'string') {
+      return res.status(400).json({ ok: false, erro: 'csv é obrigatório.' });
+    }
+
+    // --- parse do extrato ---
+    const linhas = csv.split('\n').map(l => l.trim()).filter(Boolean);
+    const transacoes = [];
+    for (const linha of linhas.slice(1)) {
+      const m = linha.match(/^([^,]*),([^,]*),([^,]*),(.*)$/);
+      if (!m) continue;
+      const valor = parseFloat(m[2].trim());
+      if (Number.isNaN(valor) || valor <= 0) continue;
+      const descricao = m[4].trim();
+      const nomeMatch = descricao.match(/^Transferência (?:recebida pelo Pix|Recebida) - (.+?) -/);
+      if (!nomeMatch) continue;
+      const dataMatch = m[1].trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (!dataMatch) continue;
+      const cpfMatch = descricao.match(/•{2,3}\.(\d{3}\.\d{3})-•{2}/);
+      transacoes.push({
+        data: `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}`,
+        valor,
+        nome: nomeMatch[1].trim(),
+        cpfParcial: cpfMatch ? cpfMatch[1] : null,
+      });
+    }
+
+    // --- busca pendentes ---
+    const pendentes = await pgtBuscarRegistros({ property: 'Status', select: { equals: 'Pendente' } });
+
+    // --- conciliação: nome (exato, depois fuzzy primeiro+último nome) + valor exato ---
+    const MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
+
+    function candidatosPorNome(nomeTransacao) {
+      const key = pgtNormalizar(nomeTransacao);
+      let candidatos = pendentes.filter(p => pgtNormalizar(p.nome) === key);
+      if (candidatos.length > 0) return candidatos;
+      const tokens = key.split(' ').filter(Boolean);
+      if (tokens.length >= 2) {
+        const flKey = `${tokens[0]} ${tokens[tokens.length - 1]}`;
+        candidatos = pendentes.filter(p => {
+          const pTokens = pgtNormalizar(p.nome).split(' ').filter(Boolean);
+          if (pTokens.length < 2) return false;
+          return `${pTokens[0]} ${pTokens[pTokens.length - 1]}` === flKey;
+        });
+      }
+      return candidatos;
+    }
+
+    const usados = new Set();
+    const conciliados = [];
+    const valorNaoBate = [];
+    const semCandidato = [];
+
+    for (const tx of transacoes) {
+      const candidatosNome = candidatosPorNome(tx.nome).filter(p => !usados.has(p.id));
+
+      if (candidatosNome.length === 0) {
+        semCandidato.push(tx);
+        continue;
+      }
+
+      const candidatosValor = candidatosNome.filter(p => p.aPagar === tx.valor);
+
+      if (candidatosValor.length === 0) {
+        valorNaoBate.push({ ...tx, pendentesDela: candidatosNome.map(c => ({ mes: c.mes, aPagar: c.aPagar })) });
+        continue;
+      }
+
+      candidatosValor.sort((a, b) => MESES_ORDEM.indexOf(a.mes) - MESES_ORDEM.indexOf(b.mes));
+      const escolhido = candidatosValor[0];
+      usados.add(escolhido.id);
+      conciliados.push({
+        pendenteId: escolhido.id,
+        data: tx.data,
+        valor: tx.valor,
+        nomeExtrato: tx.nome,
+        nomeNotion: escolhido.nome,
+        professor: escolhido.professor,
+        turma: escolhido.turma,
+        mes: escolhido.mes,
+        ambiguo: candidatosValor.length > 1,
+      });
+    }
+
+    res.json({ ok: true, conciliados, valorNaoBate, semCandidato });
+  } catch (err) {
+    console.error('[portal-admin/pagamentos/conciliar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao conciliar extrato.' });
+  }
+});
+
+// POST /portal-admin/pagamentos/conciliar/aplicar { itens: [{ pendenteId, data, valor }] }
+// Marca como Pago os itens confirmados pelo usuário na tela de conciliação.
+app.post('/portal-admin/pagamentos/conciliar/aplicar', async (req, res) => {
+  try {
+    const { itens } = req.body;
+    if (!Array.isArray(itens) || itens.length === 0) {
+      return res.status(400).json({ ok: false, erro: 'itens é obrigatório.' });
+    }
+
+    let atualizados = 0;
+    const erros = [];
+    for (const item of itens) {
+      const r = await fetch('https://api.notion.com/v1/pages/' + item.pendenteId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          properties: {
+            'Status': { select: { name: 'Pago' } },
+            'Data Pagamento': { date: { start: item.data } },
+            'Valor Pago': { number: item.valor },
+          },
+        }),
+      });
+      if (r.ok) {
+        atualizados++;
+      } else {
+        const d = await r.json();
+        console.error('[portal-admin/pagamentos/conciliar/aplicar] erro:', JSON.stringify(d));
+        erros.push(item.pendenteId);
+      }
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+
+    res.json({ ok: true, atualizados, erros });
+  } catch (err) {
+    console.error('[portal-admin/pagamentos/conciliar/aplicar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao aplicar conciliação.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — PAGAMENTOS =====
+
 // ===== PORTAL ADMIN — CADASTRO DE PROFESSORES (CRUD) =====
 app.get('/portal-admin/professores/:pageId', async (req, res) => {
   try {
