@@ -4718,18 +4718,6 @@ app.post('/portal-admin/pagamentos/lembrete/mes', async (req, res) => {
     res.status(500).json({ ok: false, erro: 'Erro ao enviar lembretes.' });
   }
 });
-
-// ROTA TEMPORÁRIA DE TESTE — remover depois de validar o envio de WhatsApp.
-app.post('/portal-admin/pagamentos/lembrete/teste-temporario', async (req, res) => {
-  try {
-    const registroTeste = { nome: 'Fábio (teste)', modalidade: 'Aéreos', turma: 'Quarta 18h', mes: 'Teste/26', aPagar: 100 };
-    await enviarWhatsAppComHorarioComercial('11989946586', pgtMontarMensagemLembrete(registroTeste));
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('[teste-temporario] erro:', err.message);
-    res.status(500).json({ ok: false, erro: err.message });
-  }
-});
 // ===== FIM PORTAL ADMIN — PAGAMENTOS =====
 
 // ===== PORTAL ADMIN — CADASTRO DE PROFESSORES (CRUD) =====
