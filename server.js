@@ -4522,15 +4522,21 @@ app.post('/portal-admin/pagamentos/conciliar', async (req, res) => {
     // --- conciliação: nome (exato, depois fuzzy primeiro+último nome) + valor exato ---
     const MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
 
+    // Remove anotações entre parênteses do nome (ex: "Caetano (Laís)" -> "Caetano", onde
+    // "Laís" é o nome da mãe — comum nas turmas infantis) antes de comparar nomes.
+    function pgtStripParentetico(nome) {
+      return String(nome || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+    }
+
     function candidatosPorNome(nomeTransacao) {
-      const key = pgtNormalizar(nomeTransacao);
-      let candidatos = pendentes.filter(p => pgtNormalizar(p.nome) === key);
+      const key = pgtNormalizar(pgtStripParentetico(nomeTransacao));
+      let candidatos = pendentes.filter(p => pgtNormalizar(pgtStripParentetico(p.nome)) === key);
       if (candidatos.length > 0) return candidatos;
       const tokens = key.split(' ').filter(Boolean);
       if (tokens.length >= 2) {
         const flKey = `${tokens[0]} ${tokens[tokens.length - 1]}`;
         candidatos = pendentes.filter(p => {
-          const pTokens = pgtNormalizar(p.nome).split(' ').filter(Boolean);
+          const pTokens = pgtNormalizar(pgtStripParentetico(p.nome)).split(' ').filter(Boolean);
           if (pTokens.length < 2) return false;
           return `${pTokens[0]} ${pTokens[pTokens.length - 1]}` === flKey;
         });
