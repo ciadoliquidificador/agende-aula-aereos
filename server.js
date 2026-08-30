@@ -4718,22 +4718,6 @@ app.post('/portal-admin/pagamentos/lembrete/mes', async (req, res) => {
     res.status(500).json({ ok: false, erro: 'Erro ao enviar lembretes.' });
   }
 });
-
-// ROTA TEMPORÁRIA DE TESTE — envio direto (ignora horário comercial), com log explícito
-// pra rastrear quantas vezes a chamada de fato acontece. Remover depois de validar.
-app.post('/portal-admin/pagamentos/lembrete/teste-temporario', async (req, res) => {
-  console.log('[teste-temporario] chamada recebida em ' + new Date().toISOString());
-  try {
-    const registroTeste = { nome: 'Fábio (teste 2)', modalidade: 'Aéreos', turma: 'Quarta 18h', mes: 'Teste2/26', aPagar: 100 };
-    console.log('[teste-temporario] chamando enviarWhatsApp...');
-    const resultado = await enviarWhatsApp('11989946586', pgtMontarMensagemLembrete(registroTeste));
-    console.log('[teste-temporario] enviarWhatsApp retornou, messageId=' + resultado.id);
-    res.json({ ok: true, resultado });
-  } catch (err) {
-    console.error('[teste-temporario] erro:', err.message);
-    res.status(500).json({ ok: false, erro: err.message });
-  }
-});
 // ===== FIM PORTAL ADMIN — PAGAMENTOS =====
 
 // ===== PORTAL ADMIN — CADASTRO DE PROFESSORES (CRUD) =====
