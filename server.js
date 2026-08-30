@@ -4409,7 +4409,7 @@ app.post('/portal-admin/ocupacao/salvar', async (req, res) => {
 });
 // ===== FIM PORTAL ADMIN — OCUPAÇÃO DE TURMAS =====
 
-// ===== PORTAL ADMIN — PAGAMENTOS =====
+// ===== PORTAL ADMIN — RECEBIMENTOS =====
 const PAGAMENTOS_DB = '5b85a30acc9f406d81c082bdf521d5a8';
 
 function pgtNormalizar(str) {
@@ -4456,8 +4456,8 @@ async function pgtBuscarRegistros(filtro) {
   return registros;
 }
 
-// GET /portal-admin/pagamentos?mes=Jul/26&professor=Talita&status=Pendente
-app.get('/portal-admin/pagamentos', async (req, res) => {
+// GET /portal-admin/recebimentos?mes=Jul/26&professor=Talita&status=Pendente
+app.get('/portal-admin/recebimentos', async (req, res) => {
   try {
     const { mes, professor, status } = req.query;
     const condicoes = [];
@@ -4479,15 +4479,15 @@ app.get('/portal-admin/pagamentos', async (req, res) => {
 
     res.json({ ok: true, registros, resumo });
   } catch (err) {
-    console.error('[portal-admin/pagamentos] erro:', err.message);
+    console.error('[portal-admin/recebimentos] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao buscar pagamentos.' });
   }
 });
 
-// POST /portal-admin/pagamentos/conciliar { csv: "Data,Valor,Identificador,Descrição\n..." }
+// POST /portal-admin/recebimentos/conciliar { csv: "Data,Valor,Identificador,Descrição\n..." }
 // Lê um extrato Nubank, cruza recebimentos (Pix) com pagamentos "Pendente" por nome+valor
 // e devolve os matches propostos — não grava nada no Notion ainda.
-app.post('/portal-admin/pagamentos/conciliar', async (req, res) => {
+app.post('/portal-admin/recebimentos/conciliar', async (req, res) => {
   try {
     const { csv } = req.body;
     if (!csv || typeof csv !== 'string') {
@@ -4582,14 +4582,14 @@ app.post('/portal-admin/pagamentos/conciliar', async (req, res) => {
 
     res.json({ ok: true, conciliados, valorNaoBate, semCandidato });
   } catch (err) {
-    console.error('[portal-admin/pagamentos/conciliar] erro:', err.message);
+    console.error('[portal-admin/recebimentos/conciliar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao conciliar extrato.' });
   }
 });
 
-// POST /portal-admin/pagamentos/conciliar/aplicar { itens: [{ pendenteId, data, valor }] }
+// POST /portal-admin/recebimentos/conciliar/aplicar { itens: [{ pendenteId, data, valor }] }
 // Marca como Pago os itens confirmados pelo usuário na tela de conciliação.
-app.post('/portal-admin/pagamentos/conciliar/aplicar', async (req, res) => {
+app.post('/portal-admin/recebimentos/conciliar/aplicar', async (req, res) => {
   try {
     const { itens } = req.body;
     if (!Array.isArray(itens) || itens.length === 0) {
@@ -4614,7 +4614,7 @@ app.post('/portal-admin/pagamentos/conciliar/aplicar', async (req, res) => {
         atualizados++;
       } else {
         const d = await r.json();
-        console.error('[portal-admin/pagamentos/conciliar/aplicar] erro:', JSON.stringify(d));
+        console.error('[portal-admin/recebimentos/conciliar/aplicar] erro:', JSON.stringify(d));
         erros.push(item.pendenteId);
       }
       await new Promise(resolve => setTimeout(resolve, 350));
@@ -4622,7 +4622,7 @@ app.post('/portal-admin/pagamentos/conciliar/aplicar', async (req, res) => {
 
     res.json({ ok: true, atualizados, erros });
   } catch (err) {
-    console.error('[portal-admin/pagamentos/conciliar/aplicar] erro:', err.message);
+    console.error('[portal-admin/recebimentos/conciliar/aplicar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao aplicar conciliação.' });
   }
 });
@@ -4655,8 +4655,8 @@ async function pgtEnviarLembrete(registro) {
   return { ok: true };
 }
 
-// POST /portal-admin/pagamentos/lembrete/individual { pendenteId }
-app.post('/portal-admin/pagamentos/lembrete/individual', async (req, res) => {
+// POST /portal-admin/recebimentos/lembrete/individual { pendenteId }
+app.post('/portal-admin/recebimentos/lembrete/individual', async (req, res) => {
   try {
     const { pendenteId } = req.body;
     if (!pendenteId) return res.status(400).json({ ok: false, erro: 'pendenteId é obrigatório.' });
@@ -4679,14 +4679,14 @@ app.post('/portal-admin/pagamentos/lembrete/individual', async (req, res) => {
     const resultado = await pgtEnviarLembrete(registro);
     res.json({ ok: resultado.ok, motivo: resultado.motivo, nome: registro.nome });
   } catch (err) {
-    console.error('[portal-admin/pagamentos/lembrete/individual] erro:', err.message);
+    console.error('[portal-admin/recebimentos/lembrete/individual] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao enviar lembrete.' });
   }
 });
 
-// POST /portal-admin/pagamentos/lembrete/mes { mes }
+// POST /portal-admin/recebimentos/lembrete/mes { mes }
 // Envia lembrete pra todo mundo com Status=Pendente naquele mês.
-app.post('/portal-admin/pagamentos/lembrete/mes', async (req, res) => {
+app.post('/portal-admin/recebimentos/lembrete/mes', async (req, res) => {
   try {
     const { mes } = req.body;
     if (!mes) return res.status(400).json({ ok: false, erro: 'mes é obrigatório.' });
@@ -4714,11 +4714,11 @@ app.post('/portal-admin/pagamentos/lembrete/mes', async (req, res) => {
 
     res.json({ ok: true, total: pendentes.length, enviados, semContato, erros });
   } catch (err) {
-    console.error('[portal-admin/pagamentos/lembrete/mes] erro:', err.message);
+    console.error('[portal-admin/recebimentos/lembrete/mes] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao enviar lembretes.' });
   }
 });
-// ===== FIM PORTAL ADMIN — PAGAMENTOS =====
+// ===== FIM PORTAL ADMIN — RECEBIMENTOS =====
 
 // ===== PORTAL ADMIN — CADASTRO DE PROFESSORES (CRUD) =====
 app.get('/portal-admin/professores/:pageId', async (req, res) => {
