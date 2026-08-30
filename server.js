@@ -4448,6 +4448,7 @@ async function pgtBuscarRegistros(filtro) {
         valorPago: p['Valor Pago']?.number ?? null,
         dataPagamento: p['Data Pagamento']?.date?.start || null,
         observacoes: p['Observações']?.rich_text?.[0]?.plain_text || null,
+        alunaId: p['Aluna']?.relation?.[0]?.id || null,
       });
     }
     cursor = d.has_more ? d.next_cursor : null;
@@ -4617,6 +4618,98 @@ app.post('/portal-admin/pagamentos/conciliar/aplicar', async (req, res) => {
   } catch (err) {
     console.error('[portal-admin/pagamentos/conciliar/aplicar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao aplicar conciliação.' });
+  }
+});
+
+// ---------- Lembretes de cobrança por WhatsApp (disparo manual) ----------
+
+function pgtMontarMensagemLembrete(registro) {
+  const primeiroNome = (registro.nome || '').split(' ')[0];
+  const valor = (registro.aPagar || 0).toFixed(2).replace('.', ',');
+  const modalidadeOuTurma = registro.modalidade || registro.turma || 'sua turma';
+  return `Oi, ${primeiroNome}! 😊\n\nPassando para lembrar que o pagamento de ${modalidadeOuTurma} referente a ${registro.mes} ainda está em aberto (R$ ${valor}).\n\nQualquer dúvida, é só chamar por aqui!\n\n— Cia do Liquidificador`;
+}
+
+async function pgtBuscarTelefoneAluna(alunaId) {
+  const r = await fetch('https://api.notion.com/v1/pages/' + alunaId, {
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+  });
+  if (!r.ok) return null;
+  const d = await r.json();
+  return d.properties?.['Contato']?.phone_number || null;
+}
+
+async function pgtEnviarLembrete(registro) {
+  if (!registro.alunaId) return { ok: false, motivo: 'sem_relation_aluna' };
+  const telefone = await pgtBuscarTelefoneAluna(registro.alunaId);
+  if (!telefone) return { ok: false, motivo: 'sem_telefone' };
+  const numLimpo = telefone.replace(/\D/g, '');
+  if (numLimpo.length < 11) return { ok: false, motivo: 'ddd_invalido' };
+  await enviarWhatsAppComHorarioComercial(telefone, pgtMontarMensagemLembrete(registro));
+  return { ok: true };
+}
+
+// POST /portal-admin/pagamentos/lembrete/individual { pendenteId }
+app.post('/portal-admin/pagamentos/lembrete/individual', async (req, res) => {
+  try {
+    const { pendenteId } = req.body;
+    if (!pendenteId) return res.status(400).json({ ok: false, erro: 'pendenteId é obrigatório.' });
+
+    const r = await fetch('https://api.notion.com/v1/pages/' + pendenteId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pagina = await r.json();
+    if (!r.ok) return res.status(404).json({ ok: false, erro: 'Registro não encontrado.' });
+    const p = pagina.properties;
+    const registro = {
+      nome: p['Nome']?.title?.[0]?.plain_text || '',
+      modalidade: p['Modalidade']?.select?.name || null,
+      turma: p['Turma']?.select?.name || null,
+      mes: p['Mês']?.select?.name || null,
+      aPagar: p['À Pagar']?.number ?? 0,
+      alunaId: p['Aluna']?.relation?.[0]?.id || null,
+    };
+
+    const resultado = await pgtEnviarLembrete(registro);
+    res.json({ ok: resultado.ok, motivo: resultado.motivo, nome: registro.nome });
+  } catch (err) {
+    console.error('[portal-admin/pagamentos/lembrete/individual] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao enviar lembrete.' });
+  }
+});
+
+// POST /portal-admin/pagamentos/lembrete/mes { mes }
+// Envia lembrete pra todo mundo com Status=Pendente naquele mês.
+app.post('/portal-admin/pagamentos/lembrete/mes', async (req, res) => {
+  try {
+    const { mes } = req.body;
+    if (!mes) return res.status(400).json({ ok: false, erro: 'mes é obrigatório.' });
+
+    const pendentes = await pgtBuscarRegistros({
+      and: [
+        { property: 'Mês', select: { equals: mes } },
+        { property: 'Status', select: { equals: 'Pendente' } },
+      ],
+    });
+
+    let enviados = 0;
+    const semContato = [];
+    const erros = [];
+    for (const registro of pendentes) {
+      try {
+        const resultado = await pgtEnviarLembrete(registro);
+        if (resultado.ok) enviados++;
+        else semContato.push({ nome: registro.nome, motivo: resultado.motivo });
+      } catch (e) {
+        erros.push(registro.nome);
+      }
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+
+    res.json({ ok: true, total: pendentes.length, enviados, semContato, erros });
+  } catch (err) {
+    console.error('[portal-admin/pagamentos/lembrete/mes] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao enviar lembretes.' });
   }
 });
 // ===== FIM PORTAL ADMIN — PAGAMENTOS =====
