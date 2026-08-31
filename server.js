@@ -5122,6 +5122,7 @@ async function salaBuscarAgendamentos(filtro) {
     for (const pagina of d.results) {
       const p = pagina.properties;
       const valorTotal = p['Valor Total']?.number ?? 0;
+      const valorRecebido = p['Valor Recebido']?.number ?? 0;
       registros.push({
         id: pagina.id,
         titulo: p['Título']?.title?.[0]?.plain_text || '',
@@ -5134,7 +5135,10 @@ async function salaBuscarAgendamentos(filtro) {
         inicio: p['Início']?.date?.start || null,
         fim: p['Fim']?.date?.start || null,
         valorTotal,
+        // Fração paga na reserva (sinal). O restante ("saldo") é esperado na data de ocupação.
         deposito: Math.round(valorTotal * 0.3 * 100) / 100,
+        valorRecebido,
+        saldoDevido: Math.round((valorTotal - valorRecebido) * 100) / 100,
         status: p['Status']?.select?.name || null,
         notaFiscal: p['Nota Fiscal']?.select?.name || null,
         cpfCnpj: p['CPF/CNPJ Nota Fiscal']?.rich_text?.[0]?.plain_text || '',
@@ -5160,8 +5164,14 @@ app.get('/portal-admin/sala-ensaio/agendamentos', async (req, res) => {
       resumo[r.status].qtd += 1;
       resumo[r.status].valor += r.valorTotal || 0;
     }
+    const totais = registros.filter(r => r.status !== 'Cancelado').reduce((acc, r) => {
+      acc.valorTotal += r.valorTotal || 0;
+      acc.valorRecebido += r.valorRecebido || 0;
+      acc.saldoDevido += Math.max(r.saldoDevido || 0, 0);
+      return acc;
+    }, { valorTotal: 0, valorRecebido: 0, saldoDevido: 0 });
 
-    res.json({ ok: true, registros, resumo });
+    res.json({ ok: true, registros, resumo, totais });
   } catch (err) {
     console.error('[portal-admin/sala-ensaio/agendamentos] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao buscar agendamentos.' });
@@ -5191,8 +5201,10 @@ app.post('/portal-admin/sala-ensaio/status', async (req, res) => {
   }
 });
 
-// Cruza Pix recebidos do extrato com agendamentos "Pendente"/"Aguardando Comprovante"
-// por nome (Responsável/Contato/Projeto/Coletivo) + valor (sinal de 30% ou valor integral).
+// Cruza Pix recebidos do extrato com agendamentos que ainda têm saldo em aberto
+// (qualquer status exceto Cancelado), por nome (Responsável/Contato/Projeto/Coletivo) + valor.
+// O pagamento vem em duas frações possíveis: sinal (30%, na reserva) ou saldo (70% restante,
+// pago na data de ocupação) — nunca dá baixa direto pro status, soma no Valor Recebido.
 async function salaAnalisarExtratoAluguel(csv) {
   const linhas = csv.split('\n').map(l => l.trim()).filter(Boolean);
   const transacoes = [];
@@ -5213,12 +5225,9 @@ async function salaAnalisarExtratoAluguel(csv) {
     });
   }
 
-  const abertos = await salaBuscarAgendamentos({
-    or: [
-      { property: 'Status', select: { equals: 'Pendente' } },
-      { property: 'Status', select: { equals: 'Aguardando Comprovante' } },
-    ],
-  });
+  const abertos = (await salaBuscarAgendamentos({
+    property: 'Status', select: { does_not_equal: 'Cancelado' },
+  })).filter(a => a.saldoDevido > 0.01);
 
   function candidatosPorNome(nomeTransacao) {
     const key = pgtNormalizar(nomeTransacao);
@@ -5238,6 +5247,18 @@ async function salaAnalisarExtratoAluguel(csv) {
     });
   }
 
+  // Nada recebido ainda: pode vir o sinal (30%) ou o valor integral de uma vez.
+  // Já recebeu o sinal: só falta o saldo (o resto, esperado na data de ocupação).
+  function valoresEsperados(a) {
+    if (a.valorRecebido < 0.01) {
+      return [
+        { tipo: 'sinal', valor: a.deposito },
+        { tipo: 'integral', valor: a.valorTotal },
+      ];
+    }
+    return [{ tipo: 'saldo', valor: a.saldoDevido }];
+  }
+
   const usados = new Set();
   const conciliados = [];
   const valorNaoBate = [];
@@ -5247,34 +5268,44 @@ async function salaAnalisarExtratoAluguel(csv) {
     const candidatosNome = candidatosPorNome(tx.nome).filter(a => !usados.has(a.id));
     if (candidatosNome.length === 0) { semCandidato.push(tx); continue; }
 
-    const candidatosValor = candidatosNome.filter(a =>
-      Math.abs(a.deposito - tx.valor) < 0.01 || Math.abs(a.valorTotal - tx.valor) < 0.01
-    );
-    if (candidatosValor.length === 0) {
-      valorNaoBate.push({ ...tx, abertosDele: candidatosNome.map(c => ({ titulo: c.titulo, deposito: c.deposito, valorTotal: c.valorTotal })) });
+    const opcoes = [];
+    for (const a of candidatosNome) {
+      for (const esp of valoresEsperados(a)) {
+        if (Math.abs(esp.valor - tx.valor) < 0.01) opcoes.push({ agendamento: a, tipo: esp.tipo });
+      }
+    }
+
+    if (opcoes.length === 0) {
+      valorNaoBate.push({
+        ...tx,
+        abertosDele: candidatosNome.map(c => ({ titulo: c.titulo, deposito: c.deposito, valorTotal: c.valorTotal, valorRecebido: c.valorRecebido, saldoDevido: c.saldoDevido })),
+      });
       continue;
     }
 
-    const escolhido = candidatosValor[0];
-    usados.add(escolhido.id);
-    const ehIntegral = Math.abs(escolhido.valorTotal - tx.valor) < 0.01;
+    const escolhido = opcoes[0];
+    usados.add(escolhido.agendamento.id);
     conciliados.push({
-      pageId: escolhido.id,
+      pageId: escolhido.agendamento.id,
       data: tx.data,
       valor: tx.valor,
       nomeExtrato: tx.nome,
-      titulo: escolhido.titulo,
-      responsavel: escolhido.responsavel,
-      statusAtual: escolhido.status,
-      tipoPagamento: ehIntegral ? 'integral' : 'sinal',
-      ambiguo: candidatosValor.length > 1,
+      titulo: escolhido.agendamento.titulo,
+      responsavel: escolhido.agendamento.responsavel,
+      statusAtual: escolhido.agendamento.status,
+      tipoPagamento: escolhido.tipo, // 'sinal' | 'integral' | 'saldo'
+      ambiguo: opcoes.length > 1,
     });
   }
 
   return { conciliados, valorNaoBate, semCandidato };
 }
 
+const SALA_LABEL_TIPO_PAGAMENTO = { sinal: 'sinal da reserva', integral: 'valor integral', saldo: 'saldo na data de ocupação' };
+
 // POST /portal-admin/sala-ensaio/extrato/aplicar { itens: [{ pageId, data, valor, tipoPagamento }] }
+// Soma no "Valor Recebido" (baixa parcial) em vez de sobrescrever — cada agendamento pode
+// receber duas parcelas (sinal + saldo) em extratos de meses diferentes.
 app.post('/portal-admin/sala-ensaio/extrato/aplicar', async (req, res) => {
   try {
     const { itens } = req.body;
@@ -5285,7 +5316,7 @@ app.post('/portal-admin/sala-ensaio/extrato/aplicar', async (req, res) => {
     const erros = [];
     for (const item of itens) {
       const dataFmt = String(item.data).split('-').reverse().join('/');
-      const notaTexto = `Pagamento recebido via Pix em ${dataFmt}: R$ ${Number(item.valor).toFixed(2)} (${item.tipoPagamento === 'integral' ? 'valor integral' : 'sinal'}).`;
+      const notaTexto = `Pagamento recebido via Pix em ${dataFmt}: R$ ${Number(item.valor).toFixed(2)} (${SALA_LABEL_TIPO_PAGAMENTO[item.tipoPagamento] || item.tipoPagamento}).`;
 
       const rAtual = await fetch('https://api.notion.com/v1/pages/' + item.pageId, {
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
@@ -5295,15 +5326,22 @@ app.post('/portal-admin/sala-ensaio/extrato/aplicar', async (req, res) => {
       if (obsAtual.includes(notaTexto)) { atualizados++; continue; }
       const obsNova = (obsAtual ? `${obsAtual}\n${notaTexto}` : notaTexto).slice(0, 2000);
 
+      const valorRecebidoAtual = paginaAtual.properties?.['Valor Recebido']?.number || 0;
+      const novoValorRecebido = Math.round((valorRecebidoAtual + Number(item.valor)) * 100) / 100;
+      const statusAtual = paginaAtual.properties?.['Status']?.select?.name || null;
+      // Primeira parcela recebida confirma a reserva; se já estava Confirmado, mantém.
+      const novoStatus = (statusAtual === 'Pendente' || statusAtual === 'Aguardando Comprovante') ? 'Confirmado' : statusAtual;
+
+      const properties = {
+        'Valor Recebido': { number: novoValorRecebido },
+        'Observações': { rich_text: [{ text: { content: obsNova } }] },
+      };
+      if (novoStatus && novoStatus !== statusAtual) properties['Status'] = { select: { name: novoStatus } };
+
       const r = await fetch('https://api.notion.com/v1/pages/' + item.pageId, {
         method: 'PATCH',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          properties: {
-            'Status': { select: { name: 'Confirmado' } },
-            'Observações': { rich_text: [{ text: { content: obsNova } }] },
-          },
-        }),
+        body: JSON.stringify({ properties }),
       });
       if (r.ok) {
         atualizados++;
@@ -5318,6 +5356,52 @@ app.post('/portal-admin/sala-ensaio/extrato/aplicar', async (req, res) => {
   } catch (err) {
     console.error('[portal-admin/sala-ensaio/extrato/aplicar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao aplicar conciliação.' });
+  }
+});
+
+// ---------- Cobrança individual do saldo devido por WhatsApp ----------
+
+function salaMontarMensagemLembrete(registro) {
+  const primeiroNome = (registro.responsavel || registro.projeto || '').split(' ')[0];
+  const chavePix = registro.notaFiscal === 'Sim' ? 'financeiro@cialiquidificador.com.br' : 'fabio@cialiquidificador.com.br';
+  const titulo = registro.projeto || registro.titulo;
+  return `Oi, ${primeiroNome}! 😊\n\nPassando pra lembrar do saldo em aberto do aluguel da sala de ensaio (${titulo}): R$ ${registro.saldoDevido.toFixed(2)}.\n\n🔑 Chave PIX: ${chavePix}\n\nQualquer dúvida, é só chamar por aqui!\n\n— Cia do Liquidificador`;
+}
+
+// POST /portal-admin/sala-ensaio/lembrete/individual { pageId }
+app.post('/portal-admin/sala-ensaio/lembrete/individual', async (req, res) => {
+  try {
+    const { pageId } = req.body;
+    if (!pageId) return res.status(400).json({ ok: false, erro: 'pageId é obrigatório.' });
+
+    const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+    });
+    const pagina = await r.json();
+    if (!r.ok) return res.status(404).json({ ok: false, erro: 'Agendamento não encontrado.' });
+
+    const p = pagina.properties;
+    const valorTotal = p['Valor Total']?.number ?? 0;
+    const valorRecebido = p['Valor Recebido']?.number ?? 0;
+    const registro = {
+      titulo: p['Título']?.title?.[0]?.plain_text || '',
+      projeto: p['Nome do Projeto']?.rich_text?.[0]?.plain_text || '',
+      responsavel: p['Responsável']?.rich_text?.[0]?.plain_text || '',
+      notaFiscal: p['Nota Fiscal']?.select?.name || null,
+      whatsapp: p['WhatsApp']?.rich_text?.[0]?.plain_text || '',
+      saldoDevido: Math.round((valorTotal - valorRecebido) * 100) / 100,
+    };
+
+    if (registro.saldoDevido <= 0.01) return res.json({ ok: false, motivo: 'sem_saldo_devido' });
+
+    const numLimpo = (registro.whatsapp || '').replace(/\D/g, '');
+    if (numLimpo.length < 11) return res.json({ ok: false, motivo: 'ddd_invalido' });
+
+    await enviarWhatsAppComHorarioComercial(registro.whatsapp, salaMontarMensagemLembrete(registro));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-admin/sala-ensaio/lembrete/individual] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao enviar lembrete.' });
   }
 });
 // ===== FIM PORTAL ADMIN — ALUGUEL DE SALA DE ENSAIO =====
