@@ -4801,6 +4801,7 @@ const NOME_EXTRATO_POR_PROFESSOR = {
 };
 
 const REP_MESES_LABEL = { 1: 'Jan/26', 2: 'Fev/26', 3: 'Mar/26', 4: 'Abr/26', 5: 'Mai/26', 6: 'Jun/26', 7: 'Jul/26', 8: 'Ago/26', 9: 'Set/26', 10: 'Out/26', 11: 'Nov/26', 12: 'Dez/26' };
+const REP_MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
 
 function repNormalizar(str) {
   return String(str || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
@@ -5085,14 +5086,23 @@ app.get('/portal-admin/pagamentos/devido', async (req, res) => {
     for (const nome of todosProfessores) {
       const ehPercentual = !!PERCENTUAL_PROFESSOR[nome];
 
-      // já pago: soma de todos os registros de Pagamentos desse professor, qualquer mês
+      // já pago: soma dos registros de Pagamentos desse professor. Se ele tem uma data de
+      // início de controle (mudou de fórmula de pagamento nesse meio tempo), só conta os
+      // meses a partir dali — meses anteriores usavam outra fórmula e não têm correspondência
+      // com o "gerado" (calculado com a fórmula atual).
       const rPago = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_PROF_DB + '/query', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
         body: JSON.stringify({ filter: { property: 'Professor', select: { equals: nome } }, page_size: 100 }),
       });
       const dPago = await rPago.json();
-      const jaPago = (dPago.results || []).reduce((s, p) => s + (p.properties['Valor Repasse']?.number || 0), 0);
+      const mesInicioLabel = DATA_INICIO_CONTROLE_PROFESSOR[nome] ? REP_MESES_LABEL[parseInt(DATA_INICIO_CONTROLE_PROFESSOR[nome].slice(5, 7), 10)] : null;
+      const registrosPagoValidos = (dPago.results || []).filter(p => {
+        if (!mesInicioLabel) return true;
+        const mes = p.properties['Mês']?.select?.name;
+        return REP_MESES_ORDEM.indexOf(mes) >= REP_MESES_ORDEM.indexOf(mesInicioLabel);
+      });
+      const jaPago = registrosPagoValidos.reduce((s, p) => s + (p.properties['Valor Repasse']?.number || 0), 0);
 
       let totalGerado, detalheGerado;
       if (ehPercentual) {
@@ -5872,12 +5882,17 @@ const PERCENTUAL_PROFESSOR = {
   'Talita': 0.65,
   'André': 0.60,
 };
-// Professores novos no controle de pagamento: conta aulas só a partir dessa data,
-// pra não gerar "devido" retroativo de um período em que o pagamento já era
-// combinado por fora do sistema (mesmo problema que gerou R$10.720 fantasma pra Giulia).
+// Professores novos no controle de pagamento (ou que mudaram de fórmula de pagamento):
+// conta aulas só a partir dessa data, pra não gerar "devido" retroativo de um período em
+// que o pagamento já era combinado por fora do sistema/com outra fórmula (mesmo problema
+// que gerou R$10.720 fantasma pra Giulia). Guilherme: Jan-Abr/26 foram pagos com uma fórmula
+// antiga (valores que não são múltiplos de R$80, sem "Datas de Repasse" discriminadas) —
+// o controle por R$80/aula só bate a partir de Maio/26, quando os pagamentos passam a ser
+// múltiplos exatos de R$80 com data de cada aula.
 const DATA_INICIO_CONTROLE_PROFESSOR = {
   'André': '2026-08-31',
   'Giulia': '2026-08-31',
+  'Guilherme': '2026-05-01',
 };
 const RENDIMENTO_MESES_LABEL = { 1: 'Jan/26', 2: 'Fev/26', 3: 'Mar/26', 4: 'Abr/26', 5: 'Mai/26', 6: 'Jun/26', 7: 'Jul/26', 8: 'Ago/26', 9: 'Set/26', 10: 'Out/26', 11: 'Nov/26', 12: 'Dez/26' };
 
