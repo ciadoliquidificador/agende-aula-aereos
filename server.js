@@ -4484,103 +4484,103 @@ app.get('/portal-admin/recebimentos', async (req, res) => {
   }
 });
 
+// Remove anotações entre parênteses do nome (ex: "Caetano (Laís)" -> "Caetano", onde
+// "Laís" é o nome da mãe — comum nas turmas infantis) antes de comparar nomes.
+function pgtStripParentetico(nome) {
+  return String(nome || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+}
+
+// Analisa um extrato Nubank e cruza os RECEBIMENTOS (Pix recebido) com pagamentos "Pendente"
+// por nome+valor. Não grava nada — só devolve os matches propostos.
+async function pgtAnalisarExtratoRecebimentos(csv) {
+  const linhas = csv.split('\n').map(l => l.trim()).filter(Boolean);
+  const transacoes = [];
+  for (const linha of linhas.slice(1)) {
+    const m = linha.match(/^([^,]*),([^,]*),([^,]*),(.*)$/);
+    if (!m) continue;
+    const valor = parseFloat(m[2].trim());
+    if (Number.isNaN(valor) || valor <= 0) continue;
+    const descricao = m[4].trim();
+    const nomeMatch = descricao.match(/^Transferência (?:recebida pelo Pix|Recebida) - (.+?) -/);
+    if (!nomeMatch) continue;
+    const dataMatch = m[1].trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!dataMatch) continue;
+    const cpfMatch = descricao.match(/•{2,3}\.(\d{3}\.\d{3})-•{2}/);
+    transacoes.push({
+      data: `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}`,
+      valor,
+      nome: nomeMatch[1].trim(),
+      cpfParcial: cpfMatch ? cpfMatch[1] : null,
+    });
+  }
+
+  const pendentes = await pgtBuscarRegistros({ property: 'Status', select: { equals: 'Pendente' } });
+  const MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
+
+  function candidatosPorNome(nomeTransacao) {
+    const key = pgtNormalizar(pgtStripParentetico(nomeTransacao));
+    let candidatos = pendentes.filter(p => pgtNormalizar(pgtStripParentetico(p.nome)) === key);
+    if (candidatos.length > 0) return candidatos;
+    const tokens = key.split(' ').filter(Boolean);
+    if (tokens.length >= 2) {
+      const flKey = `${tokens[0]} ${tokens[tokens.length - 1]}`;
+      candidatos = pendentes.filter(p => {
+        const pTokens = pgtNormalizar(pgtStripParentetico(p.nome)).split(' ').filter(Boolean);
+        if (pTokens.length < 2) return false;
+        return `${pTokens[0]} ${pTokens[pTokens.length - 1]}` === flKey;
+      });
+    }
+    return candidatos;
+  }
+
+  const usados = new Set();
+  const conciliados = [];
+  const valorNaoBate = [];
+  const semCandidato = [];
+
+  for (const tx of transacoes) {
+    const candidatosNome = candidatosPorNome(tx.nome).filter(p => !usados.has(p.id));
+
+    if (candidatosNome.length === 0) {
+      semCandidato.push(tx);
+      continue;
+    }
+
+    const candidatosValor = candidatosNome.filter(p => p.aPagar === tx.valor);
+
+    if (candidatosValor.length === 0) {
+      valorNaoBate.push({ ...tx, pendentesDela: candidatosNome.map(c => ({ mes: c.mes, aPagar: c.aPagar })) });
+      continue;
+    }
+
+    candidatosValor.sort((a, b) => MESES_ORDEM.indexOf(a.mes) - MESES_ORDEM.indexOf(b.mes));
+    const escolhido = candidatosValor[0];
+    usados.add(escolhido.id);
+    conciliados.push({
+      pendenteId: escolhido.id,
+      data: tx.data,
+      valor: tx.valor,
+      nomeExtrato: tx.nome,
+      nomeNotion: escolhido.nome,
+      professor: escolhido.professor,
+      turma: escolhido.turma,
+      mes: escolhido.mes,
+      ambiguo: candidatosValor.length > 1,
+    });
+  }
+
+  return { conciliados, valorNaoBate, semCandidato };
+}
+
 // POST /portal-admin/recebimentos/conciliar { csv: "Data,Valor,Identificador,Descrição\n..." }
-// Lê um extrato Nubank, cruza recebimentos (Pix) com pagamentos "Pendente" por nome+valor
-// e devolve os matches propostos — não grava nada no Notion ainda.
 app.post('/portal-admin/recebimentos/conciliar', async (req, res) => {
   try {
     const { csv } = req.body;
     if (!csv || typeof csv !== 'string') {
       return res.status(400).json({ ok: false, erro: 'csv é obrigatório.' });
     }
-
-    // --- parse do extrato ---
-    const linhas = csv.split('\n').map(l => l.trim()).filter(Boolean);
-    const transacoes = [];
-    for (const linha of linhas.slice(1)) {
-      const m = linha.match(/^([^,]*),([^,]*),([^,]*),(.*)$/);
-      if (!m) continue;
-      const valor = parseFloat(m[2].trim());
-      if (Number.isNaN(valor) || valor <= 0) continue;
-      const descricao = m[4].trim();
-      const nomeMatch = descricao.match(/^Transferência (?:recebida pelo Pix|Recebida) - (.+?) -/);
-      if (!nomeMatch) continue;
-      const dataMatch = m[1].trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-      if (!dataMatch) continue;
-      const cpfMatch = descricao.match(/•{2,3}\.(\d{3}\.\d{3})-•{2}/);
-      transacoes.push({
-        data: `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}`,
-        valor,
-        nome: nomeMatch[1].trim(),
-        cpfParcial: cpfMatch ? cpfMatch[1] : null,
-      });
-    }
-
-    // --- busca pendentes ---
-    const pendentes = await pgtBuscarRegistros({ property: 'Status', select: { equals: 'Pendente' } });
-
-    // --- conciliação: nome (exato, depois fuzzy primeiro+último nome) + valor exato ---
-    const MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
-
-    // Remove anotações entre parênteses do nome (ex: "Caetano (Laís)" -> "Caetano", onde
-    // "Laís" é o nome da mãe — comum nas turmas infantis) antes de comparar nomes.
-    function pgtStripParentetico(nome) {
-      return String(nome || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
-    }
-
-    function candidatosPorNome(nomeTransacao) {
-      const key = pgtNormalizar(pgtStripParentetico(nomeTransacao));
-      let candidatos = pendentes.filter(p => pgtNormalizar(pgtStripParentetico(p.nome)) === key);
-      if (candidatos.length > 0) return candidatos;
-      const tokens = key.split(' ').filter(Boolean);
-      if (tokens.length >= 2) {
-        const flKey = `${tokens[0]} ${tokens[tokens.length - 1]}`;
-        candidatos = pendentes.filter(p => {
-          const pTokens = pgtNormalizar(pgtStripParentetico(p.nome)).split(' ').filter(Boolean);
-          if (pTokens.length < 2) return false;
-          return `${pTokens[0]} ${pTokens[pTokens.length - 1]}` === flKey;
-        });
-      }
-      return candidatos;
-    }
-
-    const usados = new Set();
-    const conciliados = [];
-    const valorNaoBate = [];
-    const semCandidato = [];
-
-    for (const tx of transacoes) {
-      const candidatosNome = candidatosPorNome(tx.nome).filter(p => !usados.has(p.id));
-
-      if (candidatosNome.length === 0) {
-        semCandidato.push(tx);
-        continue;
-      }
-
-      const candidatosValor = candidatosNome.filter(p => p.aPagar === tx.valor);
-
-      if (candidatosValor.length === 0) {
-        valorNaoBate.push({ ...tx, pendentesDela: candidatosNome.map(c => ({ mes: c.mes, aPagar: c.aPagar })) });
-        continue;
-      }
-
-      candidatosValor.sort((a, b) => MESES_ORDEM.indexOf(a.mes) - MESES_ORDEM.indexOf(b.mes));
-      const escolhido = candidatosValor[0];
-      usados.add(escolhido.id);
-      conciliados.push({
-        pendenteId: escolhido.id,
-        data: tx.data,
-        valor: tx.valor,
-        nomeExtrato: tx.nome,
-        nomeNotion: escolhido.nome,
-        professor: escolhido.professor,
-        turma: escolhido.turma,
-        mes: escolhido.mes,
-        ambiguo: candidatosValor.length > 1,
-      });
-    }
-
-    res.json({ ok: true, conciliados, valorNaoBate, semCandidato });
+    const resultado = await pgtAnalisarExtratoRecebimentos(csv);
+    res.json({ ok: true, ...resultado });
   } catch (err) {
     console.error('[portal-admin/recebimentos/conciliar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao conciliar extrato.' });
@@ -4719,6 +4719,235 @@ app.post('/portal-admin/recebimentos/lembrete/mes', async (req, res) => {
   }
 });
 // ===== FIM PORTAL ADMIN — RECEBIMENTOS =====
+
+// ===== PORTAL ADMIN — REPASSES (pagamento aos professores) =====
+const REPASSES_DB = '4cf21b7e3b824eec9a31420ce02be5a1';
+
+// Nomes como aparecem nos Pix de saída do extrato (confirmados com o Fábio)
+const NOME_EXTRATO_POR_PROFESSOR = {
+  Gustra: 'gustavo henrique das dores',
+  Guilherme: 'guilherme fillippi guerra',
+  Titzi: 'titziane marques',
+  Talita: 'talita silva',
+  Gabi: 'gabriela gomes de sousa',
+};
+
+const REP_MESES_LABEL = { 1: 'Jan/26', 2: 'Fev/26', 3: 'Mar/26', 4: 'Abr/26', 5: 'Mai/26', 6: 'Jun/26', 7: 'Jul/26', 8: 'Ago/26', 9: 'Set/26', 10: 'Out/26', 11: 'Nov/26', 12: 'Dez/26' };
+
+function repNormalizar(str) {
+  return String(str || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function repIdentificarProfessorPix(nomeExtrato) {
+  const key = repNormalizar(nomeExtrato);
+  for (const [professor, padrao] of Object.entries(NOME_EXTRATO_POR_PROFESSOR)) {
+    if (key.startsWith(padrao)) return professor;
+  }
+  return null;
+}
+
+async function repBuscarRegistros(filtro) {
+  const registros = [];
+  let cursor;
+  do {
+    const body = { page_size: 100 };
+    if (filtro) body.filter = filtro;
+    if (cursor) body.start_cursor = cursor;
+    const r = await fetch('https://api.notion.com/v1/databases/' + REPASSES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error('Erro ao buscar repasses: ' + JSON.stringify(d));
+    for (const pagina of d.results) {
+      const p = pagina.properties;
+      registros.push({
+        id: pagina.id,
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        professor: p['Professor']?.select?.name || null,
+        mes: p['Mês']?.select?.name || null,
+        status: p['Status']?.select?.name || null,
+        valorRepasse: p['Valor Repasse']?.number ?? null,
+        dataRepasse: p['Data Repasse']?.date?.start || null,
+        datasDeRepasse: p['Datas de Repasse']?.rich_text?.[0]?.plain_text || null,
+        observacoes: p['Observações']?.rich_text?.[0]?.plain_text || null,
+      });
+    }
+    cursor = d.has_more ? d.next_cursor : null;
+  } while (cursor);
+  return registros;
+}
+
+// GET /portal-admin/repasses?mes=Jul/26&professor=Gustra&status=Pago
+app.get('/portal-admin/repasses', async (req, res) => {
+  try {
+    const { mes, professor, status } = req.query;
+    const condicoes = [];
+    if (mes) condicoes.push({ property: 'Mês', select: { equals: mes } });
+    if (professor) condicoes.push({ property: 'Professor', select: { equals: professor } });
+    if (status) condicoes.push({ property: 'Status', select: { equals: status } });
+    const filtro = condicoes.length ? (condicoes.length === 1 ? condicoes[0] : { and: condicoes }) : null;
+
+    const registros = await repBuscarRegistros(filtro);
+    registros.sort((a, b) => (a.professor || '').localeCompare(b.professor || '', 'pt-BR'));
+
+    res.json({ ok: true, registros });
+  } catch (err) {
+    console.error('[portal-admin/repasses] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar repasses.' });
+  }
+});
+
+// Analisa um extrato Nubank e agrupa as transações de SAÍDA (Pix enviado) identificadas como
+// pagamento a professor por professor+mês. Não grava nada — só devolve a proposta pra revisão.
+function repAnalisarExtrato(csv) {
+  const linhas = csv.split('\n').map(l => l.trim()).filter(Boolean);
+  const saidas = [];
+  for (const linha of linhas.slice(1)) {
+    const m = linha.match(/^([^,]*),([^,]*),([^,]*),(.*)$/);
+    if (!m) continue;
+    const valor = parseFloat(m[2].trim());
+    if (Number.isNaN(valor) || valor >= 0) continue; // só saídas
+    const descricao = m[4].trim();
+    const nomeMatch = descricao.match(/^Transferência enviada pelo Pix - (.+?) -/);
+    if (!nomeMatch) continue;
+    const dataMatch = m[1].trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!dataMatch) continue;
+    const professor = repIdentificarProfessorPix(nomeMatch[1]);
+    if (!professor) continue;
+    const mesNum = parseInt(dataMatch[2], 10);
+    saidas.push({
+      professor,
+      mes: REP_MESES_LABEL[mesNum],
+      valor: Math.abs(valor),
+      data: `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}`,
+      nomeExtrato: nomeMatch[1].trim(),
+    });
+  }
+
+  const grupos = {};
+  for (const s of saidas) {
+    const chave = `${s.professor}|${s.mes}`;
+    if (!grupos[chave]) grupos[chave] = { professor: s.professor, mes: s.mes, parcelas: [] };
+    grupos[chave].parcelas.push({ data: s.data, valor: s.valor });
+  }
+
+  return Object.values(grupos).map(g => ({
+    professor: g.professor,
+    mes: g.mes,
+    valorTotal: Math.round(g.parcelas.reduce((s, p) => s + p.valor, 0) * 100) / 100,
+    parcelas: g.parcelas.sort((a, b) => a.data.localeCompare(b.data)),
+  }));
+}
+
+// POST /portal-admin/repasses/importar-extrato { csv }
+app.post('/portal-admin/repasses/importar-extrato', async (req, res) => {
+  try {
+    const { csv } = req.body;
+    if (!csv || typeof csv !== 'string') {
+      return res.status(400).json({ ok: false, erro: 'csv é obrigatório.' });
+    }
+    const propostas = repAnalisarExtrato(csv);
+    res.json({ ok: true, propostas });
+  } catch (err) {
+    console.error('[portal-admin/repasses/importar-extrato] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao importar extrato.' });
+  }
+});
+
+// POST /portal-admin/repasses/importar-extrato/aplicar { itens: [{ professor, mes, valorTotal, parcelas }] }
+// Cria ou atualiza (soma) o registro de Repasse pra cada professor+mês confirmado.
+app.post('/portal-admin/repasses/importar-extrato/aplicar', async (req, res) => {
+  try {
+    const { itens } = req.body;
+    if (!Array.isArray(itens) || itens.length === 0) {
+      return res.status(400).json({ ok: false, erro: 'itens é obrigatório.' });
+    }
+
+    const existentes = await repBuscarRegistros(null);
+    let ok = 0;
+    const erros = [];
+
+    for (const item of itens) {
+      try {
+        const chave = `${item.professor}|${item.mes}`;
+        const existente = existentes.find(e => `${e.professor}|${e.mes}` === chave);
+        const datasTexto = item.parcelas.map(p => `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`).join('; ');
+        const ultimaData = item.parcelas[item.parcelas.length - 1].data;
+
+        if (existente) {
+          const novoValor = Math.round(((existente.valorRepasse || 0) + item.valorTotal) * 100) / 100;
+          const novasDatas = existente.datasDeRepasse ? `${existente.datasDeRepasse}; ${datasTexto}` : datasTexto;
+          const r = await fetch('https://api.notion.com/v1/pages/' + existente.id, {
+            method: 'PATCH',
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              properties: {
+                'Valor Repasse': { number: novoValor },
+                'Data Repasse': { date: { start: ultimaData } },
+                'Datas de Repasse': { rich_text: [{ text: { content: novasDatas } }] },
+                'Status': { select: { name: 'Pago' } },
+              },
+            }),
+          });
+          if (!r.ok) throw new Error(JSON.stringify(await r.json()));
+        } else {
+          const r = await fetch('https://api.notion.com/v1/pages', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              parent: { database_id: REPASSES_DB },
+              properties: {
+                'Nome': { title: [{ text: { content: `${item.professor} — ${item.mes}` } }] },
+                'Professor': { select: { name: item.professor } },
+                'Mês': { select: { name: item.mes } },
+                'Valor Repasse': { number: item.valorTotal },
+                'Data Repasse': { date: { start: ultimaData } },
+                'Datas de Repasse': { rich_text: [{ text: { content: datasTexto } }] },
+                'Status': { select: { name: 'Pago' } },
+              },
+            }),
+          });
+          if (!r.ok) throw new Error(JSON.stringify(await r.json()));
+        }
+        ok++;
+      } catch (e) {
+        console.error('[portal-admin/repasses/importar-extrato/aplicar] erro:', e.message);
+        erros.push(`${item.professor} ${item.mes}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+
+    res.json({ ok: true, atualizados: ok, erros });
+  } catch (err) {
+    console.error('[portal-admin/repasses/importar-extrato/aplicar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao aplicar importação.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — REPASSES =====
+
+// ===== PORTAL ADMIN — EXTRATO (tela unificada: 1 upload alimenta Recebimentos + Repasses) =====
+// POST /portal-admin/extrato/processar { csv }
+// Um único extrato: valores positivos viram proposta de conciliação de Recebimentos (alunas),
+// valores negativos viram proposta de importação de Repasses (professores).
+app.post('/portal-admin/extrato/processar', async (req, res) => {
+  try {
+    const { csv } = req.body;
+    if (!csv || typeof csv !== 'string') {
+      return res.status(400).json({ ok: false, erro: 'csv é obrigatório.' });
+    }
+    const [recebimentos, repasses] = await Promise.all([
+      pgtAnalisarExtratoRecebimentos(csv),
+      Promise.resolve(repAnalisarExtrato(csv)),
+    ]);
+    res.json({ ok: true, recebimentos, repasses: { propostas: repasses } });
+  } catch (err) {
+    console.error('[portal-admin/extrato/processar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao processar extrato.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — EXTRATO =====
 
 // ===== PORTAL ADMIN — CADASTRO DE PROFESSORES (CRUD) =====
 app.get('/portal-admin/professores/:pageId', async (req, res) => {
