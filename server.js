@@ -5087,6 +5087,8 @@ app.get('/portal-admin/pagamentos/devido', async (req, res) => {
       resultado.push({
         professor: nome,
         tipo: ehPercentual ? 'percentual' : 'por_aula',
+        percentual: ehPercentual ? PERCENTUAL_PROFESSOR[nome] : null,
+        valorAula: ehPercentual ? null : VALOR_AULA_PROFESSOR[nome],
         totalGerado: Math.round(totalGerado * 100) / 100,
         jaPago: Math.round(jaPago * 100) / 100,
         valorDevido: Math.round((totalGerado - jaPago) * 100) / 100,
@@ -5680,10 +5682,12 @@ const VALOR_AULA_PROFESSOR = {
   'Gustra': 80,
   'Titzi': 80,
   'Guilherme': 80,
+  'Giulia': 80,
 };
 const PERCENTUAL_PROFESSOR = {
   'Gabi': 0.65,
   'Talita': 0.65,
+  'André': 0.60,
 };
 const RENDIMENTO_MESES_LABEL = { 1: 'Jan/26', 2: 'Fev/26', 3: 'Mar/26', 4: 'Abr/26', 5: 'Mai/26', 6: 'Jun/26', 7: 'Jul/26', 8: 'Ago/26', 9: 'Set/26', 10: 'Out/26', 11: 'Nov/26', 12: 'Dez/26' };
 
