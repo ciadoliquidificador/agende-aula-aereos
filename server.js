@@ -2873,6 +2873,28 @@ app.get('/portal-admin/busca/detalhe-aluna/:pageId', async (req, res) => {
       (pp.properties['Aluna']?.relation || []).some(rel => rel.id === pagina.id)
     ).length;
 
+    // Situação de pagamento: mensalidades pendentes no banco Recebimentos ligadas a essa aluna
+    let situacaoPagamento = 'Sem registro de mensalidade';
+    try {
+      const rRec = await fetch('https://api.notion.com/v1/databases/' + RECEBIMENTOS_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { property: 'Aluna', relation: { contains: pagina.id } },
+          page_size: 100,
+        }),
+      });
+      const dRec = await rRec.json();
+      const registros = dRec.results || [];
+      const pendentes = registros.filter(pp => pp.properties['Status']?.select?.name === 'Pendente');
+      const totalPendente = pendentes.reduce((s, pp) => s + (pp.properties['À Pagar']?.number || 0), 0);
+      if (registros.length === 0) situacaoPagamento = 'Sem registro de mensalidade';
+      else if (pendentes.length === 0) situacaoPagamento = 'Em dia';
+      else situacaoPagamento = pendentes.length + (pendentes.length === 1 ? ' mensalidade em aberto' : ' mensalidades em aberto') + ' — R$ ' + totalPendente.toFixed(2);
+    } catch (eRec) {
+      situacaoPagamento = 'Erro ao consultar';
+    }
+
     res.json({
       ok: true,
       card: {
@@ -2885,6 +2907,7 @@ app.get('/portal-admin/busca/detalhe-aluna/:pageId', async (req, res) => {
         frequencia: p['Frequência']?.select?.name || '',
         vencimentoContrato: p['Vencimento do Contrato']?.date?.start || null,
         faltas30dias,
+        situacaoPagamento,
         linkContratoPdf: p['Link do Contrato PDF']?.url || '',
       },
     });
@@ -2938,6 +2961,30 @@ app.get('/portal-admin/busca/detalhe-professor/:pageId', async (req, res) => {
       if (turma) turmasSet.add(modalidade + ' — ' + turma);
     });
 
+    // Situação de pagamento: repasse mais recente desse professor no banco Pagamentos
+    let situacaoPagamento = 'Sem registro de repasse';
+    try {
+      const rPag = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_PROF_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { property: 'Professor', select: { equals: nome } },
+          page_size: 100,
+        }),
+      });
+      const dPag = await rPag.json();
+      const registros = dPag.results || [];
+      const MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
+      registros.sort((a, b) => MESES_ORDEM.indexOf(b.properties['Mês']?.select?.name) - MESES_ORDEM.indexOf(a.properties['Mês']?.select?.name));
+      const maisRecente = registros[0];
+      if (maisRecente) {
+        const mp = maisRecente.properties;
+        situacaoPagamento = (mp['Mês']?.select?.name || '-') + ': ' + (mp['Status']?.select?.name || '-') + ' — R$ ' + (mp['Valor Repasse']?.number ?? 0).toFixed(2);
+      }
+    } catch (ePag) {
+      situacaoPagamento = 'Erro ao consultar';
+    }
+
     res.json({
       ok: true,
       card: {
@@ -2948,6 +2995,7 @@ app.get('/portal-admin/busca/detalhe-professor/:pageId', async (req, res) => {
         turmas: [...turmasSet],
         trilha: cp ? (cp['Trilha']?.select?.name || '') : '',
         valorHoraAula: p['Valor Hora']?.number ?? (cp ? (cp['Valor Hora/Aula']?.number ?? null) : null),
+        situacaoPagamento,
         linkContratoPdf: cp ? (cp['Link do Contrato PDF']?.url || '') : '',
       },
     });
@@ -4410,7 +4458,7 @@ app.post('/portal-admin/ocupacao/salvar', async (req, res) => {
 // ===== FIM PORTAL ADMIN — OCUPAÇÃO DE TURMAS =====
 
 // ===== PORTAL ADMIN — RECEBIMENTOS =====
-const PAGAMENTOS_DB = '5b85a30acc9f406d81c082bdf521d5a8';
+const RECEBIMENTOS_DB = '5b85a30acc9f406d81c082bdf521d5a8';
 
 function pgtNormalizar(str) {
   return String(str || '')
@@ -4427,7 +4475,7 @@ async function pgtBuscarRegistros(filtro) {
     const body = { page_size: 100 };
     if (filtro) body.filter = filtro;
     if (cursor) body.start_cursor = cursor;
-    const r = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_DB + '/query', {
+    const r = await fetch('https://api.notion.com/v1/databases/' + RECEBIMENTOS_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -4720,8 +4768,8 @@ app.post('/portal-admin/recebimentos/lembrete/mes', async (req, res) => {
 });
 // ===== FIM PORTAL ADMIN — RECEBIMENTOS =====
 
-// ===== PORTAL ADMIN — REPASSES (pagamento aos professores) =====
-const REPASSES_DB = '4cf21b7e3b824eec9a31420ce02be5a1';
+// ===== PORTAL ADMIN — PAGAMENTOS (professores) (pagamento aos professores) =====
+const PAGAMENTOS_PROF_DB = '4cf21b7e3b824eec9a31420ce02be5a1';
 
 // Nomes como aparecem nos Pix de saída do extrato (confirmados com o Fábio)
 const NOME_EXTRATO_POR_PROFESSOR = {
@@ -4753,7 +4801,7 @@ async function repBuscarRegistros(filtro) {
     const body = { page_size: 100 };
     if (filtro) body.filter = filtro;
     if (cursor) body.start_cursor = cursor;
-    const r = await fetch('https://api.notion.com/v1/databases/' + REPASSES_DB + '/query', {
+    const r = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_PROF_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -4779,8 +4827,8 @@ async function repBuscarRegistros(filtro) {
   return registros;
 }
 
-// GET /portal-admin/repasses?mes=Jul/26&professor=Gustra&status=Pago
-app.get('/portal-admin/repasses', async (req, res) => {
+// GET /portal-admin/pagamentos?mes=Jul/26&professor=Gustra&status=Pago
+app.get('/portal-admin/pagamentos', async (req, res) => {
   try {
     const { mes, professor, status } = req.query;
     const condicoes = [];
@@ -4794,7 +4842,7 @@ app.get('/portal-admin/repasses', async (req, res) => {
 
     res.json({ ok: true, registros });
   } catch (err) {
-    console.error('[portal-admin/repasses] erro:', err.message);
+    console.error('[portal-admin/pagamentos] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao buscar repasses.' });
   }
 });
@@ -4841,8 +4889,8 @@ function repAnalisarExtrato(csv) {
   }));
 }
 
-// POST /portal-admin/repasses/importar-extrato { csv }
-app.post('/portal-admin/repasses/importar-extrato', async (req, res) => {
+// POST /portal-admin/pagamentos/importar-extrato { csv }
+app.post('/portal-admin/pagamentos/importar-extrato', async (req, res) => {
   try {
     const { csv } = req.body;
     if (!csv || typeof csv !== 'string') {
@@ -4851,14 +4899,14 @@ app.post('/portal-admin/repasses/importar-extrato', async (req, res) => {
     const propostas = repAnalisarExtrato(csv);
     res.json({ ok: true, propostas });
   } catch (err) {
-    console.error('[portal-admin/repasses/importar-extrato] erro:', err.message);
+    console.error('[portal-admin/pagamentos/importar-extrato] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao importar extrato.' });
   }
 });
 
-// POST /portal-admin/repasses/importar-extrato/aplicar { itens: [{ professor, mes, valorTotal, parcelas }] }
+// POST /portal-admin/pagamentos/importar-extrato/aplicar { itens: [{ professor, mes, valorTotal, parcelas }] }
 // Cria ou atualiza (soma) o registro de Repasse pra cada professor+mês confirmado.
-app.post('/portal-admin/repasses/importar-extrato/aplicar', async (req, res) => {
+app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) => {
   try {
     const { itens } = req.body;
     if (!Array.isArray(itens) || itens.length === 0) {
@@ -4897,7 +4945,7 @@ app.post('/portal-admin/repasses/importar-extrato/aplicar', async (req, res) => 
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              parent: { database_id: REPASSES_DB },
+              parent: { database_id: PAGAMENTOS_PROF_DB },
               properties: {
                 'Nome': { title: [{ text: { content: `${item.professor} — ${item.mes}` } }] },
                 'Professor': { select: { name: item.professor } },
@@ -4913,7 +4961,7 @@ app.post('/portal-admin/repasses/importar-extrato/aplicar', async (req, res) => 
         }
         ok++;
       } catch (e) {
-        console.error('[portal-admin/repasses/importar-extrato/aplicar] erro:', e.message);
+        console.error('[portal-admin/pagamentos/importar-extrato/aplicar] erro:', e.message);
         erros.push(`${item.professor} ${item.mes}`);
       }
       await new Promise(resolve => setTimeout(resolve, 350));
@@ -4921,11 +4969,11 @@ app.post('/portal-admin/repasses/importar-extrato/aplicar', async (req, res) => 
 
     res.json({ ok: true, atualizados: ok, erros });
   } catch (err) {
-    console.error('[portal-admin/repasses/importar-extrato/aplicar] erro:', err.message);
+    console.error('[portal-admin/pagamentos/importar-extrato/aplicar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao aplicar importação.' });
   }
 });
-// ===== FIM PORTAL ADMIN — REPASSES =====
+// ===== FIM PORTAL ADMIN — PAGAMENTOS (professores) =====
 
 // ===== PORTAL ADMIN — EXTRATO (tela unificada: 1 upload alimenta Recebimentos + Repasses) =====
 // POST /portal-admin/extrato/processar { csv }
@@ -4941,7 +4989,7 @@ app.post('/portal-admin/extrato/processar', async (req, res) => {
       pgtAnalisarExtratoRecebimentos(csv),
       Promise.resolve(repAnalisarExtrato(csv)),
     ]);
-    res.json({ ok: true, recebimentos, repasses: { propostas: repasses } });
+    res.json({ ok: true, recebimentos, pagamentos: { propostas: repasses } });
   } catch (err) {
     console.error('[portal-admin/extrato/processar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao processar extrato.' });
@@ -6636,7 +6684,7 @@ app.get('/portal-aluna/mensalidades/:cpf', async (req, res) => {
     const alunaIds = (dAlunas.results || []).map(p => p.id);
     if (alunaIds.length === 0) return res.json({ ok: true, mensalidades: [] });
 
-    const rMensalidades = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_DB + '/query', {
+    const rMensalidades = await fetch('https://api.notion.com/v1/databases/' + RECEBIMENTOS_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
