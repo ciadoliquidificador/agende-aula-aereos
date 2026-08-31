@@ -5024,6 +5024,7 @@ async function pagCalcularAulasAcumuladas(nome) {
   });
 
   const feriadosDoAno = await getFeriadosDoAno(ano);
+  const dataInicio = DATA_INICIO_CONTROLE_PROFESSOR[nome] || (ano + '-01-01');
   let totalAulas = 0;
   for (let mes = 0; mes <= hoje.getMonth(); mes++) {
     const ultimoDiaDoMes = (mes === hoje.getMonth()) ? hoje.getDate() : new Date(ano, mes + 1, 0).getDate();
@@ -5032,6 +5033,7 @@ async function pagCalcularAulasAcumuladas(nome) {
         const diaSemanaNome = nomesDias[new Date(ano, mes, dia).getDay()];
         if (diaSemanaNome !== turma.dia) continue;
         const dataStr = ano + '-' + String(mes + 1).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
+        if (dataStr < dataInicio) continue;
         if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
         totalAulas++;
       }
@@ -5688,6 +5690,13 @@ const PERCENTUAL_PROFESSOR = {
   'Gabi': 0.65,
   'Talita': 0.65,
   'André': 0.60,
+};
+// Professores novos no controle de pagamento: conta aulas só a partir dessa data,
+// pra não gerar "devido" retroativo de um período em que o pagamento já era
+// combinado por fora do sistema (mesmo problema que gerou R$10.720 fantasma pra Giulia).
+const DATA_INICIO_CONTROLE_PROFESSOR = {
+  'André': '2026-08-31',
+  'Giulia': '2026-08-31',
 };
 const RENDIMENTO_MESES_LABEL = { 1: 'Jan/26', 2: 'Fev/26', 3: 'Mar/26', 4: 'Abr/26', 5: 'Mai/26', 6: 'Jun/26', 7: 'Jul/26', 8: 'Ago/26', 9: 'Set/26', 10: 'Out/26', 11: 'Nov/26', 12: 'Dez/26' };
 
