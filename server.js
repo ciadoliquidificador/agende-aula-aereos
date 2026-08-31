@@ -4538,6 +4538,19 @@ function pgtStripParentetico(nome) {
   return String(nome || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
 }
 
+// Compara dois nomes já normalizados por token: cada palavra do nome MENOR precisa
+// aparecer no nome MAIOR, exata ou como prefixo (cobre apelido/abreviação, ex: "Gab" é
+// prefixo de "Gabriela"). Cobre o caso de nome cadastrado abreviado no Notion ("Gab
+// Mazolini") batendo com o nome completo que vem no Pix ("Gabriela Mazolini De Oliveira
+// Santos") — sobrenome comum ("Mazolini") não cai nem no primeiro nem no último token.
+function nomesCompativeisPorToken(nomeA, nomeB) {
+  const tokensA = nomeA.split(' ').filter(t => t.length > 2);
+  const tokensB = nomeB.split(' ').filter(t => t.length > 2);
+  if (tokensA.length === 0 || tokensB.length === 0) return false;
+  const [menor, maior] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
+  return menor.every(tA => maior.some(tB => tB === tA || tB.startsWith(tA) || tA.startsWith(tB)));
+}
+
 // Analisa um extrato Nubank e cruza os RECEBIMENTOS (Pix recebido) com pagamentos "Pendente"
 // por nome+valor. Não grava nada — só devolve os matches propostos.
 async function pgtAnalisarExtratoRecebimentos(csv) {
@@ -4578,6 +4591,11 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
         return `${pTokens[0]} ${pTokens[pTokens.length - 1]}` === flKey;
       });
     }
+    if (candidatos.length > 0) return candidatos;
+    // 3ª tentativa: nome cadastrado abreviado (apelido) batendo com nome completo do Pix,
+    // onde sobrenome comum não cai no primeiro/último token (ex: "Gab Mazolini" x
+    // "Gabriela Mazolini De Oliveira Santos").
+    candidatos = pendentes.filter(p => nomesCompativeisPorToken(key, pgtNormalizar(pgtStripParentetico(p.nome))));
     return candidatos;
   }
 
