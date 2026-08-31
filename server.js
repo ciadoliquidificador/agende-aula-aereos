@@ -4985,6 +4985,106 @@ app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) =
     res.status(500).json({ ok: false, erro: 'Erro ao aplicar importação.' });
   }
 });
+
+// Aulas dadas (calendário menos feriados, mesma lógica do Rendimento do Portal Prof) desde
+// 1º de janeiro até hoje — usado pra calcular o valor devido acumulado dos profs por aula.
+async function pagCalcularAulasAcumuladas(nome) {
+  const turmas = await turmasDoProfessor(nome);
+  if (turmas.length === 0) return 0;
+  const hoje = new Date();
+  const ano = hoje.getFullYear();
+  const nomesDias = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
+  const rDecisoes = await fetch('https://api.notion.com/v1/databases/' + DECISOES_FERIADO_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filter: { property: 'Professor', rich_text: { equals: nome } }, page_size: 100 }),
+  });
+  const dDecisoes = await rDecisoes.json();
+  const decisaoPorData = {};
+  (dDecisoes.results || []).forEach(p => {
+    const data = p.properties['Data do Feriado']?.date?.start;
+    const decisao = p.properties['Decisão']?.select?.name;
+    if (data) decisaoPorData[data] = decisao;
+  });
+
+  const feriadosDoAno = await getFeriadosDoAno(ano);
+  let totalAulas = 0;
+  for (let mes = 0; mes <= hoje.getMonth(); mes++) {
+    const ultimoDiaDoMes = (mes === hoje.getMonth()) ? hoje.getDate() : new Date(ano, mes + 1, 0).getDate();
+    for (const turma of turmas) {
+      for (let dia = 1; dia <= ultimoDiaDoMes; dia++) {
+        const diaSemanaNome = nomesDias[new Date(ano, mes, dia).getDay()];
+        if (diaSemanaNome !== turma.dia) continue;
+        const dataStr = ano + '-' + String(mes + 1).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
+        if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
+        totalAulas++;
+      }
+    }
+  }
+  return totalAulas;
+}
+
+// GET /portal-admin/pagamentos/devido
+// Pra cada professor: quanto já foi recebido das alunas (ou aulas dadas) vs. quanto já foi
+// pago a ele — a diferença é o valor em aberto, atualizado sempre que Recebimentos ou
+// Pagamentos mudarem. Não depende de extrato ter sido lançado pro mês corrente.
+app.get('/portal-admin/pagamentos/devido', async (req, res) => {
+  try {
+    const todosProfessores = [...Object.keys(VALOR_AULA_PROFESSOR), ...Object.keys(PERCENTUAL_PROFESSOR)];
+    const resultado = [];
+
+    for (const nome of todosProfessores) {
+      const ehPercentual = !!PERCENTUAL_PROFESSOR[nome];
+
+      // já pago: soma de todos os registros de Pagamentos desse professor, qualquer mês
+      const rPago = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_PROF_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: { property: 'Professor', select: { equals: nome } }, page_size: 100 }),
+      });
+      const dPago = await rPago.json();
+      const jaPago = (dPago.results || []).reduce((s, p) => s + (p.properties['Valor Repasse']?.number || 0), 0);
+
+      let totalGerado, detalheGerado;
+      if (ehPercentual) {
+        const rRec = await fetch('https://api.notion.com/v1/databases/' + RECEBIMENTOS_DB + '/query', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filter: { and: [
+              { property: 'Professor', select: { equals: nome } },
+              { property: 'Status', select: { equals: 'Pago' } },
+            ]},
+            page_size: 100,
+          }),
+        });
+        const dRec = await rRec.json();
+        const totalRecebido = (dRec.results || []).reduce((s, p) => s + (p.properties['Valor Pago']?.number || 0), 0);
+        totalGerado = Math.round(totalRecebido * PERCENTUAL_PROFESSOR[nome] * 100) / 100;
+        detalheGerado = `${PERCENTUAL_PROFESSOR[nome] * 100}% de R$ ${totalRecebido.toFixed(2)} recebido das alunas`;
+      } else {
+        const aulas = await pagCalcularAulasAcumuladas(nome);
+        totalGerado = aulas * VALOR_AULA_PROFESSOR[nome];
+        detalheGerado = `${aulas} aulas × R$ ${VALOR_AULA_PROFESSOR[nome]}`;
+      }
+
+      resultado.push({
+        professor: nome,
+        tipo: ehPercentual ? 'percentual' : 'por_aula',
+        totalGerado: Math.round(totalGerado * 100) / 100,
+        jaPago: Math.round(jaPago * 100) / 100,
+        valorDevido: Math.round((totalGerado - jaPago) * 100) / 100,
+        detalheGerado,
+      });
+    }
+
+    res.json({ ok: true, professores: resultado });
+  } catch (err) {
+    console.error('[portal-admin/pagamentos/devido] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao calcular valor devido.' });
+  }
+});
 // ===== FIM PORTAL ADMIN — PAGAMENTOS (professores) =====
 
 // ===== PORTAL ADMIN — EXTRATO (tela unificada: 1 upload alimenta Recebimentos + Repasses) =====
