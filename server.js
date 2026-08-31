@@ -5311,6 +5311,18 @@ app.get('/portal/rendimento/:nome', async (req, res) => {
   }
 });
 
+// ROTA TEMPORÁRIA DE DIAGNÓSTICO — só leitura, sem sessão, remover depois.
+app.get('/portal/rendimento-teste/:nome', async (req, res) => {
+  const nome = decodeURIComponent(req.params.nome);
+  const valorAula = VALOR_AULA_PROFESSOR[nome];
+  try {
+    const turmas = await turmasDoProfessor(nome);
+    res.json({ nome, valorAula: valorAula || null, qtdTurmas: turmas.length, turmas });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
 app.post('/portal/feriado-resposta', async (req, res) => {
   const { nome, data, decisao, sessionToken } = req.body;
   if (!nome || !data || !decisao) return res.status(400).json({ ok: false, erro: 'Campos obrigatórios faltando.' });
