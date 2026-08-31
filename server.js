@@ -5022,13 +5022,20 @@ app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) =
   }
 });
 
-// Aulas dadas (calendário menos feriados, mesma lógica do Rendimento do Portal Prof) desde
-// 1º de janeiro até hoje — usado pra calcular o valor devido acumulado dos profs por aula.
-async function pagCalcularAulasAcumuladas(nome) {
+// Aulas dadas (calendário menos feriados, mesma lógica do Rendimento do Portal Prof) SÓ NO
+// MÊS CORRENTE — usado pra calcular o valor devido do mês pros profs por aula.
+//
+// Antes isso somava desde 1º de janeiro, o que parecia mais "correto" na teoria mas não
+// batia com a realidade: o Fábio não acumula saldo o ano inteiro, ele fecha (ou quase fecha)
+// a conta a cada ciclo de repasse, então mês antigo já resolvido virava "dívida fantasma" no
+// cálculo (aconteceu com a Giulia — R$10.720 fantasma — e com o Guilherme, que tinha usado
+// outra fórmula em Jan-Abr). Comparar só o mês corrente evita essa classe inteira de bug.
+async function pagCalcularAulasMesAtual(nome) {
   const turmas = await turmasDoProfessor(nome);
   if (turmas.length === 0) return 0;
   const hoje = new Date();
   const ano = hoje.getFullYear();
+  const mes = hoje.getMonth();
   const nomesDias = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 
   const rDecisoes = await fetch('https://api.notion.com/v1/databases/' + DECISOES_FERIADO_DB + '/query', {
@@ -5046,29 +5053,27 @@ async function pagCalcularAulasAcumuladas(nome) {
 
   const feriadosDoAno = await getFeriadosDoAno(ano);
   const dataInicio = DATA_INICIO_CONTROLE_PROFESSOR[nome] || (ano + '-01-01');
+  const ultimoDiaDoMes = hoje.getDate();
   let totalAulas = 0;
-  for (let mes = 0; mes <= hoje.getMonth(); mes++) {
-    const ultimoDiaDoMes = (mes === hoje.getMonth()) ? hoje.getDate() : new Date(ano, mes + 1, 0).getDate();
-    for (const turma of turmas) {
-      const datasExperimentais = new Set(turma.datasExperimentais || []);
-      for (let dia = 1; dia <= ultimoDiaDoMes; dia++) {
-        const diaSemanaNome = nomesDias[new Date(ano, mes, dia).getDay()];
-        const dataStr = ano + '-' + String(mes + 1).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
-        if (dataStr < dataInicio) continue;
+  for (const turma of turmas) {
+    const datasExperimentais = new Set(turma.datasExperimentais || []);
+    for (let dia = 1; dia <= ultimoDiaDoMes; dia++) {
+      const diaSemanaNome = nomesDias[new Date(ano, mes, dia).getDay()];
+      const dataStr = ano + '-' + String(mes + 1).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
+      if (dataStr < dataInicio) continue;
 
-        const ehDiaRegular = diaSemanaNome === turma.dia;
-        const ehDiaExperimental = datasExperimentais.has(dataStr);
-        if (!ehDiaRegular && !ehDiaExperimental) continue;
+      const ehDiaRegular = diaSemanaNome === turma.dia;
+      const ehDiaExperimental = datasExperimentais.has(dataStr);
+      if (!ehDiaRegular && !ehDiaExperimental) continue;
 
-        // Turma sem aluna ativa para de contar aula regular a partir da data em que
-        // zerou (não retroage). Só volta a contar num dia específico se tiver aula
-        // experimental agendada exatamente pra essa data — se a aluna não virar
-        // Ativa, não conta mais nada depois disso.
-        if (!turma.ativa && turma.inativaDesde && dataStr >= turma.inativaDesde && !ehDiaExperimental) continue;
+      // Turma sem aluna ativa para de contar aula regular a partir da data em que
+      // zerou (não retroage). Só volta a contar num dia específico se tiver aula
+      // experimental agendada exatamente pra essa data — se a aluna não virar
+      // Ativa, não conta mais nada depois disso.
+      if (!turma.ativa && turma.inativaDesde && dataStr >= turma.inativaDesde && !ehDiaExperimental) continue;
 
-        if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
-        totalAulas++;
-      }
+      if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
+      totalAulas++;
     }
   }
   return totalAulas;
@@ -5076,33 +5081,33 @@ async function pagCalcularAulasAcumuladas(nome) {
 
 // GET /portal-admin/pagamentos/devido
 // Pra cada professor: quanto já foi recebido das alunas (ou aulas dadas) vs. quanto já foi
-// pago a ele — a diferença é o valor em aberto, atualizado sempre que Recebimentos ou
-// Pagamentos mudarem. Não depende de extrato ter sido lançado pro mês corrente.
+// pago a ele, comparando SÓ O MÊS CORRENTE (não acumulado desde janeiro). O Fábio não deixa
+// saldo acumular o ano inteiro — ele fecha a conta a cada ciclo de repasse (às vezes só no
+// mês seguinte), então comparar contra o histórico inteiro gerava "dívida" que já tinha sido
+// quitada há meses. Confirmado batendo com o controle manual da Talita (planilha do Drive).
 app.get('/portal-admin/pagamentos/devido', async (req, res) => {
   try {
     const todosProfessores = [...Object.keys(VALOR_AULA_PROFESSOR), ...Object.keys(PERCENTUAL_PROFESSOR)];
     const resultado = [];
+    const mesAtualLabel = REP_MESES_LABEL[new Date().getMonth() + 1];
 
     for (const nome of todosProfessores) {
       const ehPercentual = !!PERCENTUAL_PROFESSOR[nome];
 
-      // já pago: soma dos registros de Pagamentos desse professor. Se ele tem uma data de
-      // início de controle (mudou de fórmula de pagamento nesse meio tempo), só conta os
-      // meses a partir dali — meses anteriores usavam outra fórmula e não têm correspondência
-      // com o "gerado" (calculado com a fórmula atual).
+      // já pago: só o mês corrente
       const rPago = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_PROF_DB + '/query', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filter: { property: 'Professor', select: { equals: nome } }, page_size: 100 }),
+        body: JSON.stringify({
+          filter: { and: [
+            { property: 'Professor', select: { equals: nome } },
+            { property: 'Mês', select: { equals: mesAtualLabel } },
+          ]},
+          page_size: 100,
+        }),
       });
       const dPago = await rPago.json();
-      const mesInicioLabel = DATA_INICIO_CONTROLE_PROFESSOR[nome] ? REP_MESES_LABEL[parseInt(DATA_INICIO_CONTROLE_PROFESSOR[nome].slice(5, 7), 10)] : null;
-      const registrosPagoValidos = (dPago.results || []).filter(p => {
-        if (!mesInicioLabel) return true;
-        const mes = p.properties['Mês']?.select?.name;
-        return REP_MESES_ORDEM.indexOf(mes) >= REP_MESES_ORDEM.indexOf(mesInicioLabel);
-      });
-      const jaPago = registrosPagoValidos.reduce((s, p) => s + (p.properties['Valor Repasse']?.number || 0), 0);
+      const jaPago = (dPago.results || []).reduce((s, p) => s + (p.properties['Valor Repasse']?.number || 0), 0);
 
       let totalGerado, detalheGerado;
       if (ehPercentual) {
@@ -5113,6 +5118,7 @@ app.get('/portal-admin/pagamentos/devido', async (req, res) => {
             filter: { and: [
               { property: 'Professor', select: { equals: nome } },
               { property: 'Status', select: { equals: 'Pago' } },
+              { property: 'Mês', select: { equals: mesAtualLabel } },
             ]},
             page_size: 100,
           }),
@@ -5120,11 +5126,11 @@ app.get('/portal-admin/pagamentos/devido', async (req, res) => {
         const dRec = await rRec.json();
         const totalRecebido = (dRec.results || []).reduce((s, p) => s + (p.properties['Valor Pago']?.number || 0), 0);
         totalGerado = Math.round(totalRecebido * PERCENTUAL_PROFESSOR[nome] * 100) / 100;
-        detalheGerado = `${PERCENTUAL_PROFESSOR[nome] * 100}% de R$ ${totalRecebido.toFixed(2)} recebido das alunas`;
+        detalheGerado = `${PERCENTUAL_PROFESSOR[nome] * 100}% de R$ ${totalRecebido.toFixed(2)} recebido das alunas em ${mesAtualLabel}`;
       } else {
-        const aulas = await pagCalcularAulasAcumuladas(nome);
+        const aulas = await pagCalcularAulasMesAtual(nome);
         totalGerado = aulas * VALOR_AULA_PROFESSOR[nome];
-        detalheGerado = `${aulas} aulas × R$ ${VALOR_AULA_PROFESSOR[nome]}`;
+        detalheGerado = `${aulas} aulas × R$ ${VALOR_AULA_PROFESSOR[nome]} em ${mesAtualLabel}`;
       }
 
       resultado.push({
@@ -5139,7 +5145,7 @@ app.get('/portal-admin/pagamentos/devido', async (req, res) => {
       });
     }
 
-    res.json({ ok: true, professores: resultado });
+    res.json({ ok: true, professores: resultado, mes: mesAtualLabel });
   } catch (err) {
     console.error('[portal-admin/pagamentos/devido] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao calcular valor devido.' });
