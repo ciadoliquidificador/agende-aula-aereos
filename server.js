@@ -6618,6 +6618,54 @@ app.get('/portal-aluna/presencas/:cpf', async (req, res) => {
   }
 });
 
+// GET /portal-aluna/mensalidades/:cpf?sessionToken=...
+// Mensalidades (Recebimentos) da aluna, cruzando pelo CPF -> páginas Alunas (pode ter mais de
+// uma, ex: 2x/semana com professores diferentes) -> registros de Recebimentos ligados a elas.
+app.get('/portal-aluna/mensalidades/:cpf', async (req, res) => {
+  const cpfLimpo = req.params.cpf.replace(/\D/g, '');
+  const dadosSessaoAluna = verificarSessao(req.query.sessionToken);
+  if (!dadosSessaoAluna) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
+  if (dadosSessaoAluna.cpf !== cpfLimpo) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
+  try {
+    const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'CPF', rich_text: { equals: cpfLimpo } }, page_size: 20 }),
+    });
+    const dAlunas = await rAlunas.json();
+    const alunaIds = (dAlunas.results || []).map(p => p.id);
+    if (alunaIds.length === 0) return res.json({ ok: true, mensalidades: [] });
+
+    const rMensalidades = await fetch('https://api.notion.com/v1/databases/' + PAGAMENTOS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { or: alunaIds.map(id => ({ property: 'Aluna', relation: { contains: id } })) },
+        page_size: 100,
+      }),
+    });
+    const dMensalidades = await rMensalidades.json();
+    const MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
+    const mensalidades = (dMensalidades.results || []).map(p => ({
+      mes: p.properties['Mês']?.select?.name || '',
+      turma: p.properties['Turma']?.select?.name || '',
+      modalidade: p.properties['Modalidade']?.select?.name || '',
+      status: p.properties['Status']?.select?.name || '',
+      aPagar: p.properties['À Pagar']?.number ?? 0,
+      valorPago: p.properties['Valor Pago']?.number ?? 0,
+      dataPagamento: p.properties['Data Pagamento']?.date?.start || null,
+    })).sort((a, b) => MESES_ORDEM.indexOf(a.mes) - MESES_ORDEM.indexOf(b.mes));
+
+    const emAberto = mensalidades.filter(m => m.status === 'Pendente');
+    const totalEmAberto = Math.round(emAberto.reduce((s, m) => s + (m.aPagar || 0), 0) * 100) / 100;
+
+    res.json({ ok: true, mensalidades, emAberto, totalEmAberto });
+  } catch (err) {
+    console.error('[portal-aluna/mensalidades] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/portal-aluna/atualizar-contato', async (req, res) => {
   const { cpf, contatoEmergenciaNome, contatoEmergenciaTelefone, possuiAlergias, quaisAlergias, usaMedicamentos, quaisMedicamentos, condicaoSaude, qualCondicao, sessionToken } = req.body;
   const cpfLimpo = (cpf || '').replace(/\D/g, '');
