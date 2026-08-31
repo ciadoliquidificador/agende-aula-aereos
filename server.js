@@ -5249,6 +5249,11 @@ const VALOR_AULA_PROFESSOR = {
   'Titzi': 80,
   'Guilherme': 80,
 };
+const PERCENTUAL_PROFESSOR = {
+  'Gabi': 0.65,
+  'Talita': 0.65,
+};
+const RENDIMENTO_MESES_LABEL = { 1: 'Jan/26', 2: 'Fev/26', 3: 'Mar/26', 4: 'Abr/26', 5: 'Mai/26', 6: 'Jun/26', 7: 'Jul/26', 8: 'Ago/26', 9: 'Set/26', 10: 'Out/26', 11: 'Nov/26', 12: 'Dez/26' };
 
 app.get('/portal/rendimento/:nome', async (req, res) => {
   const nome = decodeURIComponent(req.params.nome);
@@ -5256,7 +5261,55 @@ app.get('/portal/rendimento/:nome', async (req, res) => {
   if (!dadosSessao) return res.status(401).json({ ok: false, erro: 'Sessão expirada. Faça login novamente.' });
   if (dadosSessao.nome !== nome) return res.status(403).json({ ok: false, erro: 'Acesso negado.' });
   const valorAula = VALOR_AULA_PROFESSOR[nome];
-  if (!valorAula) return res.json({ ok: true, disponivel: false });
+  const percentual = PERCENTUAL_PROFESSOR[nome];
+  if (!valorAula && !percentual) return res.json({ ok: true, disponivel: false });
+
+  // Professoras por percentual (65% do que as alunas pagam): soma o "À Pagar" de todos os
+  // Recebimentos do mês atual dela (previsão cheia do mês, alunas que ainda não pagaram inclusas).
+  if (percentual) {
+    try {
+      const hoje = new Date();
+      const mesLabel = RENDIMENTO_MESES_LABEL[hoje.getMonth() + 1];
+      const rRec = await fetch('https://api.notion.com/v1/databases/' + RECEBIMENTOS_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { and: [
+            { property: 'Professor', select: { equals: nome } },
+            { property: 'Mês', select: { equals: mesLabel } },
+          ]},
+          page_size: 100,
+        }),
+      });
+      const dRec = await rRec.json();
+      const registros = dRec.results || [];
+      if (registros.length === 0) return res.json({ ok: true, disponivel: false });
+
+      const porTurma = {};
+      let totalPrevistoRecebimento = 0;
+      registros.forEach(pg => {
+        const pp = pg.properties;
+        const modalidade = pp['Modalidade']?.select?.name || '';
+        const turma = pp['Turma']?.select?.name || '';
+        const aPagar = pp['À Pagar']?.number || 0;
+        totalPrevistoRecebimento += aPagar;
+        const chave = modalidade + '|' + turma;
+        if (!porTurma[chave]) porTurma[chave] = { modalidade, turma, valor: 0 };
+        porTurma[chave].valor += aPagar;
+      });
+
+      const detalhes = Object.values(porTurma).map(d => ({ modalidade: d.modalidade, turma: d.turma, valor: Math.round(d.valor * percentual * 100) / 100 }));
+
+      return res.json({
+        ok: true, disponivel: true, percentual: true, percentualValor: percentual,
+        totalPrevisto: Math.round(totalPrevistoRecebimento * percentual * 100) / 100,
+        detalhes, mesAno: (hoje.getMonth() + 1) + '/' + hoje.getFullYear(),
+      });
+    } catch (err) {
+      console.error('[portal] erro ao calcular rendimento percentual:', err.message);
+      return res.status(500).json({ ok: false, erro: err.message });
+    }
+  }
 
   try {
     const turmas = await turmasDoProfessor(nome);
@@ -5313,11 +5366,22 @@ app.get('/portal/rendimento/:nome', async (req, res) => {
 
 // ROTA TEMPORÁRIA DE DIAGNÓSTICO — só leitura, sem sessão, remover depois.
 app.get('/portal/rendimento-teste/:nome', async (req, res) => {
-  const nome = decodeURIComponent(req.params.nome);
-  const valorAula = VALOR_AULA_PROFESSOR[nome];
+  const nomeReal = decodeURIComponent(req.params.nome);
+  const percentual = PERCENTUAL_PROFESSOR[nomeReal];
+  if (!percentual) return res.json({ disponivel: false, motivo: 'não é percentual' });
   try {
-    const turmas = await turmasDoProfessor(nome);
-    res.json({ nome, valorAula: valorAula || null, qtdTurmas: turmas.length, turmas });
+    const hoje = new Date();
+    const mesLabel = RENDIMENTO_MESES_LABEL[hoje.getMonth() + 1];
+    const rRec = await fetch('https://api.notion.com/v1/databases/' + RECEBIMENTOS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { and: [{ property: 'Professor', select: { equals: nomeReal } }, { property: 'Mês', select: { equals: mesLabel } }] }, page_size: 100 }),
+    });
+    const dRec = await rRec.json();
+    const registros = dRec.results || [];
+    let total = 0;
+    registros.forEach(pg => { total += pg.properties['À Pagar']?.number || 0; });
+    res.json({ nomeReal, mesLabel, qtdRegistros: registros.length, totalRecebimento: total, totalPrevisto: Math.round(total * percentual * 100) / 100 });
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }
