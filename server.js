@@ -5031,14 +5031,22 @@ async function pagCalcularAulasAcumuladas(nome) {
   for (let mes = 0; mes <= hoje.getMonth(); mes++) {
     const ultimoDiaDoMes = (mes === hoje.getMonth()) ? hoje.getDate() : new Date(ano, mes + 1, 0).getDate();
     for (const turma of turmas) {
+      const datasExperimentais = new Set(turma.datasExperimentais || []);
       for (let dia = 1; dia <= ultimoDiaDoMes; dia++) {
         const diaSemanaNome = nomesDias[new Date(ano, mes, dia).getDay()];
-        if (diaSemanaNome !== turma.dia) continue;
         const dataStr = ano + '-' + String(mes + 1).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
         if (dataStr < dataInicio) continue;
-        // Turma sem aluna ativa/experimental para de contar aula a partir da data
-        // em que zerou (não retroage — o professor já recebeu pelas aulas antes disso).
-        if (!turma.ativa && turma.inativaDesde && dataStr >= turma.inativaDesde) continue;
+
+        const ehDiaRegular = diaSemanaNome === turma.dia;
+        const ehDiaExperimental = datasExperimentais.has(dataStr);
+        if (!ehDiaRegular && !ehDiaExperimental) continue;
+
+        // Turma sem aluna ativa para de contar aula regular a partir da data em que
+        // zerou (não retroage). Só volta a contar num dia específico se tiver aula
+        // experimental agendada exatamente pra essa data — se a aluna não virar
+        // Ativa, não conta mais nada depois disso.
+        if (!turma.ativa && turma.inativaDesde && dataStr >= turma.inativaDesde && !ehDiaExperimental) continue;
+
         if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
         totalAulas++;
       }
@@ -5587,10 +5595,21 @@ app.post('/portal/atualizar-cadastro', async (req, res) => {
   }
 });
 
+// Extrai a data agendada de uma aula experimental a partir da Observações da aluna
+// (formatos vistos: "2026-07-31 - Aula experimental..." ou "agendada para 06/08/2026").
+function extrairDataExperimental(obs) {
+  let m = String(obs || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = String(obs || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return null;
+}
+
 // Sincroniza o campo "Ativa" de cada turma (banco Capacidade de Turmas) com a
-// realidade: sem nenhuma aluna Ativa ou Experimental matriculada, marca Inativa
-// (lazy, a partir de hoje — não retroage). Aula Experimental conta como tentativa
-// de reabrir a turma, então basta uma aluna experimental aparecer pra reativar.
+// realidade: sem nenhuma aluna com Status "Ativa" matriculada, marca Inativa (lazy,
+// a partir de hoje — não retroage). Aula Experimental NÃO reativa a turma inteira —
+// ela só credita a aula na data exata agendada (se a aluna não virar Ativa, não conta
+// mais nada depois disso).
 async function sincronizarStatusTurmas(modalidade) {
   const rTurmas = await fetch('https://api.notion.com/v1/databases/' + CAPACIDADE_TURMAS_DB + '/query', {
     method: 'POST',
@@ -5625,28 +5644,30 @@ async function sincronizarStatusTurmas(modalidade) {
     }),
   });
   const dAlunas = await rAlunas.json();
-  // Experimental só conta como "tentando reabrir" se for recente (15 dias) — trial que
-  // rolou e não converteu pra Ativa não pode manter a turma marcada como ativa pra sempre.
-  const JANELA_EXPERIMENTAL_MS = 15 * 24 * 60 * 60 * 1000;
-  const agora = Date.now();
-  const contagemPorTurma = {};
+  const contagemAtivaPorTurma = {};
+  const datasExperimentaisPorTurma = {};
   (dAlunas.results || []).forEach(pg => {
     const t = pg.properties['Turma']?.select?.name;
     if (!t) return;
     const status = pg.properties['Status']?.select?.name;
-    if (status === 'Experimental') {
-      const criadoEm = new Date(pg.created_time).getTime();
-      if (agora - criadoEm > JANELA_EXPERIMENTAL_MS) return;
+    if (status === 'Ativa') {
+      contagemAtivaPorTurma[t] = (contagemAtivaPorTurma[t] || 0) + 1;
+    } else if (status === 'Experimental') {
+      const obs = pg.properties['Observações']?.rich_text?.[0]?.plain_text || '';
+      const dataExp = extrairDataExperimental(obs);
+      if (dataExp) {
+        if (!datasExperimentaisPorTurma[t]) datasExperimentaisPorTurma[t] = new Set();
+        datasExperimentaisPorTurma[t].add(dataExp);
+      }
     }
-    contagemPorTurma[t] = (contagemPorTurma[t] || 0) + 1;
   });
 
   const hoje = new Date().toISOString().slice(0, 10);
   const resultado = {};
   for (const turma of turmasConfig) {
-    const temAluna = (contagemPorTurma[turma.nome] || 0) > 0;
+    const temAlunaAtiva = (contagemAtivaPorTurma[turma.nome] || 0) > 0;
     try {
-      if (temAluna && !turma.ativa) {
+      if (temAlunaAtiva && !turma.ativa) {
         await fetch('https://api.notion.com/v1/pages/' + turma.pageId, {
           method: 'PATCH',
           headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
@@ -5654,7 +5675,7 @@ async function sincronizarStatusTurmas(modalidade) {
         });
         turma.ativa = true;
         turma.inativaDesde = null;
-      } else if (!temAluna && turma.ativa) {
+      } else if (!temAlunaAtiva && turma.ativa) {
         await fetch('https://api.notion.com/v1/pages/' + turma.pageId, {
           method: 'PATCH',
           headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
@@ -5666,6 +5687,7 @@ async function sincronizarStatusTurmas(modalidade) {
     } catch (e) {
       console.error('[sincronizarStatusTurmas] erro ao atualizar turma ' + turma.nome + ':', e.message);
     }
+    turma.datasExperimentais = datasExperimentaisPorTurma[turma.nome] ? [...datasExperimentaisPorTurma[turma.nome]] : [];
     resultado[turma.nome] = turma;
   }
   return resultado;
@@ -5700,8 +5722,8 @@ async function turmasDoProfessor(nome) {
       // codigo como fallback seguro.
       const professoresAtual = mapaProfessores[t.nome] || [t.professor];
       if (professoresAtual.includes(nome)) {
-        const status = statusTurmas[t.nome] || { ativa: true, inativaDesde: null };
-        encontradas.push({ modalidade, ...t, professor: professoresAtual[0], professores: professoresAtual, ativa: status.ativa, inativaDesde: status.inativaDesde });
+        const status = statusTurmas[t.nome] || { ativa: true, inativaDesde: null, datasExperimentais: [] };
+        encontradas.push({ modalidade, ...t, professor: professoresAtual[0], professores: professoresAtual, ativa: status.ativa, inativaDesde: status.inativaDesde, datasExperimentais: status.datasExperimentais || [] });
       }
     });
   }
