@@ -4921,19 +4921,29 @@ app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) =
       try {
         const chave = `${item.professor}|${item.mes}`;
         const existente = existentes.find(e => `${e.professor}|${e.mes}` === chave);
-        const datasTexto = item.parcelas.map(p => `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`).join('; ');
-        const ultimaData = item.parcelas[item.parcelas.length - 1].data;
 
         if (existente) {
-          const novoValor = Math.round(((existente.valorRepasse || 0) + item.valorTotal) * 100) / 100;
-          const novasDatas = existente.datasDeRepasse ? `${existente.datasDeRepasse}; ${datasTexto}` : datasTexto;
+          // Idempotência: pula parcelas que já constam em "Datas de Repasse" (mesma data+valor),
+          // pra não duplicar o valor se o mesmo extrato for subido de novo por engano.
+          const textoExistente = existente.datasDeRepasse || '';
+          const parcelasNovas = item.parcelas.filter(p => {
+            const chaveParcela = `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`;
+            return !textoExistente.includes(chaveParcela);
+          });
+          if (parcelasNovas.length === 0) { ok++; continue; }
+
+          const datasTextoNovas = parcelasNovas.map(p => `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`).join('; ');
+          const valorParcelasNovas = parcelasNovas.reduce((s, p) => s + p.valor, 0);
+          const ultimaDataNova = parcelasNovas[parcelasNovas.length - 1].data;
+          const novoValor = Math.round(((existente.valorRepasse || 0) + valorParcelasNovas) * 100) / 100;
+          const novasDatas = textoExistente ? `${textoExistente}; ${datasTextoNovas}` : datasTextoNovas;
           const r = await fetch('https://api.notion.com/v1/pages/' + existente.id, {
             method: 'PATCH',
             headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
             body: JSON.stringify({
               properties: {
                 'Valor Repasse': { number: novoValor },
-                'Data Repasse': { date: { start: ultimaData } },
+                'Data Repasse': { date: { start: ultimaDataNova } },
                 'Datas de Repasse': { rich_text: [{ text: { content: novasDatas } }] },
                 'Status': { select: { name: 'Pago' } },
               },
@@ -4941,6 +4951,8 @@ app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) =
           });
           if (!r.ok) throw new Error(JSON.stringify(await r.json()));
         } else {
+          const datasTexto = item.parcelas.map(p => `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`).join('; ');
+          const ultimaData = item.parcelas[item.parcelas.length - 1].data;
           const r = await fetch('https://api.notion.com/v1/pages', {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
