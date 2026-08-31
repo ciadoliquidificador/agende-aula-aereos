@@ -4778,6 +4778,8 @@ const NOME_EXTRATO_POR_PROFESSOR = {
   Titzi: 'titziane marques',
   Talita: 'talita silva',
   Gabi: 'gabriela gomes de sousa',
+  'André': 'andre schulle',
+  Giulia: 'giulia sanches hoff', // inferida do cadastro dela como aluna de Aéreos — confirmar no 1º repasse real
 };
 
 const REP_MESES_LABEL = { 1: 'Jan/26', 2: 'Fev/26', 3: 'Mar/26', 4: 'Abr/26', 5: 'Mai/26', 6: 'Jun/26', 7: 'Jul/26', 8: 'Ago/26', 9: 'Set/26', 10: 'Out/26', 11: 'Nov/26', 12: 'Dez/26' };
@@ -5623,10 +5625,20 @@ async function sincronizarStatusTurmas(modalidade) {
     }),
   });
   const dAlunas = await rAlunas.json();
+  // Experimental só conta como "tentando reabrir" se for recente (15 dias) — trial que
+  // rolou e não converteu pra Ativa não pode manter a turma marcada como ativa pra sempre.
+  const JANELA_EXPERIMENTAL_MS = 15 * 24 * 60 * 60 * 1000;
+  const agora = Date.now();
   const contagemPorTurma = {};
   (dAlunas.results || []).forEach(pg => {
     const t = pg.properties['Turma']?.select?.name;
-    if (t) contagemPorTurma[t] = (contagemPorTurma[t] || 0) + 1;
+    if (!t) return;
+    const status = pg.properties['Status']?.select?.name;
+    if (status === 'Experimental') {
+      const criadoEm = new Date(pg.created_time).getTime();
+      if (agora - criadoEm > JANELA_EXPERIMENTAL_MS) return;
+    }
+    contagemPorTurma[t] = (contagemPorTurma[t] || 0) + 1;
   });
 
   const hoje = new Date().toISOString().slice(0, 10);
