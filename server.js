@@ -5222,7 +5222,7 @@ app.post('/portal-admin/sala-ensaio/status', async (req, res) => {
 // (qualquer status exceto Cancelado), por nome (Responsável/Contato/Projeto/Coletivo) + valor.
 // O pagamento vem em duas frações possíveis: sinal (30%, na reserva) ou saldo (70% restante,
 // pago na data de ocupação) — nunca dá baixa direto pro status, soma no Valor Recebido.
-async function salaAnalisarExtratoAluguel(csv) {
+async function salaAnalisarExtratoAluguel(csv, chavesJaConciliadasRecebimento) {
   const linhas = csv.split('\n').map(l => l.trim()).filter(Boolean);
   const transacoes = [];
   for (const linha of linhas.slice(1)) {
@@ -5315,7 +5315,45 @@ async function salaAnalisarExtratoAluguel(csv) {
     });
   }
 
-  return { conciliados, valorNaoBate, semCandidato };
+  // Segunda passada, só por valor: cobre o caso do aluguel de sala em que quem paga
+  // não é o responsável cadastrado (CPF de outra pessoa, ou pagamento por CNPJ). Só
+  // aceita se o valor bater com EXATAMENTE 1 agendamento em aberto, e a transação não
+  // tiver sido reconciliada com confiança como mensalidade de aluna (evita roubar um
+  // Pix que já é claramente de outra coisa só porque o valor coincide).
+  const semCandidatoRestante = [];
+  const possiveisPorValor = [];
+  for (const tx of semCandidato) {
+    const chave = `${tx.data}|${tx.valor}`;
+    if (chavesJaConciliadasRecebimento && chavesJaConciliadasRecebimento.has(chave)) {
+      semCandidatoRestante.push(tx);
+      continue;
+    }
+    const opcoes = [];
+    for (const a of abertos.filter(a => !usados.has(a.id))) {
+      for (const esp of valoresEsperados(a)) {
+        if (Math.abs(esp.valor - tx.valor) < 0.01) opcoes.push({ agendamento: a, tipo: esp.tipo });
+      }
+    }
+    if (opcoes.length === 1) {
+      const escolhido = opcoes[0];
+      usados.add(escolhido.agendamento.id);
+      possiveisPorValor.push({
+        pageId: escolhido.agendamento.id,
+        data: tx.data,
+        valor: tx.valor,
+        nomeExtrato: tx.nome,
+        titulo: escolhido.agendamento.titulo,
+        responsavel: escolhido.agendamento.responsavel,
+        statusAtual: escolhido.agendamento.status,
+        tipoPagamento: escolhido.tipo,
+        porValor: true,
+      });
+    } else {
+      semCandidatoRestante.push(tx);
+    }
+  }
+
+  return { conciliados, possiveisPorValor, valorNaoBate, semCandidato: semCandidatoRestante };
 }
 
 const SALA_LABEL_TIPO_PAGAMENTO = { sinal: 'sinal da reserva', integral: 'valor integral', saldo: 'saldo na data de ocupação' };
@@ -5433,11 +5471,12 @@ app.post('/portal-admin/extrato/processar', async (req, res) => {
     if (!csv || typeof csv !== 'string') {
       return res.status(400).json({ ok: false, erro: 'csv é obrigatório.' });
     }
-    const [recebimentos, repasses, salaEnsaio] = await Promise.all([
+    const [recebimentos, repasses] = await Promise.all([
       pgtAnalisarExtratoRecebimentos(csv),
       Promise.resolve(repAnalisarExtrato(csv)),
-      salaAnalisarExtratoAluguel(csv),
     ]);
+    const chavesJaConciliadasRecebimento = new Set(recebimentos.conciliados.map(c => `${c.data}|${c.valor}`));
+    const salaEnsaio = await salaAnalisarExtratoAluguel(csv, chavesJaConciliadasRecebimento);
     res.json({ ok: true, recebimentos, pagamentos: { propostas: repasses }, salaEnsaio });
   } catch (err) {
     console.error('[portal-admin/extrato/processar] erro:', err.message);
