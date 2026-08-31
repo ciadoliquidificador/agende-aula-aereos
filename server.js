@@ -4856,21 +4856,33 @@ function repAnalisarExtrato(csv) {
     const m = linha.match(/^([^,]*),([^,]*),([^,]*),(.*)$/);
     if (!m) continue;
     const valor = parseFloat(m[2].trim());
-    if (Number.isNaN(valor) || valor >= 0) continue; // só saídas
+    if (Number.isNaN(valor)) continue;
     const descricao = m[4].trim();
-    const nomeMatch = descricao.match(/^Transferência enviada pelo Pix - (.+?) -/);
-    if (!nomeMatch) continue;
     const dataMatch = m[1].trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (!dataMatch) continue;
+
+    // Saída normal: Pix enviado pra um professor -> entra no repasse dele.
+    // Reembolso: o professor devolveu parte de um pagamento -> desconta do repasse (valor negativo).
+    let nomeMatch = null;
+    let ehReembolso = false;
+    if (valor < 0) {
+      nomeMatch = descricao.match(/^Transferência enviada pelo Pix - (.+?) -/);
+    } else {
+      nomeMatch = descricao.match(/^Reembolso recebido pelo Pix - (.+?) -/);
+      ehReembolso = true;
+    }
+    if (!nomeMatch) continue;
+
     const professor = repIdentificarProfessorPix(nomeMatch[1]);
     if (!professor) continue;
     const mesNum = parseInt(dataMatch[2], 10);
     saidas.push({
       professor,
       mes: REP_MESES_LABEL[mesNum],
-      valor: Math.abs(valor),
+      valor: ehReembolso ? -Math.abs(valor) : Math.abs(valor),
       data: `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}`,
       nomeExtrato: nomeMatch[1].trim(),
+      reembolso: ehReembolso,
     });
   }
 
@@ -4878,7 +4890,7 @@ function repAnalisarExtrato(csv) {
   for (const s of saidas) {
     const chave = `${s.professor}|${s.mes}`;
     if (!grupos[chave]) grupos[chave] = { professor: s.professor, mes: s.mes, parcelas: [] };
-    grupos[chave].parcelas.push({ data: s.data, valor: s.valor });
+    grupos[chave].parcelas.push({ data: s.data, valor: s.valor, reembolso: s.reembolso });
   }
 
   return Object.values(grupos).map(g => ({
@@ -4904,6 +4916,12 @@ app.post('/portal-admin/pagamentos/importar-extrato', async (req, res) => {
   }
 });
 
+function repFormatarParcela(p) {
+  const dataFmt = p.data.split('-').reverse().join('/');
+  if (p.valor < 0) return `${dataFmt}: -R$${Math.abs(p.valor).toFixed(2)} (reembolso)`;
+  return `${dataFmt}: R$${p.valor.toFixed(2)}`;
+}
+
 // POST /portal-admin/pagamentos/importar-extrato/aplicar { itens: [{ professor, mes, valorTotal, parcelas }] }
 // Cria ou atualiza (soma) o registro de Repasse pra cada professor+mês confirmado.
 app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) => {
@@ -4926,13 +4944,10 @@ app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) =
           // Idempotência: pula parcelas que já constam em "Datas de Repasse" (mesma data+valor),
           // pra não duplicar o valor se o mesmo extrato for subido de novo por engano.
           const textoExistente = existente.datasDeRepasse || '';
-          const parcelasNovas = item.parcelas.filter(p => {
-            const chaveParcela = `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`;
-            return !textoExistente.includes(chaveParcela);
-          });
+          const parcelasNovas = item.parcelas.filter(p => !textoExistente.includes(repFormatarParcela(p)));
           if (parcelasNovas.length === 0) { ok++; continue; }
 
-          const datasTextoNovas = parcelasNovas.map(p => `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`).join('; ');
+          const datasTextoNovas = parcelasNovas.map(repFormatarParcela).join('; ');
           const valorParcelasNovas = parcelasNovas.reduce((s, p) => s + p.valor, 0);
           const ultimaDataNova = parcelasNovas[parcelasNovas.length - 1].data;
           const novoValor = Math.round(((existente.valorRepasse || 0) + valorParcelasNovas) * 100) / 100;
@@ -4951,7 +4966,7 @@ app.post('/portal-admin/pagamentos/importar-extrato/aplicar', async (req, res) =
           });
           if (!r.ok) throw new Error(JSON.stringify(await r.json()));
         } else {
-          const datasTexto = item.parcelas.map(p => `${p.data.split('-').reverse().join('/')}: R$${p.valor.toFixed(2)}`).join('; ');
+          const datasTexto = item.parcelas.map(repFormatarParcela).join('; ');
           const ultimaData = item.parcelas[item.parcelas.length - 1].data;
           const r = await fetch('https://api.notion.com/v1/pages', {
             method: 'POST',
