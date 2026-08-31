@@ -5034,6 +5034,9 @@ async function pagCalcularAulasAcumuladas(nome) {
         if (diaSemanaNome !== turma.dia) continue;
         const dataStr = ano + '-' + String(mes + 1).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
         if (dataStr < dataInicio) continue;
+        // Turma sem aluna ativa/experimental para de contar aula a partir da data
+        // em que zerou (não retroage — o professor já recebeu pelas aulas antes disso).
+        if (!turma.ativa && turma.inativaDesde && dataStr >= turma.inativaDesde) continue;
         if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
         totalAulas++;
       }
@@ -5582,9 +5585,84 @@ app.post('/portal/atualizar-cadastro', async (req, res) => {
   }
 });
 
+// Sincroniza o campo "Ativa" de cada turma (banco Capacidade de Turmas) com a
+// realidade: sem nenhuma aluna Ativa ou Experimental matriculada, marca Inativa
+// (lazy, a partir de hoje — não retroage). Aula Experimental conta como tentativa
+// de reabrir a turma, então basta uma aluna experimental aparecer pra reativar.
+async function sincronizarStatusTurmas(modalidade) {
+  const rTurmas = await fetch('https://api.notion.com/v1/databases/' + CAPACIDADE_TURMAS_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filter: { property: 'Modalidade', select: { equals: modalidade } }, page_size: 100 }),
+  });
+  const dTurmas = await rTurmas.json();
+  const turmasConfig = (dTurmas.results || []).map(pagina => {
+    const p = pagina.properties;
+    return {
+      pageId: pagina.id,
+      nome: p['Título']?.title?.[0]?.plain_text || '',
+      ativa: p['Ativa']?.checkbox ?? true,
+      inativaDesde: p['Inativa Desde']?.date?.start || null,
+    };
+  }).filter(t => t.nome);
+
+  if (turmasConfig.length === 0) return {};
+
+  const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filter: { and: [
+        { property: 'Modalidade', select: { equals: modalidade } },
+        { or: [
+          { property: 'Status', select: { equals: 'Ativa' } },
+          { property: 'Status', select: { equals: 'Experimental' } },
+        ]},
+      ]},
+      page_size: 200,
+    }),
+  });
+  const dAlunas = await rAlunas.json();
+  const contagemPorTurma = {};
+  (dAlunas.results || []).forEach(pg => {
+    const t = pg.properties['Turma']?.select?.name;
+    if (t) contagemPorTurma[t] = (contagemPorTurma[t] || 0) + 1;
+  });
+
+  const hoje = new Date().toISOString().slice(0, 10);
+  const resultado = {};
+  for (const turma of turmasConfig) {
+    const temAluna = (contagemPorTurma[turma.nome] || 0) > 0;
+    try {
+      if (temAluna && !turma.ativa) {
+        await fetch('https://api.notion.com/v1/pages/' + turma.pageId, {
+          method: 'PATCH',
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ properties: { 'Ativa': { checkbox: true }, 'Inativa Desde': { date: null } } }),
+        });
+        turma.ativa = true;
+        turma.inativaDesde = null;
+      } else if (!temAluna && turma.ativa) {
+        await fetch('https://api.notion.com/v1/pages/' + turma.pageId, {
+          method: 'PATCH',
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ properties: { 'Ativa': { checkbox: false }, 'Inativa Desde': { date: { start: hoje } } } }),
+        });
+        turma.ativa = false;
+        turma.inativaDesde = hoje;
+      }
+    } catch (e) {
+      console.error('[sincronizarStatusTurmas] erro ao atualizar turma ' + turma.nome + ':', e.message);
+    }
+    resultado[turma.nome] = turma;
+  }
+  return resultado;
+}
+
 async function turmasDoProfessor(nome) {
   const encontradas = [];
   const cacheProfessorPorModalidade = {};
+  const cacheStatusPorModalidade = {};
   for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
     if (!cacheProfessorPorModalidade[modalidade]) {
       try {
@@ -5594,13 +5672,25 @@ async function turmasDoProfessor(nome) {
         cacheProfessorPorModalidade[modalidade] = {};
       }
     }
+    if (!cacheStatusPorModalidade[modalidade]) {
+      try {
+        cacheStatusPorModalidade[modalidade] = await sincronizarStatusTurmas(modalidade);
+      } catch (e) {
+        console.error('[turmasDoProfessor] erro ao sincronizar status das turmas:', e.message);
+        cacheStatusPorModalidade[modalidade] = {};
+      }
+    }
     const mapaProfessores = cacheProfessorPorModalidade[modalidade];
+    const statusTurmas = cacheStatusPorModalidade[modalidade];
     dados.turmas.forEach(t => {
       // Prioriza o(s) professor(es) cadastrado(s) no Notion (multi_select); se a
       // turma ainda nao estiver migrada la (lista vazia), usa o valor fixo do
       // codigo como fallback seguro.
       const professoresAtual = mapaProfessores[t.nome] || [t.professor];
-      if (professoresAtual.includes(nome)) encontradas.push({ modalidade, ...t, professor: professoresAtual[0], professores: professoresAtual });
+      if (professoresAtual.includes(nome)) {
+        const status = statusTurmas[t.nome] || { ativa: true, inativaDesde: null };
+        encontradas.push({ modalidade, ...t, professor: professoresAtual[0], professores: professoresAtual, ativa: status.ativa, inativaDesde: status.inativaDesde });
+      }
     });
   }
   return encontradas;
