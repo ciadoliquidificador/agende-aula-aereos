@@ -5364,29 +5364,6 @@ app.get('/portal/rendimento/:nome', async (req, res) => {
   }
 });
 
-// ROTA TEMPORÁRIA DE DIAGNÓSTICO — só leitura, sem sessão, remover depois.
-app.get('/portal/rendimento-teste/:nome', async (req, res) => {
-  const nomeReal = decodeURIComponent(req.params.nome);
-  const percentual = PERCENTUAL_PROFESSOR[nomeReal];
-  if (!percentual) return res.json({ disponivel: false, motivo: 'não é percentual' });
-  try {
-    const hoje = new Date();
-    const mesLabel = RENDIMENTO_MESES_LABEL[hoje.getMonth() + 1];
-    const rRec = await fetch('https://api.notion.com/v1/databases/' + RECEBIMENTOS_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filter: { and: [{ property: 'Professor', select: { equals: nomeReal } }, { property: 'Mês', select: { equals: mesLabel } }] }, page_size: 100 }),
-    });
-    const dRec = await rRec.json();
-    const registros = dRec.results || [];
-    let total = 0;
-    registros.forEach(pg => { total += pg.properties['À Pagar']?.number || 0; });
-    res.json({ nomeReal, mesLabel, qtdRegistros: registros.length, totalRecebimento: total, totalPrevisto: Math.round(total * percentual * 100) / 100 });
-  } catch (err) {
-    res.status(500).json({ erro: err.message });
-  }
-});
-
 app.post('/portal/feriado-resposta', async (req, res) => {
   const { nome, data, decisao, sessionToken } = req.body;
   if (!nome || !data || !decisao) return res.status(400).json({ ok: false, erro: 'Campos obrigatórios faltando.' });
