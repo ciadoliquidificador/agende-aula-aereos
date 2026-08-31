@@ -5102,21 +5102,242 @@ app.get('/portal-admin/pagamentos/devido', async (req, res) => {
 });
 // ===== FIM PORTAL ADMIN — PAGAMENTOS (professores) =====
 
-// ===== PORTAL ADMIN — EXTRATO (tela unificada: 1 upload alimenta Recebimentos + Repasses) =====
+// ===== PORTAL ADMIN — ALUGUEL DE SALA DE ENSAIO =====
+// SALA_ENSAIO_DB é declarado mais abaixo (bloco "SALA DE ENSAIO — Agendamento"),
+// mas por ser const de módulo já está disponível quando essas rotas são chamadas.
+async function salaBuscarAgendamentos(filtro) {
+  const registros = [];
+  let cursor;
+  do {
+    const body = { page_size: 100, sorts: [{ property: 'Início', direction: 'descending' }] };
+    if (filtro) body.filter = filtro;
+    if (cursor) body.start_cursor = cursor;
+    const r = await fetch('https://api.notion.com/v1/databases/' + SALA_ENSAIO_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error('Erro ao buscar agendamentos: ' + JSON.stringify(d));
+    for (const pagina of d.results) {
+      const p = pagina.properties;
+      const valorTotal = p['Valor Total']?.number ?? 0;
+      registros.push({
+        id: pagina.id,
+        titulo: p['Título']?.title?.[0]?.plain_text || '',
+        reservaId: p['Reserva ID']?.rich_text?.[0]?.plain_text || '',
+        projeto: p['Nome do Projeto']?.rich_text?.[0]?.plain_text || '',
+        coletivo: p['Coletivo / Grupo']?.rich_text?.[0]?.plain_text || '',
+        responsavel: p['Responsável']?.rich_text?.[0]?.plain_text || '',
+        contato: p['Contato']?.rich_text?.[0]?.plain_text || '',
+        whatsapp: p['WhatsApp']?.rich_text?.[0]?.plain_text || '',
+        inicio: p['Início']?.date?.start || null,
+        fim: p['Fim']?.date?.start || null,
+        valorTotal,
+        deposito: Math.round(valorTotal * 0.3 * 100) / 100,
+        status: p['Status']?.select?.name || null,
+        notaFiscal: p['Nota Fiscal']?.select?.name || null,
+        cpfCnpj: p['CPF/CNPJ Nota Fiscal']?.rich_text?.[0]?.plain_text || '',
+        observacoes: p['Observações']?.rich_text?.[0]?.plain_text || '',
+      });
+    }
+    cursor = d.has_more ? d.next_cursor : null;
+  } while (cursor);
+  return registros;
+}
+
+// GET /portal-admin/sala-ensaio/agendamentos?status=Confirmado&mes=2026-08
+app.get('/portal-admin/sala-ensaio/agendamentos', async (req, res) => {
+  try {
+    const { status, mes } = req.query;
+    const filtro = status ? { property: 'Status', select: { equals: status } } : null;
+    let registros = await salaBuscarAgendamentos(filtro);
+    if (mes) registros = registros.filter(r => (r.inicio || '').slice(0, 7) === mes);
+
+    const resumo = {};
+    for (const r of registros) {
+      if (!resumo[r.status]) resumo[r.status] = { qtd: 0, valor: 0 };
+      resumo[r.status].qtd += 1;
+      resumo[r.status].valor += r.valorTotal || 0;
+    }
+
+    res.json({ ok: true, registros, resumo });
+  } catch (err) {
+    console.error('[portal-admin/sala-ensaio/agendamentos] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao buscar agendamentos.' });
+  }
+});
+
+// POST /portal-admin/sala-ensaio/status { pageId, status }
+// Ajuste manual de status (ex: confirmar sem ter passado pelo extrato, ou cancelar).
+app.post('/portal-admin/sala-ensaio/status', async (req, res) => {
+  try {
+    const { pageId, status } = req.body;
+    const validos = ['Pendente', 'Aguardando Comprovante', 'Confirmado', 'Cancelado'];
+    if (!pageId || !validos.includes(status)) {
+      return res.status(400).json({ ok: false, erro: 'pageId e status válido são obrigatórios.' });
+    }
+    const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { 'Status': { select: { name: status } } } }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(d));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[portal-admin/sala-ensaio/status] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao atualizar status.' });
+  }
+});
+
+// Cruza Pix recebidos do extrato com agendamentos "Pendente"/"Aguardando Comprovante"
+// por nome (Responsável/Contato/Projeto/Coletivo) + valor (sinal de 30% ou valor integral).
+async function salaAnalisarExtratoAluguel(csv) {
+  const linhas = csv.split('\n').map(l => l.trim()).filter(Boolean);
+  const transacoes = [];
+  for (const linha of linhas.slice(1)) {
+    const m = linha.match(/^([^,]*),([^,]*),([^,]*),(.*)$/);
+    if (!m) continue;
+    const valor = parseFloat(m[2].trim());
+    if (Number.isNaN(valor) || valor <= 0) continue;
+    const descricao = m[4].trim();
+    const nomeMatch = descricao.match(/^Transferência (?:recebida pelo Pix|Recebida) - (.+?) -/);
+    if (!nomeMatch) continue;
+    const dataMatch = m[1].trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!dataMatch) continue;
+    transacoes.push({
+      data: `${dataMatch[3]}-${dataMatch[2]}-${dataMatch[1]}`,
+      valor,
+      nome: nomeMatch[1].trim(),
+    });
+  }
+
+  const abertos = await salaBuscarAgendamentos({
+    or: [
+      { property: 'Status', select: { equals: 'Pendente' } },
+      { property: 'Status', select: { equals: 'Aguardando Comprovante' } },
+    ],
+  });
+
+  function candidatosPorNome(nomeTransacao) {
+    const key = pgtNormalizar(nomeTransacao);
+    const tokens = key.split(' ').filter(Boolean);
+    return abertos.filter(a => {
+      const camposNome = [a.responsavel, a.contato, a.projeto, a.coletivo].filter(Boolean).map(pgtNormalizar);
+      if (camposNome.includes(key)) return true;
+      if (tokens.length >= 2) {
+        const flKey = `${tokens[0]} ${tokens[tokens.length - 1]}`;
+        return camposNome.some(c => {
+          const cTokens = c.split(' ').filter(Boolean);
+          if (cTokens.length < 2) return false;
+          return `${cTokens[0]} ${cTokens[cTokens.length - 1]}` === flKey;
+        });
+      }
+      return false;
+    });
+  }
+
+  const usados = new Set();
+  const conciliados = [];
+  const valorNaoBate = [];
+  const semCandidato = [];
+
+  for (const tx of transacoes) {
+    const candidatosNome = candidatosPorNome(tx.nome).filter(a => !usados.has(a.id));
+    if (candidatosNome.length === 0) { semCandidato.push(tx); continue; }
+
+    const candidatosValor = candidatosNome.filter(a =>
+      Math.abs(a.deposito - tx.valor) < 0.01 || Math.abs(a.valorTotal - tx.valor) < 0.01
+    );
+    if (candidatosValor.length === 0) {
+      valorNaoBate.push({ ...tx, abertosDele: candidatosNome.map(c => ({ titulo: c.titulo, deposito: c.deposito, valorTotal: c.valorTotal })) });
+      continue;
+    }
+
+    const escolhido = candidatosValor[0];
+    usados.add(escolhido.id);
+    const ehIntegral = Math.abs(escolhido.valorTotal - tx.valor) < 0.01;
+    conciliados.push({
+      pageId: escolhido.id,
+      data: tx.data,
+      valor: tx.valor,
+      nomeExtrato: tx.nome,
+      titulo: escolhido.titulo,
+      responsavel: escolhido.responsavel,
+      statusAtual: escolhido.status,
+      tipoPagamento: ehIntegral ? 'integral' : 'sinal',
+      ambiguo: candidatosValor.length > 1,
+    });
+  }
+
+  return { conciliados, valorNaoBate, semCandidato };
+}
+
+// POST /portal-admin/sala-ensaio/extrato/aplicar { itens: [{ pageId, data, valor, tipoPagamento }] }
+app.post('/portal-admin/sala-ensaio/extrato/aplicar', async (req, res) => {
+  try {
+    const { itens } = req.body;
+    if (!Array.isArray(itens) || itens.length === 0) {
+      return res.status(400).json({ ok: false, erro: 'itens é obrigatório.' });
+    }
+    let atualizados = 0;
+    const erros = [];
+    for (const item of itens) {
+      const dataFmt = String(item.data).split('-').reverse().join('/');
+      const notaTexto = `Pagamento recebido via Pix em ${dataFmt}: R$ ${Number(item.valor).toFixed(2)} (${item.tipoPagamento === 'integral' ? 'valor integral' : 'sinal'}).`;
+
+      const rAtual = await fetch('https://api.notion.com/v1/pages/' + item.pageId, {
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+      });
+      const paginaAtual = await rAtual.json();
+      const obsAtual = paginaAtual.properties?.['Observações']?.rich_text?.[0]?.plain_text || '';
+      if (obsAtual.includes(notaTexto)) { atualizados++; continue; }
+      const obsNova = (obsAtual ? `${obsAtual}\n${notaTexto}` : notaTexto).slice(0, 2000);
+
+      const r = await fetch('https://api.notion.com/v1/pages/' + item.pageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          properties: {
+            'Status': { select: { name: 'Confirmado' } },
+            'Observações': { rich_text: [{ text: { content: obsNova } }] },
+          },
+        }),
+      });
+      if (r.ok) {
+        atualizados++;
+      } else {
+        const d = await r.json();
+        console.error('[portal-admin/sala-ensaio/extrato/aplicar] erro:', JSON.stringify(d));
+        erros.push(item.pageId);
+      }
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+    res.json({ ok: true, atualizados, erros });
+  } catch (err) {
+    console.error('[portal-admin/sala-ensaio/extrato/aplicar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao aplicar conciliação.' });
+  }
+});
+// ===== FIM PORTAL ADMIN — ALUGUEL DE SALA DE ENSAIO =====
+
+// ===== PORTAL ADMIN — EXTRATO (tela unificada: 1 upload alimenta Recebimentos + Repasses + Aluguel de Sala) =====
 // POST /portal-admin/extrato/processar { csv }
-// Um único extrato: valores positivos viram proposta de conciliação de Recebimentos (alunas),
-// valores negativos viram proposta de importação de Repasses (professores).
+// Um único extrato: valores positivos viram proposta de conciliação de Recebimentos (alunas)
+// e de Aluguel de Sala (clientes externos), valores negativos viram proposta de Pagamentos (professores).
 app.post('/portal-admin/extrato/processar', async (req, res) => {
   try {
     const { csv } = req.body;
     if (!csv || typeof csv !== 'string') {
       return res.status(400).json({ ok: false, erro: 'csv é obrigatório.' });
     }
-    const [recebimentos, repasses] = await Promise.all([
+    const [recebimentos, repasses, salaEnsaio] = await Promise.all([
       pgtAnalisarExtratoRecebimentos(csv),
       Promise.resolve(repAnalisarExtrato(csv)),
+      salaAnalisarExtratoAluguel(csv),
     ]);
-    res.json({ ok: true, recebimentos, pagamentos: { propostas: repasses } });
+    res.json({ ok: true, recebimentos, pagamentos: { propostas: repasses }, salaEnsaio });
   } catch (err) {
     console.error('[portal-admin/extrato/processar] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao processar extrato.' });
