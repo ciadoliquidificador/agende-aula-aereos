@@ -2004,7 +2004,11 @@ function calcularVencimentoContrato(dataInicioISO, plano) {
   const inicio = new Date(dataInicioISO);
   if (isNaN(inicio.getTime())) return null;
   const duracao = DURACAO_FIDELIDADE_MESES[plano] || 1;
-  inicio.setMonth(inicio.getMonth() + duracao);
+  // setUTCMonth (nao setMonth) -- setMonth usa o fuso horario local do processo,
+  // e uma data tipo "2026-03-01" (meia-noite UTC) pode cair no dia anterior em
+  // horario de Brasilia, deslocando o mes calculado quando a duracao nao e
+  // multipla de 12 (ja causou vencimento errado em registros migrados).
+  inicio.setUTCMonth(inicio.getUTCMonth() + duracao);
   return inicio.toISOString();
 }
 
