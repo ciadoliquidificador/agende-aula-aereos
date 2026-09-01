@@ -4404,17 +4404,26 @@ app.get('/portal-admin/ocupacao', async (req, res) => {
     }
 
     const resultado = turmas.map(t => {
-      const ocupados = alunas.filter(pagina => {
+      const alunasDaTurma = alunas.filter(pagina => {
         const p = pagina.properties;
         const modalidade = p['Modalidade']?.select?.name || '';
         const turma = p['Turma']?.select?.name || '';
         return modalidade === t.modalidade && turma === t.turma;
-      }).length;
+      }).map(pagina => {
+        const p = pagina.properties;
+        const plano = p['Plano']?.select?.name || '';
+        return {
+          nome: p['Nome']?.title?.[0]?.plain_text || '',
+          plano,
+          vencimentoContrato: plano === 'Mensal' ? null : (p['Vencimento do Contrato']?.date?.start || null),
+        };
+      }).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
       return {
         ...t,
         capacidadeTotal: t.capacidadeRegular + t.vagaReposicaoExtra,
-        ocupados,
+        ocupados: alunasDaTurma.length,
+        alunas: alunasDaTurma,
       };
     });
 
