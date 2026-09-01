@@ -423,7 +423,7 @@ app.listen(PORT, '0.0.0.0', () => console.log(`Proxy rodando na porta ${PORT}`))
 
 const LIMITES_TURMAS_AEREOS = {
   "Segunda 18h": 5, "Segunda 19h": 5, "Sexta 18h": 5,
-  "Terça 8h": 5, "Terça 9h": 5, "Quarta 18h": 5, "Quarta 19h": 5, "Quinta 8h": 5,
+  "Terça 8h": 5, "Terça 9h": 5, "Quarta 18h": 5, "Quarta 19h": 5, "Quarta 20h": 5, "Quinta 8h": 5,
 };
 
 const nomeParaId = {
@@ -436,6 +436,7 @@ const nomeParaId = {
   "Quarta 18h":  "t6",
   "Quarta 19h":  "t7",
   "Quinta 8h":   "t8",
+  "Quarta 20h":  "t9",
   // Formato legado (registros antigos)
   "Segunda 18h – Prof. Gabi":      "t1",
   "Segunda 19h – Prof. Gabi":      "t2",
@@ -445,6 +446,7 @@ const nomeParaId = {
   "Quarta 18h – Prof. Gustra":     "t6",
   "Quarta 19h – Prof. Gustra":     "t7",
   "Quinta 8h – Prof. Guilherme":   "t8",
+  "Quarta 20h – Prof. Gustra":     "t9",
 };
 
 async function contarAtivasNaTurma(modalidade, turmaNome) {
@@ -1434,7 +1436,7 @@ const PROFESSORES_SUB = {
   'Aéreos': [
     { nome: 'Gabi', telefone: '5511961416621', turmas: ['Segunda 18h', 'Segunda 19h', 'Sexta 18h'] },
     { nome: 'Talita', telefone: '5511989142791', turmas: ['Terça 8h', 'Terça 9h'] },
-    { nome: 'Gustra', telefone: '5511988485740', turmas: ['Quarta 18h', 'Quarta 19h'] },
+    { nome: 'Gustra', telefone: '5511988485740', turmas: ['Quarta 18h', 'Quarta 19h', 'Quarta 20h'] },
     { nome: 'Guilherme', telefone: '5511989538880', turmas: ['Quinta 8h'] },
   ],
   'Acrobacia': [
@@ -1445,9 +1447,6 @@ const PROFESSORES_SUB = {
   ],
   'Yoga': [
     { nome: 'Giulia', telefone: '5512988222584', turmas: ['Quarta 7h', 'Quarta 8h', 'Sexta 7h', 'Sexta 8h'] },
-  ],
-  'Danças Brasileiras': [
-    { nome: 'Roberta', telefone: '5511971918173', turmas: ['Quarta 20h'] },
   ],
 };
 
@@ -1785,6 +1784,7 @@ const MODALIDADES_MATRICULA = {
       { nome: 'Terça 9h', dia: 'Terça', horario: '09:00', professor: 'Talita', limite: 5 },
       { nome: 'Quarta 18h', dia: 'Quarta', horario: '18:00', professor: 'Gustra', limite: 5 },
       { nome: 'Quarta 19h', dia: 'Quarta', horario: '19:00', professor: 'Gustra', limite: 5 },
+      { nome: 'Quarta 20h', dia: 'Quarta', horario: '20:00', professor: 'Gustra', limite: 5 },
       { nome: 'Quinta 8h', dia: 'Quinta', horario: '08:00', professor: 'Guilherme', limite: 5 },
     ],
     permiteFrequenciaDupla: true,
@@ -7788,7 +7788,6 @@ app.post('/portal-admin/sessao/verificar', (req, res) => {
 // mas ainda assim gravam no banco Alunas (dual-write) e podem receber avisos do Mural.
 const TURMAS_MURAL_EXTRAS = [
   { modalidade: 'Percussão Coletiva', turma: 'Terça 19h30', dia: 'Terça', horario: '19:30' },
-  { modalidade: 'Dancas Brasileiras', turma: 'Quarta 20h', dia: 'Quarta', horario: '20:00' },
   { modalidade: 'Commedia Dell Arte', turma: 'Sexta 10h', dia: 'Sexta', horario: '10:00' },
   { modalidade: 'Meditação', turma: 'Turma Única 2026', dia: 'Quinta', horario: '09:00', professor: 'Bárbara Mazzola', limite: 10 },
 ];
@@ -8602,6 +8601,7 @@ const PROFESSORES_PRESENCA = [
     turmas: [
       { turma: 'Quarta 18h', dia: 'Quarta', horario: '18:00', modalidade: 'Aéreos' },
       { turma: 'Quarta 19h', dia: 'Quarta', horario: '19:00', modalidade: 'Aéreos' },
+      { turma: 'Quarta 20h', dia: 'Quarta', horario: '20:00', modalidade: 'Aéreos' },
     ],
   },
   {
