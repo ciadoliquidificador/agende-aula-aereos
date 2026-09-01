@@ -9299,6 +9299,21 @@ async function ehFimDeSemanaOuFeriado(dataStr) {
   return feriados.has(dataStr);
 }
 
+// Endpoint publico usado pelos apps de agendamento (Aereos/Acro/Infantil/Yoga)
+// para excluir feriados das datas oferecidas em aula experimental e reposicao.
+app.get('/feriados', async (req, res) => {
+  try {
+    const anoAtual = new Date().getFullYear();
+    const f1 = await getFeriadosDoAno(anoAtual);
+    const f2 = await getFeriadosDoAno(anoAtual + 1);
+    const feriados = [...f1, ...f2].sort();
+    res.json({ ok: true, feriados });
+  } catch (err) {
+    console.error('[feriados] erro:', err.message);
+    res.status(500).json({ ok: false, feriados: [] });
+  }
+});
+
 function formatarHorasBR(decimal) {
   const h = Math.floor(decimal);
   const m = Math.round((decimal - h) * 60);
