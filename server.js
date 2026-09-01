@@ -7772,6 +7772,7 @@ const TURMAS_MURAL_EXTRAS = [
   { modalidade: 'Percussão Coletiva', turma: 'Terça 19h30', dia: 'Terça', horario: '19:30' },
   { modalidade: 'Dancas Brasileiras', turma: 'Quarta 20h', dia: 'Quarta', horario: '20:00' },
   { modalidade: 'Commedia Dell Arte', turma: 'Sexta 10h', dia: 'Sexta', horario: '10:00' },
+  { modalidade: 'Meditação', turma: 'Turma Única 2026', dia: 'Quinta', horario: '09:00' },
 ];
 
 app.get('/mural/turmas-disponiveis', (req, res) => {
@@ -8597,6 +8598,12 @@ const PROFESSORES_PRESENCA = [
     turmas: [
       { turma: 'Terça 18h', dia: 'Terça', horario: '18:00', modalidade: 'Circo Infantil' },
       { turma: 'Quarta 9h30', dia: 'Quarta', horario: '09:30', modalidade: 'Circo Infantil' },
+    ],
+  },
+  {
+    nome: 'Bárbara Mazzola',
+    turmas: [
+      { turma: 'Turma Única 2026', dia: 'Quinta', horario: '09:00', modalidade: 'Meditação' },
     ],
   },
 ];
