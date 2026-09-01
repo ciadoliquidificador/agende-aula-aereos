@@ -5800,6 +5800,18 @@ async function turmasDoProfessor(nome) {
       }
     });
   }
+
+  // Turmas fora do fluxo de matrícula (TURMAS_MURAL_EXTRAS, ex.: Meditação) também
+  // aparecem em "Minhas Turmas" quando têm professor fixo cadastrado ali.
+  TURMAS_MURAL_EXTRAS.forEach(t => {
+    if (t.professor === nome) {
+      encontradas.push({
+        modalidade: t.modalidade, nome: t.turma, dia: t.dia, horario: t.horario,
+        professor: t.professor, professores: [t.professor], limite: t.limite ?? 0,
+        ativa: true, inativaDesde: null, datasExperimentais: [],
+      });
+    }
+  });
   return encontradas;
 }
 
@@ -7772,7 +7784,7 @@ const TURMAS_MURAL_EXTRAS = [
   { modalidade: 'Percussão Coletiva', turma: 'Terça 19h30', dia: 'Terça', horario: '19:30' },
   { modalidade: 'Dancas Brasileiras', turma: 'Quarta 20h', dia: 'Quarta', horario: '20:00' },
   { modalidade: 'Commedia Dell Arte', turma: 'Sexta 10h', dia: 'Sexta', horario: '10:00' },
-  { modalidade: 'Meditação', turma: 'Turma Única 2026', dia: 'Quinta', horario: '09:00' },
+  { modalidade: 'Meditação', turma: 'Turma Única 2026', dia: 'Quinta', horario: '09:00', professor: 'Bárbara Mazzola', limite: 10 },
 ];
 
 app.get('/mural/turmas-disponiveis', (req, res) => {
