@@ -3090,16 +3090,37 @@ app.get('/portal-admin/painel-geral', async (req, res) => {
     const dPresencasExp = await rPresencasExp.json();
     const presencasTodas = dPresencasExp.results || [];
 
+    // Telefones de quem ja esta Ativa/Ativo, pra saber quem converteu a experimental em matricula
+    const rAtivasTel = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { or: [
+          { property: 'Status', select: { equals: 'Ativa' } },
+          { property: 'Status', select: { equals: 'Ativo' } },
+        ]},
+        page_size: 100,
+      }),
+    });
+    const dAtivasTel = await rAtivasTel.json();
+    const telefonesAtivos = new Set(
+      (dAtivasTel.results || []).map(pg => (pg.properties['Contato']?.phone_number || '').replace(/\D/g, '')).filter(Boolean)
+    );
+
     const experimentais = experimentaisPaginas.map(pagina => {
       const p = pagina.properties;
       const presencaMatch = presencasTodas.find(pp => (pp.properties['Aluna']?.relation || []).some(rel => rel.id === pagina.id));
+      const obs = p['Observações']?.rich_text?.[0]?.plain_text || '';
+      const telefone = p['Contato']?.phone_number || '';
       return {
         nome: p['Nome']?.title?.[0]?.plain_text || '',
-        telefone: p['Contato']?.phone_number || '',
+        telefone,
         modalidade: p['Modalidade']?.select?.name || '',
         turma: p['Turma']?.select?.name || '',
         criadoEm: pagina.created_time,
+        dataAula: extrairDataExperimental(obs) || pagina.created_time.slice(0, 10),
         presenca: presencaMatch ? (presencaMatch.properties['Status']?.select?.name || 'Aguardando') : 'Aguardando',
+        matriculada: telefonesAtivos.has(telefone.replace(/\D/g, '')),
       };
     });
 
