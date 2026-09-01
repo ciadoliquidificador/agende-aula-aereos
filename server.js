@@ -3066,6 +3066,7 @@ app.get('/portal-admin/painel-geral', async (req, res) => {
         filter: { and: [
           { property: 'Status', select: { equals: 'Experimental' } },
           { timestamp: 'created_time', created_time: { on_or_after: em30dias } },
+          { property: 'Painel: Dispensada', checkbox: { equals: false } },
         ]},
         page_size: 100,
         sorts: [{ timestamp: 'created_time', direction: 'descending' }],
@@ -3113,6 +3114,7 @@ app.get('/portal-admin/painel-geral', async (req, res) => {
       const obs = p['Observações']?.rich_text?.[0]?.plain_text || '';
       const telefone = p['Contato']?.phone_number || '';
       return {
+        pageId: pagina.id,
         nome: p['Nome']?.title?.[0]?.plain_text || '',
         telefone,
         modalidade: p['Modalidade']?.select?.name || '',
@@ -3167,6 +3169,29 @@ app.get('/portal-admin/painel-geral', async (req, res) => {
   } catch (err) {
     console.error('[portal-admin/painel-geral] erro:', err.message);
     res.status(500).json({ ok: false, erro: 'Erro ao montar o painel geral.' });
+  }
+});
+
+// Fecha (dispensa) uma aula experimental da lista do painel geral — nao apaga o registro,
+// so marca "Painel: Dispensada" pra ela parar de aparecer (matriculou, disse que nao tem
+// interesse, ou qualquer outro motivo).
+app.post('/portal-admin/painel-geral/dispensar-experimental', async (req, res) => {
+  const { pageId } = req.body;
+  if (!pageId) return res.status(400).json({ ok: false, erro: 'pageId é obrigatório.' });
+  try {
+    const r = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ properties: { 'Painel: Dispensada': { checkbox: true } } }),
+    });
+    if (!r.ok) {
+      console.error('[painel-geral/dispensar-experimental] erro:', JSON.stringify(await r.json()));
+      return res.status(500).json({ ok: false, erro: 'Erro ao fechar.' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[painel-geral/dispensar-experimental] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao fechar.' });
   }
 });
 // ===== FIM PORTAL ADMIN — PAINEL GERAL =====
@@ -8020,6 +8045,7 @@ app.get('/portal-aluna/simular-ferias/:cpf', async (req, res) => {
         return {
           modalidade: m.modalidade, turma: m.turma, plano: m.plano,
           diasPorCiclo: 0, diasUsados: 0, diasDisponiveis: 0,
+          vencimentoContrato: m.plano === 'Mensal' ? null : m.vencimentoContrato,
           motivo: !m.dataInicio ? 'Data de início da matrícula não encontrada.' : 'Plano ' + m.plano + ' não possui direito a férias.',
         };
       }
@@ -8032,6 +8058,7 @@ app.get('/portal-aluna/simular-ferias/:cpf', async (req, res) => {
         diasPorCiclo, diasUsados, diasDisponiveis,
         inicioCiclo: ciclo.inicioCiclo.toISOString(), fimCiclo: ciclo.fimCiclo.toISOString(),
         avisoMinimoDias: FERIAS_AVISO_MINIMO_DIAS,
+        vencimentoContrato: m.plano === 'Mensal' ? null : m.vencimentoContrato,
         motivo: null,
       };
     });
