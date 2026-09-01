@@ -2857,7 +2857,7 @@ app.get('/portal-admin/busca/detalhe-aluna/:pageId', async (req, res) => {
 
     // Conta faltas nos últimos 30 dias, cruzando com Presenças 2026
     const trintaDiasAtras = new Date(Date.now() - 30 * 24 * 60 * 60000).toISOString();
-    const rPresencas = await fetch('https://api.notion.com/v1/databases/8365a940-b386-401b-bedb-d26dfff2415e/query', {
+    const rPresencas = await fetch('https://api.notion.com/v1/databases/' + PRESENCAS_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -3074,11 +3074,19 @@ app.get('/portal-admin/painel-geral', async (req, res) => {
     const dExp = await rExp.json();
     const experimentaisPaginas = dExp.results || [];
 
-    const rPresencasExp = await fetch('https://api.notion.com/v1/databases/8365a940-b386-401b-bedb-d26dfff2415e/query', {
+    const rPresencasExp = await fetch('https://api.notion.com/v1/databases/' + PRESENCAS_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ page_size: 100, sorts: [{ timestamp: 'created_time', direction: 'descending' }] }),
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Tipo', select: { equals: 'Experimental' } },
+          { timestamp: 'created_time', created_time: { on_or_after: em30dias } },
+        ]},
+        page_size: 100,
+        sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+      }),
     });
+    if (!rPresencasExp.ok) console.error('[portal-admin/painel-geral] erro ao buscar presencas experimentais:', await rPresencasExp.text());
     const dPresencasExp = await rPresencasExp.json();
     const presencasTodas = dPresencasExp.results || [];
 
