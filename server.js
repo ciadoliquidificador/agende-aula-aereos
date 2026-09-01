@@ -3634,7 +3634,7 @@ app.post('/webhook-cache-pago', async (req, res) => {
 
 
 // ===== LISTA DE INTERESSE — CURSOS SEM TURMA ABERTA =====
-const LISTA_INTERESSE_DB = 'd0ffcc65-5f9b-4206-8312-6d288fd56ad9';
+const LISTA_INTERESSE_DB = 'cc8784eb-e1ae-4128-af5a-f6a1baaf0e79';
 
 app.post('/interesse-curso', async (req, res) => {
   const { curso, nome, whatsapp, mensagem, melhorDiaHorario } = req.body;
@@ -3642,7 +3642,7 @@ app.post('/interesse-curso', async (req, res) => {
     return res.status(400).json({ ok: false, erro: 'Preencha nome e WhatsApp.' });
   }
   try {
-    await fetch('https://api.notion.com/v1/pages', {
+    const notionResp = await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -3658,6 +3658,12 @@ app.post('/interesse-curso', async (req, res) => {
         },
       }),
     });
+    if (!notionResp.ok) {
+      const errBody = await notionResp.text();
+      console.error('[interesse-curso] Notion recusou o registro:', notionResp.status, errBody);
+      try { await enviarWhatsApp(WHATSAPP_FABIO, '⚠️ *Falha ao salvar interesse no Notion* — ' + curso + '\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + '\nErro: ' + notionResp.status); } catch (e) {}
+      return res.status(500).json({ ok: false, erro: 'Erro ao registrar interesse.' });
+    }
 
     const msgFabio = '📋 *Novo interesse — ' + curso + '*\n\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + (melhorDiaHorario ? ('\nMelhor dia/horário: ' + melhorDiaHorario) : '') + (mensagem ? ('\nMensagem: ' + mensagem) : '');
     try { await enviarWhatsApp(WHATSAPP_FABIO, msgFabio); } catch (e) {}
