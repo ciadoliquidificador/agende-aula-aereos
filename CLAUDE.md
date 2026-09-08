@@ -68,7 +68,14 @@ A calculadora de orçamento (`calculadora_orcamento_v11_1.html`, hospedada fora 
 - **Anos seguintes (2027, 2028, ...) são criados sob demanda** pelo próprio server.js (`garantirBancosOrcamentoDoAno`) na primeira vez que aparece uma data daquele ano em `/orcamento/salvar-notion` — clona o schema completo do molde 2026 (propriedades, opções de select/multi_select, fórmula, rollups, relações). Zero trabalho manual de banco na virada do ano.
 - **Página-container:** `🗂️ Bancos de Orçamento por Ano` (`3d5c45031f738153b0fdf6858d76d740`) — precisa estar **conectada à integração "Agende Aereos App"** (feito 1x em set/2026), pois é nela que os bancos novos nascem (a API do Notion não deixa criar banco direto na raiz do workspace).
 - **Duas limitações da própria API do Notion** (não são bug nosso, confirmado até no conector MCP com permissão de usuário completo): não dá pra criar propriedade tipo `status` nem `place` (mapa) via API. Bancos clonados automaticamente usam **`select`** (em vez de `status`) e **`rich_text`** (em vez de `place`) pros campos "Status" e "Endereço" — o server.js já lê/escreve os dois formatos de forma transparente (`propStatusOrcamento`/`lerEnderecoOrcamento`/`propEnderecoOrcamento`). Funciona igual no app, só não tem a mesma carinha visual do banco de 2026.
-- **⚠️ Não automatizável:** a automação do Notion "quando Status = Aprovado → chama `/webhook-proposta-aprovada`" precisa ser recriada manualmente (copiar do banco de 2026, trocando o banco de destino) toda vez que um ano novo nasce — automações do Notion não são expostas por nenhuma API, nem a interna do conector MCP.
+- **⚠️ Não automatizável — 4 automações do Notion precisam ser recriadas manualmente** toda vez que um ano novo nasce (copiar do banco de 2026, trocando só o banco de destino/origem; a URL do webhook é sempre a mesma). Automações do Notion (botão/regra "quando X muda, chama URL") não são expostas por nenhuma API, nem a interna do conector MCP com permissão de usuário completo — só cria-se na UI. O código dos webhooks já é 100% independente de ano (opera só pelo pageId recebido), então funciona assim que a automação existir:
+
+  | Automação (banco 2026) | Dispara quando | Chama |
+  |---|---|---|
+  | Propostas → cria Apresentação | Status vira "Aprovado - Aguardando contrato" | `/webhook-proposta-aprovada` |
+  | Apresentações → sincroniza Google Calendar | Apresentação criada/editada | `/webhook-apresentacao-notion` |
+  | Apresentações → avisa elenco/equipe escalada | ELENCO/Produção Liqui/Técnico de Som/Luz preenchidos | `/webhook-apresentacao-escalacao` |
+  | Apresentações → avisa saída | Local Saída/Horário de Saída preenchidos | `/webhook-apresentacao-saida` |
 - `/orcamento/datas-disponiveis`, `/orcamento/buscar` e `/orcamento/carregar` já buscam em **todos os anos existentes** (não só o atual), via `listarTodosBancosOrcamento()`.
 
 ## Apps ativos
