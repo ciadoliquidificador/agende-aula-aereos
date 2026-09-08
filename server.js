@@ -6129,9 +6129,6 @@ app.post('/portal/feriado-resposta', async (req, res) => {
 // ============================================================
 // PROPOSTA APROVADA -> cria Apresentacao automaticamente
 // ============================================================
-const PROPOSTAS_DB = '2c6c45031f73804f8f90e6e7439d7e1c';
-const APRESENTACOES_DB_PARA_WEBHOOK_PROPOSTA = '2b9c45031f7380828d34f47353b066e7';
-
 app.post('/webhook-proposta-aprovada', async (req, res) => {
   res.status(200).json({ ok: true });
   try {
@@ -6145,7 +6142,15 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
     const proposta = await rProposta.json();
     const p = proposta.properties;
 
-    const status = p['Status']?.status?.name;
+    // A Proposta pode estar em qualquer banco anual (2026, 2027, ...) -- descobre pelo
+    // parent da própria página, em vez de assumir um banco fixo.
+    const propostaDbId = (proposta.parent?.database_id || '').replace(/-/g, '');
+    const bancos = await listarTodosBancosOrcamento();
+    const bancoDaProposta = bancos.find(b => b.propostas.replace(/-/g, '') === propostaDbId);
+    if (!bancoDaProposta) { console.error('[webhook-proposta-aprovada] nao achei o banco de Apresentacoes correspondente ao banco de Propostas ' + propostaDbId); return; }
+    const apresentacoesDbDaProposta = bancoDaProposta.apresentacoes;
+
+    const status = bancoDaProposta.statusTipo === 'select' ? p['Status']?.select?.name : p['Status']?.status?.name;
     if (status !== 'Aprovado - Aguardando contrato') {
       console.log('[webhook-proposta-aprovada] status nao e Aprovado, ignorando: ' + status);
       return;
@@ -6153,7 +6158,7 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
 
     // Ja existe Apresentacao vinculada? Evita duplicar se o automation disparar de novo.
     // Consulta direto na planilha de Apresentacoes (a Proposta nao guarda mais esse link).
-    const rCheckExistente = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_DB_PARA_WEBHOOK_PROPOSTA + '/query', {
+    const rCheckExistente = await fetch('https://api.notion.com/v1/databases/' + apresentacoesDbDaProposta + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({ filter: { property: 'Proposta', relation: { contains: pageId } }, page_size: 1 }),
@@ -6166,7 +6171,6 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
       return;
     }
 
-    const enderecoProp = p['Endereço'] || null; // tipo "place" - repassado como veio, sem remontar a estrutura
     const tituloDaProposta = p['Local']?.title?.[0]?.plain_text || '';
     const contratanteNomes = (p['Contratante']?.multi_select || []).map(o => o.name);
     const tituloApresentacao = tituloDaProposta || contratanteNomes.join(', ') || 'Apresentação sem local definido';
@@ -6180,7 +6184,15 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
       'LOCAL': { title: [{ text: { content: tituloApresentacao } }] },
       'Proposta': { relation: [{ id: pageId }] },
     };
-    if (enderecoProp?.place) propsNovaApresentacao['Endereço'] = { place: enderecoProp.place };
+    // Endereço: repassa como veio (tipo "place") se a Proposta tem esse tipo; se a
+    // Proposta é de um banco novo (tipo "rich_text"), repassa como texto simples --
+    // mas só se a Apresentações do mesmo ano também usa rich_text (senão perde a info).
+    if (bancoDaProposta.enderecoPropostasTipo === 'place' && p['Endereço']?.place) {
+      propsNovaApresentacao['Endereço'] = { place: p['Endereço'].place };
+    } else if (bancoDaProposta.enderecoApresentacoesTipo === 'rich_text') {
+      const enderecoTexto = lerEnderecoOrcamento(p, bancoDaProposta.enderecoPropostasTipo);
+      if (enderecoTexto) propsNovaApresentacao['Endereço'] = { rich_text: [{ text: { content: enderecoTexto } }] };
+    }
     if (dataApresentacao) propsNovaApresentacao['Data da Apresentação'] = { date: { start: dataApresentacao } };
     if (horarioApresentacaoProposta) propsNovaApresentacao['Horário Apresentação'] = { rich_text: [{ text: { content: horarioApresentacaoProposta } }] };
     if (trabalhosIds.length) propsNovaApresentacao['🎭 Trabalhos'] = { relation: trabalhosIds.map(id => ({ id })) };
@@ -6190,7 +6202,7 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        parent: { database_id: APRESENTACOES_DB_PARA_WEBHOOK_PROPOSTA },
+        parent: { database_id: apresentacoesDbDaProposta },
         properties: propsNovaApresentacao,
       }),
     });
@@ -10568,12 +10580,221 @@ async function notificarResidenteSobreposicao(blocosAfetados) {
 // ============================================================
 // CALCULADORA DE ORÇAMENTO — integração com Notion (2026 - PROPOSTAS E CONTRATOS)
 // ============================================================
-const ORCAMENTO_PROPOSTAS_DB = '2c6c45031f73804f8f90e6e7439d7e1c';
 const ORCAMENTO_TRABALHOS_DB = '4589d769656b41149e9bf6300b30d886';
+
+// ============================================================
+// ORÇAMENTO — bancos anuais (Propostas + Apresentações), criados sob demanda
+// ============================================================
+// "2026 - PROPOSTAS E CONTRATOS" e "APRESENTAÇÕES 2026" são o MOLDE — nunca apagar nem
+// renomear. Todo ano novo (2027, 2028, ...) é clonado automaticamente a partir deles na
+// primeira vez que aparece uma data daquele ano (ver garantirBancosOrcamentoDoAno). A
+// página abaixo precisa estar conectada à integração do Notion (feito manualmente 1x na
+// criação: "..." -> Conectar a -> "Agende Aereos App") pois é nela que os bancos novos
+// nascem — a API do Notion não permite criar banco direto na raiz do workspace.
+const ORCAMENTO_PROPOSTAS_DB_MOLDE = '2c6c45031f73804f8f90e6e7439d7e1c';
+const ORCAMENTO_APRESENTACOES_DB_MOLDE = '2b9c45031f7380828d34f47353b066e7';
+const ORCAMENTO_BANCOS_ANO_PARENT_PAGE_ID = '3d5c45031f738153b0fdf6858d76d740';
+
+// Cache em memória (dura enquanto o processo do Railway estiver de pé — se reiniciar,
+// a próxima chamada simplesmente redescobre via busca no Notion, sem recriar nada).
+const cacheBancosOrcamentoPorAno = {
+  '2026': {
+    ano: '2026', propostas: ORCAMENTO_PROPOSTAS_DB_MOLDE, apresentacoes: ORCAMENTO_APRESENTACOES_DB_MOLDE,
+    statusTipo: 'status', enderecoPropostasTipo: 'place', enderecoApresentacoesTipo: 'place',
+  },
+};
+let cacheListaTodosBancosOrcamento = null; // ver listarTodosBancosOrcamento()
+
+function anoDaData(dataISO) {
+  const ano = String(dataISO || '').slice(0, 4);
+  return /^\d{4}$/.test(ano) ? ano : null;
+}
+
+// Dois tipos de propriedade do Notion não são criáveis via API pública (limitação da
+// própria plataforma, confirmado inclusive no conector MCP do Notion que tem acesso de
+// usuário completo, não só de integração): "status" (grupos To-do/Doing/Done fixos) e
+// "place" (mapa/endereço). Bancos clonados automaticamente usam "select" e "rich_text"
+// como substitutos funcionais -- as funções abaixo leem/escrevem os dois formatos.
+function propStatusOrcamento(nomeStatus, tipo) {
+  return tipo === 'select' ? { select: { name: nomeStatus } } : { status: { name: nomeStatus } };
+}
+function lerEnderecoOrcamento(props, tipo) {
+  return tipo === 'rich_text' ? (props['Endereço']?.rich_text?.[0]?.plain_text || '') : (props['Endereço']?.place?.address || '');
+}
+function propEnderecoOrcamento(local, endereco, coordenadas, tipo) {
+  if (tipo === 'rich_text') return { rich_text: [{ text: { content: endereco || '' } }] };
+  return { place: { name: local, address: endereco, lat: coordenadas.latitude, lon: coordenadas.longitude } };
+}
+
+function converterPropriedadeParaCriacao(pdef, idsRelacaoPorNome) {
+  switch (pdef.type) {
+    case 'title': return { title: {} };
+    case 'rich_text': return { rich_text: {} };
+    case 'number': return { number: { format: pdef.number?.format || 'number' } };
+    case 'date': return { date: {} };
+    case 'checkbox': return { checkbox: {} };
+    case 'url': return { url: {} };
+    case 'email': return { email: {} };
+    case 'phone_number': return { phone_number: {} };
+    case 'files': return { files: {} };
+    case 'select': return { select: { options: (pdef.select.options || []).map(o => ({ name: o.name, color: o.color })) } };
+    case 'multi_select': return { multi_select: { options: (pdef.multi_select.options || []).map(o => ({ name: o.name, color: o.color })) } };
+    case 'status': return { select: { options: (pdef.status.options || []).map(o => ({ name: o.name, color: o.color })) } };
+    case 'place': return { rich_text: {} };
+    case 'formula': return { formula: { expression: pdef.formula.expression } };
+    case 'relation': {
+      const idDb = idsRelacaoPorNome[pdef.name];
+      if (!idDb) return null;
+      return { relation: { database_id: idDb, single_property: {} } };
+    }
+    case 'rollup':
+      return { rollup: { relation_property_name: pdef.rollup.relation_property_name, rollup_property_name: pdef.rollup.rollup_property_name, function: pdef.rollup.function } };
+    default:
+      return null;
+  }
+}
+
+async function clonarBancoOrcamento({ dbIdMolde, novoTitulo, idsRelacaoPorNome, iconeEmoji }) {
+  const rMolde = await fetch('https://api.notion.com/v1/databases/' + dbIdMolde, {
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+  });
+  const dMolde = await rMolde.json();
+  if (!rMolde.ok) throw new Error('Falha ao ler banco-molde ' + dbIdMolde + ': ' + JSON.stringify(dMolde));
+
+  const properties = {};
+  for (const [nome, pdef] of Object.entries(dMolde.properties || {})) {
+    if (!nome.trim()) continue; // pula propriedade sem nome (lixo legado do molde)
+    const convertida = converterPropriedadeParaCriacao(pdef, idsRelacaoPorNome);
+    if (convertida) properties[nome] = convertida;
+  }
+
+  const body = {
+    parent: { type: 'page_id', page_id: ORCAMENTO_BANCOS_ANO_PARENT_PAGE_ID },
+    title: [{ type: 'text', text: { content: novoTitulo } }],
+    properties,
+  };
+  if (iconeEmoji) body.icon = { type: 'emoji', emoji: iconeEmoji };
+
+  const rCriar = await fetch('https://api.notion.com/v1/databases', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const dCriar = await rCriar.json();
+  if (!rCriar.ok) throw new Error('Falha ao criar banco "' + novoTitulo + '": ' + JSON.stringify(dCriar));
+  return dCriar.id;
+}
+
+// Garante que existam "<ano> - PROPOSTAS E CONTRATOS" e "APRESENTAÇÕES <ano>", clonando
+// do molde de 2026 na primeira vez que aparecem. Retorna os ids e os tipos reais das
+// propriedades Status/Endereço (pra saber se lê/escreve como status/place ou select/texto).
+async function garantirBancosOrcamentoDoAno(ano) {
+  if (cacheBancosOrcamentoPorAno[ano]) return cacheBancosOrcamentoPorAno[ano];
+
+  const tituloPropostas = ano + ' - PROPOSTAS E CONTRATOS';
+  const tituloApresentacoes = 'APRESENTAÇÕES ' + ano;
+
+  const rBusca = await fetch('https://api.notion.com/v1/search', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: ano, filter: { property: 'object', value: 'database' }, page_size: 100 }),
+  });
+  const dBusca = await rBusca.json();
+  const encontrarPorTitulo = (titulo) => (dBusca.results || []).find(db => (db.title || []).map(t => t.plain_text).join('') === titulo);
+
+  const jaExistiaPropostas = encontrarPorTitulo(tituloPropostas);
+  const jaExistiaApresentacoes = encontrarPorTitulo(tituloApresentacoes);
+  let propostasDb = jaExistiaPropostas?.id;
+  let apresentacoesDb = jaExistiaApresentacoes?.id;
+
+  if (!propostasDb) {
+    console.log('[orcamento] criando banco "' + tituloPropostas + '"...');
+    propostasDb = await clonarBancoOrcamento({
+      dbIdMolde: ORCAMENTO_PROPOSTAS_DB_MOLDE,
+      novoTitulo: tituloPropostas,
+      idsRelacaoPorNome: { 'Integrantes': INTEGRANTES_DB, '🎭 Trabalhos': ORCAMENTO_TRABALHOS_DB },
+    });
+  }
+  if (!apresentacoesDb) {
+    console.log('[orcamento] criando banco "' + tituloApresentacoes + '"...');
+    apresentacoesDb = await clonarBancoOrcamento({
+      dbIdMolde: ORCAMENTO_APRESENTACOES_DB_MOLDE,
+      novoTitulo: tituloApresentacoes,
+      iconeEmoji: '🍿',
+      idsRelacaoPorNome: {
+        'Proposta': propostasDb,
+        '🎭 Trabalhos': ORCAMENTO_TRABALHOS_DB,
+        'ELENCO': INTEGRANTES_DB,
+        'TÉCNICO DE SOM': INTEGRANTES_DB,
+        'TÉCNICO DE LUZ': INTEGRANTES_DB,
+        'Produção Liqui': INTEGRANTES_DB,
+      },
+    });
+  }
+
+  // Descobre os tipos reais (protege contra o caso de o banco já existir manualmente
+  // com o tipo "de verdade" status/place em vez do substituto select/rich_text).
+  const [rSchemaProp, rSchemaApr] = await Promise.all([
+    fetch('https://api.notion.com/v1/databases/' + propostasDb, { headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' } }),
+    fetch('https://api.notion.com/v1/databases/' + apresentacoesDb, { headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' } }),
+  ]);
+  const [dSchemaProp, dSchemaApr] = await Promise.all([rSchemaProp.json(), rSchemaApr.json()]);
+
+  const resultado = {
+    ano, propostas: propostasDb, apresentacoes: apresentacoesDb,
+    statusTipo: dSchemaProp.properties?.['Status']?.type || 'status',
+    enderecoPropostasTipo: dSchemaProp.properties?.['Endereço']?.type || 'place',
+    enderecoApresentacoesTipo: dSchemaApr.properties?.['Endereço']?.type || 'place',
+  };
+  cacheBancosOrcamentoPorAno[ano] = resultado;
+  cacheListaTodosBancosOrcamento = null; // força redescoberta na próxima leitura cross-ano
+
+  if (!jaExistiaPropostas || !jaExistiaApresentacoes) {
+    try {
+      await enviarWhatsApp(WHATSAPP_FABIO,
+        '🗂️ *Bancos criados automaticamente no Notion* para ' + ano + ':\n\n' +
+        tituloPropostas + '\n' + tituloApresentacoes +
+        '\n\nOs campos "Status" e "Endereço" nasceram como Select/Texto (a API do Notion não deixa criar os tipos Status/Mapa por fora da interface) — funcionam normalmente, só não têm a mesma carinha do banco de 2026.\n\n⚠️ *Importante*: a automação do Notion que cria a Apresentação quando a Proposta é aprovada precisa ser recriada manualmente nesse banco novo (copiar a automação do banco de 2026, trocando o banco de destino).'
+      );
+    } catch (e) { /* melhor esforço */ }
+  }
+
+  return resultado;
+}
+
+// Descobre todos os pares de bancos (molde 2026 + qualquer ano já criado), pra buscas
+// que precisam olhar todos os anos de uma vez (datas-disponiveis, buscar, carregar).
+// Cache curto (5min) só pra não bater na busca do Notion a cada request.
+async function listarTodosBancosOrcamento() {
+  if (cacheListaTodosBancosOrcamento && (Date.now() - cacheListaTodosBancosOrcamento.quando) < 5 * 60 * 1000) {
+    return cacheListaTodosBancosOrcamento.lista;
+  }
+  const rBusca = await fetch('https://api.notion.com/v1/search', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: 'PROPOSTAS E CONTRATOS', filter: { property: 'object', value: 'database' }, page_size: 100 }),
+  });
+  const dBusca = await rBusca.json();
+  const anosEncontrados = new Set(['2026']);
+  for (const db of (dBusca.results || [])) {
+    const titulo = (db.title || []).map(t => t.plain_text).join('');
+    const m = titulo.match(/^(\d{4}) - PROPOSTAS E CONTRATOS$/);
+    if (m) anosEncontrados.add(m[1]);
+  }
+  const lista = [];
+  for (const ano of anosEncontrados) {
+    try { lista.push(await garantirBancosOrcamentoDoAno(ano)); } catch (e) { console.error('[orcamento] erro ao resolver banco do ano ' + ano + ':', e.message); }
+  }
+  cacheListaTodosBancosOrcamento = { quando: Date.now(), lista };
+  return lista;
+}
 
 // GET /orcamento/opcoes-notion — listas reais para alimentar os dropdowns da calculadora
 app.get('/orcamento/opcoes-notion', async (req, res) => {
   try {
+    const anoAtual = String(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', year: 'numeric' }));
+    const bancosAno = await garantirBancosOrcamentoDoAno(anoAtual);
+
     const rTrabalhos = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_TRABALHOS_DB + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
@@ -10597,7 +10818,7 @@ app.get('/orcamento/opcoes-notion', async (req, res) => {
       nome: p.properties?.Nome?.title?.[0]?.plain_text || '(sem nome)',
     }));
 
-    const rSchema = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB, {
+    const rSchema = await fetch('https://api.notion.com/v1/databases/' + bancosAno.propostas, {
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
     });
     const dSchema = await rSchema.json();
@@ -10701,6 +10922,15 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
     let enderecoGravadoEmAlgumaPagina = false;
 
     for (const apresentacao of apresentacoes) {
+      const ano = anoDaData(apresentacao.data) || String(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', year: 'numeric' }));
+      let bancosAno;
+      try {
+        bancosAno = await garantirBancosOrcamentoDoAno(ano);
+      } catch (eBanco) {
+        console.error('[orcamento/salvar-notion] erro ao garantir bancos do ano ' + ano + ':', eBanco.message);
+        continue;
+      }
+
       const propsBase = {
         'Local': { title: [{ text: { content: local } }] },
         'Tipo': { select: { name: tipo } },
@@ -10709,7 +10939,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
         'Data': { date: { start: apresentacao.data } },
         'Horário Apresentação': { rich_text: [{ text: { content: apresentacao.horario || '' } }] },
         'Valor': { number: Number(valorPorApresentacao) },
-        'Status': { status: { name: 'Orçamento' } },
+        'Status': propStatusOrcamento('Orçamento', bancosAno.statusTipo),
       };
       if (cacheElenco !== undefined) propsBase['Cachê Elenco'] = { number: Number(cacheElenco) || 0 };
       if (cacheProducao !== undefined) propsBase['Cachê Produção'] = { number: Number(cacheProducao) || 0 };
@@ -10723,7 +10953,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       const rCriar = await fetch('https://api.notion.com/v1/pages', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parent: { database_id: ORCAMENTO_PROPOSTAS_DB }, properties: propsBase }),
+        body: JSON.stringify({ parent: { database_id: bancosAno.propostas }, properties: propsBase }),
       });
       if (!rCriar.ok) {
         const eBody = await rCriar.text();
@@ -10733,21 +10963,14 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       const paginaCriada = await rCriar.json();
       paginasCriadas.push({ id: paginaCriada.id, url: paginaCriada.url, data: apresentacao.data });
 
-      if (endereco && coordenadasEndereco) {
+      if (endereco && (coordenadasEndereco || bancosAno.enderecoPropostasTipo === 'rich_text')) {
         try {
           const rEndereco = await fetch('https://api.notion.com/v1/pages/' + paginaCriada.id, {
             method: 'PATCH',
             headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
             body: JSON.stringify({
               properties: {
-                'Endereço': {
-                  place: {
-                    name: local,
-                    address: endereco,
-                    lat: coordenadasEndereco.latitude,
-                    lon: coordenadasEndereco.longitude,
-                  },
-                },
+                'Endereço': propEnderecoOrcamento(local, endereco, coordenadasEndereco, bancosAno.enderecoPropostasTipo),
               },
             }),
           });
@@ -10755,7 +10978,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
             enderecoGravadoEmAlgumaPagina = true;
           } else {
             const eBodyEnd = await rEndereco.text();
-            console.error('[orcamento/salvar-notion] falha ao gravar Endereço (place) na página ' + paginaCriada.id + ':', eBodyEnd);
+            console.error('[orcamento/salvar-notion] falha ao gravar Endereço na página ' + paginaCriada.id + ':', eBodyEnd);
           }
         } catch (eEnd) {
           console.error('[orcamento/salvar-notion] erro ao tentar gravar Endereço:', eEnd.message);
@@ -10826,9 +11049,11 @@ function parseDetalhamentoDaPlanilha(linhas) {
 }
 
 // GET /orcamento/datas-disponiveis — lista de datas distintas com orçamento salvo (pro dropdown)
+// Olha todos os anos já criados (2026, 2027, ...), não só o atual.
 app.get('/orcamento/datas-disponiveis', async (req, res) => {
   try {
-    const r = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB + '/query', {
+    const bancos = await listarTodosBancosOrcamento();
+    const resultados = await Promise.all(bancos.map(b => fetch('https://api.notion.com/v1/databases/' + b.propostas + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -10836,9 +11061,9 @@ app.get('/orcamento/datas-disponiveis', async (req, res) => {
         sorts: [{ property: 'Data', direction: 'descending' }],
         filter: { property: 'Data', date: { is_not_empty: true } },
       }),
-    });
-    const d = await r.json();
-    const datas = [...new Set((d.results || []).map(p => p.properties['Data']?.date?.start || '').filter(Boolean))];
+    }).then(r => r.json())));
+    const datas = [...new Set(resultados.flatMap(d => (d.results || []).map(p => p.properties['Data']?.date?.start || '')).filter(Boolean))]
+      .sort((a, b) => b.localeCompare(a));
     res.json({ ok: true, datas });
   } catch (err) {
     console.error('[orcamento/datas-disponiveis] erro:', err.message);
@@ -10847,7 +11072,7 @@ app.get('/orcamento/datas-disponiveis', async (req, res) => {
 });
 
 // GET /orcamento/buscar?data=YYYY-MM-DD (e opcionalmente &q=texto) — lista curta de
-// orçamentos já salvos naquela data, agrupados por planilha
+// orçamentos já salvos naquela data, agrupados por planilha. Olha todos os anos.
 app.get('/orcamento/buscar', async (req, res) => {
   const data = (req.query.data || '').trim();
   const q = (req.query.q || '').trim();
@@ -10857,7 +11082,8 @@ app.get('/orcamento/buscar', async (req, res) => {
     if (data) filtroAnd.push({ property: 'Data', date: { equals: data } });
     if (q) filtroAnd.push({ property: 'Local', title: { contains: q } });
 
-    const r = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB + '/query', {
+    const bancos = await listarTodosBancosOrcamento();
+    const resultados = await Promise.all(bancos.map(b => fetch('https://api.notion.com/v1/databases/' + b.propostas + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -10865,10 +11091,10 @@ app.get('/orcamento/buscar', async (req, res) => {
         page_size: 50,
         sorts: [{ property: 'Data', direction: 'descending' }],
       }),
-    });
-    const d = await r.json();
+    }).then(r => r.json())));
+
     const grupos = {};
-    (d.results || []).forEach(p => {
+    resultados.forEach(d => (d.results || []).forEach(p => {
       const props = p.properties;
       const local = props['Local']?.title?.[0]?.plain_text || '';
       const linkPlanilha = props['Link da Planilha']?.url || '';
@@ -10884,7 +11110,7 @@ app.get('/orcamento/buscar', async (req, res) => {
         };
       }
       grupos[chave].datas.push(props['Data']?.date?.start || '');
-    });
+    }));
     res.json({ ok: true, grupos: Object.values(grupos) });
   } catch (err) {
     console.error('[orcamento/buscar] erro:', err.message);
@@ -10892,7 +11118,8 @@ app.get('/orcamento/buscar', async (req, res) => {
   }
 });
 
-// GET /orcamento/carregar?local=texto&linkPlanilha=url — carrega um orçamento específico
+// GET /orcamento/carregar?local=texto&linkPlanilha=url — carrega um orçamento específico.
+// Procura em todos os anos já criados até achar.
 app.get('/orcamento/carregar', async (req, res) => {
   const local = (req.query.local || '').trim();
   const linkPlanilha = (req.query.linkPlanilha || '').trim();
@@ -10901,19 +11128,24 @@ app.get('/orcamento/carregar', async (req, res) => {
     const filtroAnd = [{ property: 'Local', title: { equals: local } }];
     if (linkPlanilha) filtroAnd.push({ property: 'Link da Planilha', url: { equals: linkPlanilha } });
 
-    const r = await fetch('https://api.notion.com/v1/databases/' + ORCAMENTO_PROPOSTAS_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filter: { and: filtroAnd }, page_size: 50 }),
-    });
-    const d = await r.json();
-    const paginas = d.results || [];
+    const bancos = await listarTodosBancosOrcamento();
+    let paginas = [];
+    let bancoEncontrado = null;
+    for (const b of bancos) {
+      const r = await fetch('https://api.notion.com/v1/databases/' + b.propostas + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: { and: filtroAnd }, page_size: 50 }),
+      });
+      const d = await r.json();
+      if ((d.results || []).length > 0) { paginas = d.results; bancoEncontrado = b; break; }
+    }
     if (paginas.length === 0) return res.json({ ok: false, erro: 'Nenhuma página encontrada.' });
 
     const p0 = paginas[0].properties;
     const resultado = {
       local: p0['Local']?.title?.[0]?.plain_text || '',
-      endereco: p0['Endereço']?.place?.address || '',
+      endereco: lerEnderecoOrcamento(p0, bancoEncontrado.enderecoPropostasTipo),
       contratante: (p0['Contratante']?.multi_select || [])[0]?.name || '',
       tipo: p0['Tipo']?.select?.name || '',
       contato: p0['Contato']?.rich_text?.[0]?.plain_text || '',
