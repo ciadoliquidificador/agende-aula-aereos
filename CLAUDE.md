@@ -57,6 +57,19 @@ Cia do Liquidificador é uma escola de artes cênicas operando como **Liquidific
   - `📎 Aditivos — Contratos Professores` — `9b35319a73854e318cd9efc6497bfb0e`
   - `📢 Mural de Avisos` — `c45786e213ff463f8558054b2f787a69`
   - `👥 Professores — Cadastro` — `728021ad4c58466db1dd5ab112ada252`
+  - `Trabalhos` (catálogo de espetáculos, sem ano) — `4589d769656b41149e9bf6300b30d886`
+  - `Integrantes` (catálogo de elenco/técnicos, sem ano) — `e1047585-3dd2-4bda-9896-1a4caeeea284`
+
+## Calculadora de orçamento — bancos anuais criados automaticamente (set/2026)
+
+A calculadora de orçamento (`calculadora_orcamento_v11_1.html`, hospedada fora do FTP — o Fábio abre local) fala com o server.js (`/orcamento/*`). Cada ano tem seu par de bancos no Notion: `"<ano> - PROPOSTAS E CONTRATOS"` (orçamentos/contratos, uma página por data/apresentação) e `"APRESENTAÇÕES <ano>"` (criada automaticamente quando uma Proposta é aprovada, via `/webhook-proposta-aprovada`). Ambos relacionam com os bancos globais `Trabalhos`/`Integrantes` acima (não são por ano).
+
+- **2026 é o molde** (`2c6c45031f73804f8f90e6e7439d7e1c` / `2b9c45031f7380828d34f47353b066e7`) — nunca renomear/apagar.
+- **Anos seguintes (2027, 2028, ...) são criados sob demanda** pelo próprio server.js (`garantirBancosOrcamentoDoAno`) na primeira vez que aparece uma data daquele ano em `/orcamento/salvar-notion` — clona o schema completo do molde 2026 (propriedades, opções de select/multi_select, fórmula, rollups, relações). Zero trabalho manual de banco na virada do ano.
+- **Página-container:** `🗂️ Bancos de Orçamento por Ano` (`3d5c45031f738153b0fdf6858d76d740`) — precisa estar **conectada à integração "Agende Aereos App"** (feito 1x em set/2026), pois é nela que os bancos novos nascem (a API do Notion não deixa criar banco direto na raiz do workspace).
+- **Duas limitações da própria API do Notion** (não são bug nosso, confirmado até no conector MCP com permissão de usuário completo): não dá pra criar propriedade tipo `status` nem `place` (mapa) via API. Bancos clonados automaticamente usam **`select`** (em vez de `status`) e **`rich_text`** (em vez de `place`) pros campos "Status" e "Endereço" — o server.js já lê/escreve os dois formatos de forma transparente (`propStatusOrcamento`/`lerEnderecoOrcamento`/`propEnderecoOrcamento`). Funciona igual no app, só não tem a mesma carinha visual do banco de 2026.
+- **⚠️ Não automatizável:** a automação do Notion "quando Status = Aprovado → chama `/webhook-proposta-aprovada`" precisa ser recriada manualmente (copiar do banco de 2026, trocando o banco de destino) toda vez que um ano novo nasce — automações do Notion não são expostas por nenhuma API, nem a interna do conector MCP.
+- `/orcamento/datas-disponiveis`, `/orcamento/buscar` e `/orcamento/carregar` já buscam em **todos os anos existentes** (não só o atual), via `listarTodosBancosOrcamento()`.
 
 ## Apps ativos
 
