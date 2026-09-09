@@ -10840,7 +10840,7 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
   const {
     local, endereco, contratante, tipo, trabalhoId, integrantesIds, contato,
     apresentacoes, valorPorApresentacao, cacheElenco, cacheProducao, cacheTecnicos,
-    detalhamento, modo, qtdApresentacoes,
+    detalhamento, modo, qtdApresentacoes, paginasParaArquivar,
   } = req.body;
 
   if (!local || !tipo || !contratante || !Array.isArray(apresentacoes) || apresentacoes.length === 0) {
@@ -10920,8 +10920,11 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
 
     const paginasCriadas = [];
     let enderecoGravadoEmAlgumaPagina = false;
+    let totalCriadas = 0;
+    let totalAtualizadas = 0;
 
-    for (const apresentacao of apresentacoes) {
+    for (let indiceApresentacao = 0; indiceApresentacao < apresentacoes.length; indiceApresentacao++) {
+      const apresentacao = apresentacoes[indiceApresentacao];
       const ano = anoDaData(apresentacao.data) || String(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', year: 'numeric' }));
       let bancosAno;
       try {
@@ -10950,18 +10953,25 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
       }
       if (linkPlanilha) propsBase['Link da Planilha'] = { url: linkPlanilha };
 
-      const rCriar = await fetch('https://api.notion.com/v1/pages', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parent: { database_id: bancosAno.propostas }, properties: propsBase }),
-      });
+      // Se a apresentação já tem pageId (veio de um orçamento carregado pra edição),
+      // ATUALIZA a página existente em vez de criar outra — evita duplicar no Notion.
+      const ehAtualizacao = Boolean(apresentacao.pageId);
+      const rCriar = await fetch(
+        ehAtualizacao ? ('https://api.notion.com/v1/pages/' + apresentacao.pageId) : 'https://api.notion.com/v1/pages',
+        {
+          method: ehAtualizacao ? 'PATCH' : 'POST',
+          headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify(ehAtualizacao ? { properties: propsBase } : { parent: { database_id: bancosAno.propostas }, properties: propsBase }),
+        }
+      );
       if (!rCriar.ok) {
         const eBody = await rCriar.text();
-        console.error('[orcamento/salvar-notion] Notion recusou criar página para ' + apresentacao.data + ':', eBody);
+        console.error('[orcamento/salvar-notion] Notion recusou ' + (ehAtualizacao ? 'atualizar' : 'criar') + ' página para ' + apresentacao.data + ':', eBody);
         continue;
       }
       const paginaCriada = await rCriar.json();
-      paginasCriadas.push({ id: paginaCriada.id, url: paginaCriada.url, data: apresentacao.data });
+      if (ehAtualizacao) totalAtualizadas++; else totalCriadas++;
+      paginasCriadas.push({ id: paginaCriada.id, url: paginaCriada.url, data: apresentacao.data, indice: indiceApresentacao });
 
       if (endereco && (coordenadasEndereco || bancosAno.enderecoPropostasTipo === 'rich_text')) {
         try {
@@ -10987,21 +10997,48 @@ app.post('/orcamento/salvar-notion', async (req, res) => {
     }
 
     if (paginasCriadas.length === 0) {
-      return res.status(500).json({ ok: false, erro: 'Nenhuma página foi criada — ver logs para detalhes.' });
+      return res.status(500).json({ ok: false, erro: 'Nenhuma página foi criada/atualizada — ver logs para detalhes.' });
+    }
+
+    // Datas removidas durante uma edição (existiam no orçamento carregado, o usuário
+    // apagou a linha antes de salvar) -- manda pra lixeira do Notion (reversível, não
+    // é exclusão definitiva) em vez de deixar página órfã duplicando informação velha.
+    let totalArquivadas = 0;
+    if (Array.isArray(paginasParaArquivar)) {
+      for (const pageIdArquivar of paginasParaArquivar) {
+        try {
+          const rArquivar = await fetch('https://api.notion.com/v1/pages/' + pageIdArquivar, {
+            method: 'PATCH',
+            headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ archived: true }),
+          });
+          if (rArquivar.ok) totalArquivadas++;
+          else console.error('[orcamento/salvar-notion] falha ao arquivar página removida ' + pageIdArquivar + ':', await rArquivar.text());
+        } catch (eArq) {
+          console.error('[orcamento/salvar-notion] erro ao arquivar página removida ' + pageIdArquivar + ':', eArq.message);
+        }
+      }
     }
 
     try {
       const linhasDatas = apresentacoes.map(a => '📅 ' + a.data + ' — ' + (a.horario || '')).join('\n');
       const avisoEndereco = endereco ? ('\n📍 Endereço: ' + endereco + (enderecoGravadoEmAlgumaPagina ? '' : ' (não gravou automaticamente no campo — confira/preencha manualmente)')) : '';
-      const msg = '💰 *Orçamento salvo* — ' + local + '\n\nContratante: ' + contratante + '\nTipo: ' + tipo + '\n' + linhasDatas +
-        '\n\nValor por apresentação: R$ ' + Number(valorPorApresentacao).toFixed(2) + avisoEndereco +
+      const resumoAcao = totalAtualizadas > 0
+        ? (totalCriadas > 0 ? ('💰 *Orçamento atualizado* (' + totalAtualizadas + ' atualizada(s), ' + totalCriadas + ' nova(s))') : '💰 *Orçamento atualizado*')
+        : '💰 *Orçamento salvo*';
+      const avisoArquivadas = totalArquivadas > 0 ? ('\n🗑️ ' + totalArquivadas + ' data(s) removida(s) foram para a lixeira do Notion.') : '';
+      const msg = resumoAcao + ' — ' + local + '\n\nContratante: ' + contratante + '\nTipo: ' + tipo + '\n' + linhasDatas +
+        '\n\nValor por apresentação: R$ ' + Number(valorPorApresentacao).toFixed(2) + avisoEndereco + avisoArquivadas +
         (linkPlanilha ? ('\n📄 Planilha: ' + linkPlanilha) : '');
       await enviarWhatsApp(WHATSAPP_FABIO, msg);
     } catch (eNotif) {
       console.error('[orcamento/salvar-notion] erro ao notificar Fábio:', eNotif.message);
     }
 
-    res.json({ ok: true, paginas: paginasCriadas, linkPlanilha, enderecoGravado: enderecoGravadoEmAlgumaPagina });
+    res.json({
+      ok: true, paginas: paginasCriadas, linkPlanilha, enderecoGravado: enderecoGravadoEmAlgumaPagina,
+      totalCriadas, totalAtualizadas, totalArquivadas,
+    });
   } catch (err) {
     console.error('[orcamento/salvar-notion] erro:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
@@ -11159,6 +11196,7 @@ app.get('/orcamento/carregar', async (req, res) => {
       apresentacoes: paginas.map(pg => ({
         data: pg.properties['Data']?.date?.start || '',
         horario: pg.properties['Horário Apresentação']?.rich_text?.[0]?.plain_text || '',
+        pageId: pg.id,
       })),
       detalhamento: null,
       avisoDetalhamento: '',
