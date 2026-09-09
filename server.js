@@ -8354,6 +8354,10 @@ app.get('/apresentacoes-hoje', async (req, res) => {
   }
   const hoje = req.query.data || hojeBrasilia();
   try {
+    // Antes tinha um corte fixo de 48h (on_or_after hoje-2). Trocado por: fica
+    // disponível pra sempre enquanto a produtora responsável não preencher o
+    // relatório (filtro direto no Notion por "Público" vazio -- mesmo campo que já
+    // definia jaTemRelatorio). Sem corte de tempo, só não mostra apresentação futura.
     const r = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_APRESENTACOES}/query`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
@@ -8361,7 +8365,7 @@ app.get('/apresentacoes-hoje', async (req, res) => {
         filter: {
           and: [
             { property: 'Data da Apresentação', date: { on_or_before: hoje } },
-            { property: 'Data da Apresentação', date: { on_or_after: (() => { const d = new Date(hoje + 'T00:00:00'); d.setDate(d.getDate() - 2); return d.toISOString().split('T')[0]; })() } },
+            { property: 'Público', number: { is_empty: true } },
           ],
         },
         sorts: [{ property: 'Data da Apresentação', direction: 'descending' }, { property: 'Horário Apresentação', direction: 'ascending' }],
