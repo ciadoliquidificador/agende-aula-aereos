@@ -7861,6 +7861,36 @@ app.post('/portal-admin/sessao/verificar', (req, res) => {
 });
 // ===== FIM PORTAL ADMIN — LOGIN OTP + SESSÃO =====
 
+// ===== CALCULADORA DE ORÇAMENTO — LOGIN OTP + SESSÃO (mesmo mecanismo do Portal Admin) =====
+app.post('/orcamento-portal/login/solicitar', async (req, res) => {
+  try {
+    await enviarOtp('orcamento_fabio', WHATSAPP_FABIO, 'Fábio');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[orcamento-portal/login/solicitar] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao enviar código.' });
+  }
+});
+
+app.post('/orcamento-portal/login/verificar', (req, res) => {
+  const verificacao = verificarOtp('orcamento_fabio', req.body.codigo);
+  if (!verificacao.ok) {
+    return res.status(401).json(verificacao);
+  }
+  const token = criarSessao('orcamento_fabio', {});
+  res.json({ ok: true, token });
+});
+
+app.post('/orcamento-portal/sessao/verificar', (req, res) => {
+  const token = req.body.token || '';
+  const dados = verificarSessao(token);
+  if (!dados) {
+    return res.status(401).json({ ok: false, erro: 'Sessão inválida ou expirada.' });
+  }
+  res.json({ ok: true });
+});
+// ===== FIM CALCULADORA DE ORÇAMENTO — LOGIN OTP + SESSÃO =====
+
 
 
 // Turmas que não usam o fluxo genérico de matrícula (MODALIDADES_MATRICULA),
