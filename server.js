@@ -1239,26 +1239,33 @@ function extrairHorarioInicioSimples(texto) {
   return m[1].padStart(2, '0') + ':' + (m[2] || '00');
 }
 
-// Trava em memória por pageId -- essa função é chamada de 3 gatilhos diferentes
-// (calendário, escalação, proposta aprovada) que podem disparar quase ao mesmo
-// tempo pra mesma página; sem isso, duas chamadas concorrentes leem o checkbox
-// "Lembretes Produtor Agendados" como false ANTES de qualquer uma marcar como
-// true, e cada uma agenda os lembretes de novo (confirmado ao vivo: 3x duplicado
-// numa única rajada de chamadas). Só protege contra concorrência dentro do mesmo
-// processo -- suficiente aqui pois é sempre a mesma instância do Railway.
-const lembretesProdutorEmProcessamento = new Set();
-
-async function agendarLembretesProdutor(pageId) {
-  if (lembretesProdutorEmProcessamento.has(pageId)) {
-    console.log('[lembretes-produtor] ja em processamento concorrente, ignorando: ' + pageId);
+// Trava genérica em memória por pageId -- pro padrão "ler campo de controle no
+// Notion -> decidir -> notificar por WhatsApp -> gravar campo de controle" que se
+// repete nos webhooks de Apresentações. Sem ela, 2+ gatilhos disparando quase ao
+// mesmo tempo pra mesma página leem o campo de controle no estado "ainda não
+// notificado" ANTES de qualquer um gravar de volta, e cada um notifica de novo.
+// Confirmado ao vivo (set/2026): tanto os lembretes do produtor quanto o aviso de
+// escalação duplicaram numa mesma rajada de webhooks -- ver CLAUDE.md regra 12.
+// Só protege concorrência dentro do mesmo processo -- suficiente pois o Railway
+// roda 1 réplica só.
+const pageIdsEmProcessamentoPorChave = {};
+async function comTravaPorPagina(chave, pageId, fn) {
+  if (!pageIdsEmProcessamentoPorChave[chave]) pageIdsEmProcessamentoPorChave[chave] = new Set();
+  const emProcessamento = pageIdsEmProcessamentoPorChave[chave];
+  if (emProcessamento.has(pageId)) {
+    console.log('[' + chave + '] ja em processamento concorrente, ignorando: ' + pageId);
     return;
   }
-  lembretesProdutorEmProcessamento.add(pageId);
+  emProcessamento.add(pageId);
   try {
-    await agendarLembretesProdutorSemTrava(pageId);
+    return await fn();
   } finally {
-    lembretesProdutorEmProcessamento.delete(pageId);
+    emProcessamento.delete(pageId);
   }
+}
+
+async function agendarLembretesProdutor(pageId) {
+  return comTravaPorPagina('lembretes-produtor', pageId, () => agendarLembretesProdutorSemTrava(pageId));
 }
 
 async function agendarLembretesProdutorSemTrava(pageId) {
@@ -1489,33 +1496,35 @@ app.post('/webhook-apresentacao-escalacao', async (req, res) => {
     // quando "Produção Liqui" é definida (esse webhook dispara por isso).
     try { await agendarLembretesProdutor(pageId); } catch (eLemb) { console.error('[webhook-apresentacao-escalacao] erro ao agendar lembretes produtor:', eLemb.message); }
 
-    const { p, dataFmt, horarioTexto, nomeLocal, enderecoLocal, trabalhoNome, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
-    if (!dataFmt) { console.log('[webhook-apresentacao-escalacao] sem data, ignorando.'); return; }
+    await comTravaPorPagina('webhook-apresentacao-escalacao', pageId, async () => {
+      const { p, dataFmt, horarioTexto, nomeLocal, enderecoLocal, trabalhoNome, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
+      if (!dataFmt) { console.log('[webhook-apresentacao-escalacao] sem data, ignorando.'); return; }
 
-    const jaNotificadosStr = p['Escalação Notificados']?.rich_text?.[0]?.plain_text || '';
-    const jaNotificados = new Set(jaNotificadosStr.split(',').map(s => s.trim()).filter(Boolean));
-    const novosIds = [...idsEnvolvidos].filter(id => !jaNotificados.has(id));
+      const jaNotificadosStr = p['Escalação Notificados']?.rich_text?.[0]?.plain_text || '';
+      const jaNotificados = new Set(jaNotificadosStr.split(',').map(s => s.trim()).filter(Boolean));
+      const novosIds = [...idsEnvolvidos].filter(id => !jaNotificados.has(id));
 
-    if (novosIds.length === 0) {
-      console.log('[webhook-apresentacao-escalacao] nenhuma pessoa nova para notificar.');
-      return;
-    }
+      if (novosIds.length === 0) {
+        console.log('[webhook-apresentacao-escalacao] nenhuma pessoa nova para notificar.');
+        return;
+      }
 
-    await notificarPessoasApresentacao(novosIds, (primeiroNome) =>
-      'Olá, ' + primeiroNome + '! 🎭\n\nVocê está escalado(a) para a apresentação:\n\n🎬 ' + (trabalhoNome || 'Apresentação') +
-      '\n📅 ' + dataFmt + (horarioTexto ? ('\n⏰ ' + horarioTexto) : '') +
-      '\n📍 ' + nomeLocal + (enderecoLocal ? (' - ' + enderecoLocal) : '') +
-      '\n\nQualquer dúvida, é só chamar!'
-    );
+      await notificarPessoasApresentacao(novosIds, (primeiroNome) =>
+        'Olá, ' + primeiroNome + '! 🎭\n\nVocê está escalado(a) para a apresentação:\n\n🎬 ' + (trabalhoNome || 'Apresentação') +
+        '\n📅 ' + dataFmt + (horarioTexto ? ('\n⏰ ' + horarioTexto) : '') +
+        '\n📍 ' + nomeLocal + (enderecoLocal ? (' - ' + enderecoLocal) : '') +
+        '\n\nQualquer dúvida, é só chamar!'
+      );
 
-    const todosNotificados = [...jaNotificados, ...novosIds];
-    await fetch('https://api.notion.com/v1/pages/' + pageId, {
-      method: 'PATCH',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { 'Escalação Notificados': { rich_text: [{ text: { content: todosNotificados.join(',') } }] } } }),
+      const todosNotificados = [...jaNotificados, ...novosIds];
+      await fetch('https://api.notion.com/v1/pages/' + pageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ properties: { 'Escalação Notificados': { rich_text: [{ text: { content: todosNotificados.join(',') } }] } } }),
+      });
+
+      console.log('[webhook-apresentacao-escalacao] concluido para pagina ' + pageId + ', novos notificados: ' + novosIds.length);
     });
-
-    console.log('[webhook-apresentacao-escalacao] concluido para pagina ' + pageId + ', novos notificados: ' + novosIds.length);
   } catch (err) {
     console.error('[webhook-apresentacao-escalacao] erro:', err.message);
   }
@@ -1532,33 +1541,35 @@ app.post('/webhook-apresentacao-saida', async (req, res) => {
     const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
     if (!pageId) { console.error('[webhook-apresentacao-saida] sem page id.'); return; }
 
-    const { p, dataFmt, trabalhoNome, localSaida, horarioSaida, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
-    if (!localSaida && !horarioSaida) { console.log('[webhook-apresentacao-saida] sem local/horario de saida, ignorando.'); return; }
+    await comTravaPorPagina('webhook-apresentacao-saida', pageId, async () => {
+      const { p, dataFmt, trabalhoNome, localSaida, horarioSaida, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
+      if (!localSaida && !horarioSaida) { console.log('[webhook-apresentacao-saida] sem local/horario de saida, ignorando.'); return; }
 
-    const jaNotificadosStr = p['Saída Notificados']?.rich_text?.[0]?.plain_text || '';
-    const jaNotificados = new Set(jaNotificadosStr.split(',').map(s => s.trim()).filter(Boolean));
-    const novosIds = [...idsEnvolvidos].filter(id => !jaNotificados.has(id));
+      const jaNotificadosStr = p['Saída Notificados']?.rich_text?.[0]?.plain_text || '';
+      const jaNotificados = new Set(jaNotificadosStr.split(',').map(s => s.trim()).filter(Boolean));
+      const novosIds = [...idsEnvolvidos].filter(id => !jaNotificados.has(id));
 
-    if (novosIds.length === 0) {
-      console.log('[webhook-apresentacao-saida] nenhuma pessoa nova para notificar.');
-      return;
-    }
+      if (novosIds.length === 0) {
+        console.log('[webhook-apresentacao-saida] nenhuma pessoa nova para notificar.');
+        return;
+      }
 
-    await notificarPessoasApresentacao(novosIds, (primeiroNome) =>
-      'Olá, ' + primeiroNome + '! 🚐\n\nSaída definida para a apresentação ' + (trabalhoNome || '') + (dataFmt ? (' (' + dataFmt + ')') : '') + ':\n\n' +
-      (localSaida ? ('📍 Local de saída: ' + localSaida + '\n') : '') +
-      (horarioSaida ? ('⏰ Horário de saída: ' + horarioSaida + '\n') : '') +
-      '\nNos vemos lá!'
-    );
+      await notificarPessoasApresentacao(novosIds, (primeiroNome) =>
+        'Olá, ' + primeiroNome + '! 🚐\n\nSaída definida para a apresentação ' + (trabalhoNome || '') + (dataFmt ? (' (' + dataFmt + ')') : '') + ':\n\n' +
+        (localSaida ? ('📍 Local de saída: ' + localSaida + '\n') : '') +
+        (horarioSaida ? ('⏰ Horário de saída: ' + horarioSaida + '\n') : '') +
+        '\nNos vemos lá!'
+      );
 
-    const todosNotificados = [...jaNotificados, ...novosIds];
-    await fetch('https://api.notion.com/v1/pages/' + pageId, {
-      method: 'PATCH',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { 'Saída Notificados': { rich_text: [{ text: { content: todosNotificados.join(',') } }] } } }),
+      const todosNotificados = [...jaNotificados, ...novosIds];
+      await fetch('https://api.notion.com/v1/pages/' + pageId, {
+        method: 'PATCH',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ properties: { 'Saída Notificados': { rich_text: [{ text: { content: todosNotificados.join(',') } }] } } }),
+      });
+
+      console.log('[webhook-apresentacao-saida] concluido para pagina ' + pageId + ', novos notificados: ' + novosIds.length);
     });
-
-    console.log('[webhook-apresentacao-saida] concluido para pagina ' + pageId + ', novos notificados: ' + novosIds.length);
   } catch (err) {
     console.error('[webhook-apresentacao-saida] erro:', err.message);
   }
