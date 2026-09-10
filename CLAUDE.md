@@ -41,6 +41,7 @@ Cia do Liquidificador é uma escola de artes cênicas operando como **Liquidific
 9. **DDD:** validar `numLimpo.length < 11` antes de mandar qualquer WhatsApp.
 10. **Horários passados:** checar `horaAgora >= horaAula` quando o cursor de agendamento é hoje.
 11. Nomes de constantes tipo `WHATSAPP_FABIO` — nunca referenciar antes da declaração (já causou crash silencioso 1x em produção).
+12. **Ação idempotente disparada por múltiplos webhooks/automações da mesma página do Notion (ex: Apresentações tem 3 gatilhos independentes) precisa de trava em memória por pageId**, não só um checkbox de controle — dois gatilhos quase simultâneos leem o checkbox como `false` antes de qualquer um marcar como `true`, e cada um executa a ação de novo. Confirmado ao vivo (set/2026): lembretes de WhatsApp do produtor duplicaram 3x numa única rajada antes da trava (`Set` de pageIds "em processamento", checado/setado de forma síncrona antes de qualquer `await`). Só funciona porque o Railway roda 1 réplica — se um dia rodar múltiplas réplicas, precisa de lock externo (Notion mesmo, ou Redis).
 
 ## Notion — regras e IDs importantes
 
@@ -77,6 +78,15 @@ A calculadora de orçamento (`calculadora_orcamento_v11_1.html`, hospedada fora 
   | Apresentações → avisa elenco/equipe escalada | ELENCO/Produção Liqui/Técnico de Som/Luz preenchidos | `/webhook-apresentacao-escalacao` |
   | Apresentações → avisa saída | Local Saída/Horário de Saída preenchidos | `/webhook-apresentacao-saida` |
 - `/orcamento/datas-disponiveis`, `/orcamento/buscar` e `/orcamento/carregar` já buscam em **todos os anos existentes** (não só o atual), via `listarTodosBancosOrcamento()`.
+
+## Lembretes automáticos de WhatsApp pro produtor (set/2026)
+
+Duas mensagens agendadas (fila Notion-backed, nunca `scheduledAt` do Digisac) pro contato em **Produção Liqui** de cada Apresentação, calculadas a partir de `Data da Apresentação` + `Horário Apresentação` (extrai só o horário de início, regex `(\d{1,2})h(\d{2})?` — mesmo padrão do `sincronizarApresentacaoComCalendar`):
+
+- **1h antes:** lembrete de fotos (início/meio/fim), filmar com o celular da Cia. (senha `142536`), contar público.
+- **1h depois:** lembrete de preencher o relatório em `apresentacao.ciadoliquidificador.com.br` e subir o vídeo pro YouTube (privado, nome padronizado "Trabalho - Local - Data").
+
+Implementado em `agendarLembretesProdutor(pageId)` (server.js), chamado a partir dos 3 gatilhos que já existem pra Apresentações (`/webhook-apresentacao-notion`, `/webhook-apresentacao-escalacao`, `/webhook-proposta-aprovada`) — `/webhook-apresentacao-escalacao` é o mais confiável, pois dispara exatamente quando Produção Liqui é definida. Idempotente via checkbox `Lembretes Produtor Agendados` (propriedade já adicionada ao molde 2026 e ao teste 2027 — bancos novos herdam automaticamente) **+ trava em memória por pageId** (ver regra 12 acima — sem ela, os 3 gatilhos disparando quase juntos duplicavam a mensagem). Não agenda nada se a apresentação já aconteceu há mais de 2h (edição tardia de registro antigo não deve gerar lembrete fora de hora) ou se o produtor não tem telefone/DDD válido cadastrado no Integrantes.
 
 ## Apps ativos
 
