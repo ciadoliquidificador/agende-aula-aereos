@@ -1225,6 +1225,116 @@ async function sincronizarApresentacaoComCalendar(pageId) {
   return googleEventId;
 }
 
+// ============================================================
+// APRESENTACOES — Lembretes automáticos por WhatsApp pro produtor (Produção Liqui)
+// 1h antes: lembrar de fotos/vídeo/celular. 1h depois: lembrar de preencher o
+// relatório e subir o vídeo. Usa a mesma fila Notion-backed de sempre (nunca o
+// scheduledAt do Digisac -- ver regra 5 do CLAUDE.md). Idempotente via checkbox
+// "Lembretes Produtor Agendados" -- só agenda 1x por página, mesmo chamada de
+// vários gatilhos (calendário, escalação, proposta aprovada).
+// ============================================================
+function extrairHorarioInicioSimples(texto) {
+  const m = (texto || '').match(/(\d{1,2})h(\d{2})?/);
+  if (!m) return null;
+  return m[1].padStart(2, '0') + ':' + (m[2] || '00');
+}
+
+async function agendarLembretesProdutor(pageId) {
+  const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+  });
+  const pageData = await rPage.json();
+  const p = pageData.properties || {};
+
+  if (p['Lembretes Produtor Agendados']?.checkbox) {
+    return; // ja agendado pra essa pagina, nao duplica
+  }
+
+  const dataStr = p['Data da Apresentação']?.date?.start || '';
+  const horarioTexto = p['Horário Apresentação']?.rich_text?.[0]?.plain_text || '';
+  const horaInicio = extrairHorarioInicioSimples(horarioTexto);
+  if (!dataStr || !horaInicio) {
+    console.log('[lembretes-produtor] sem data/horario legivel, ignorando: ' + pageId);
+    return;
+  }
+
+  const dataSimples = dataStr.split('T')[0];
+  const inicio = new Date(dataSimples + 'T' + horaInicio + ':00-03:00');
+  if (isNaN(inicio.getTime())) return;
+
+  // Edicao tardia de um registro antigo (ha mais de 2h) nao deve gerar lembrete
+  // fora de hora -- so agenda pra apresentacao que ainda vai acontecer ou acabou de acontecer.
+  if (inicio.getTime() < Date.now() - 2 * 60 * 60000) {
+    console.log('[lembretes-produtor] apresentacao ja passou ha mais de 2h, ignorando: ' + pageId);
+    return;
+  }
+
+  const producaoRel = p['Produção Liqui']?.relation || [];
+  if (producaoRel.length === 0) {
+    console.log('[lembretes-produtor] sem Produção Liqui definida ainda, ignorando por ora: ' + pageId);
+    return;
+  }
+
+  const rProdutor = await fetch('https://api.notion.com/v1/pages/' + producaoRel[0].id, {
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
+  });
+  const produtorData = await rProdutor.json();
+  const pp = produtorData.properties || {};
+  const nomeProdutor = pp['Nome']?.title?.[0]?.plain_text || '';
+  const telefoneProdutor = pp['Telefone']?.phone_number || '';
+  if (!telefoneProdutor) {
+    console.log('[lembretes-produtor] produtor sem telefone cadastrado, ignorando: ' + pageId);
+    return;
+  }
+  const numLimpo = telefoneProdutor.replace(/\D/g, '');
+  if (numLimpo.length < 11) {
+    console.log('[lembretes-produtor] telefone do produtor sem DDD/invalido, ignorando: ' + pageId);
+    return;
+  }
+  const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
+  const primeiroNome = (nomeProdutor || '').split(' ')[0] || '';
+
+  const trabalhoRel = p['🎭 Trabalhos']?.relation || [];
+  const trabalhoNome = trabalhoRel.length ? await nomeTituloDaPaginaRelatorio(trabalhoRel[0].id) : '';
+  const localTitle = p['LOCAL']?.title?.[0]?.plain_text || '';
+  const localNome = p['Endereço']?.place?.name || localTitle || 'Local';
+  const dataFmt = dataSimples.split('-').reverse().join('/');
+
+  const mensagemAntes =
+    'Olá, ' + primeiroNome + '.\n\n' +
+    'Lembre-se de tirar foto do início, meio e fim da apresentação utilizando o seu celular.\n\n' +
+    'O celular da Cia. deverá ser utilizado para filmar a apresentação, em formato horizontal, com o microfone externo ligado.\n\n' +
+    'A senha do celular é 142536\n\n' +
+    'Conte a quantidade de público e/ou confirme com a produção do evento se eles tem esse dado ao final da apresentação.\n\n' +
+    'Você vai subir esses dados em https://apresentacao.ciadoliquidificador.com.br';
+
+  const mensagemDepois =
+    'Olá ' + primeiroNome + ', como foi a apresentação?\n\n' +
+    'Lembre de preencher o formulário https://apresentacao.ciadoliquidificador.com.br\n\n' +
+    'Também preciso que você suba o vídeo que está no celular da liqui para o YouTube.\n\n' +
+    'Use o YouTube studio.\n' +
+    'Coloque o vídeo como privado.\n' +
+    'O nome do vídeo deve ser o nome da apresentação - local - data\n\n' +
+    'Exemplo:\n\n' +
+    (trabalhoNome || 'Nome da apresentação') + ' - ' + localNome + ' - ' + dataFmt;
+
+  const envioAntes = new Date(inicio.getTime() - 60 * 60000);
+  const envioDepois = new Date(inicio.getTime() + 60 * 60000);
+
+  if (envioAntes.getTime() > Date.now()) {
+    await agendarMensagemFila(numBr, mensagemAntes, envioAntes.toISOString());
+  }
+  await agendarMensagemFila(numBr, mensagemDepois, envioDepois.toISOString());
+
+  await fetch('https://api.notion.com/v1/pages/' + pageId, {
+    method: 'PATCH',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ properties: { 'Lembretes Produtor Agendados': { checkbox: true } } }),
+  });
+
+  console.log('[lembretes-produtor] agendados para pagina ' + pageId + ' -> ' + numBr + ' (antes: ' + envioAntes.toISOString() + ', depois: ' + envioDepois.toISOString() + ')');
+}
+
 app.post('/webhook-apresentacao-notion', async (req, res) => {
   res.status(200).json({ ok: true }); // responde rapido, processa depois
 
@@ -1239,6 +1349,7 @@ app.post('/webhook-apresentacao-notion', async (req, res) => {
     }
 
     await sincronizarApresentacaoComCalendar(pageId);
+    try { await agendarLembretesProdutor(pageId); } catch (eLemb) { console.error('[webhook-apresentacao-notion] erro ao agendar lembretes produtor:', eLemb.message); }
   } catch (err) {
     console.error('[webhook-apresentacao-notion] erro:', err.message);
   }
@@ -1351,6 +1462,10 @@ app.post('/webhook-apresentacao-escalacao', async (req, res) => {
     const body = req.body || {};
     const pageId = (body.data && body.data.id) || body.pageId || body.page_id || null;
     if (!pageId) { console.error('[webhook-apresentacao-escalacao] sem page id.'); return; }
+
+    // Momento mais confiável pra agendar os lembretes do produtor -- é exatamente
+    // quando "Produção Liqui" é definida (esse webhook dispara por isso).
+    try { await agendarLembretesProdutor(pageId); } catch (eLemb) { console.error('[webhook-apresentacao-escalacao] erro ao agendar lembretes produtor:', eLemb.message); }
 
     const { p, dataFmt, horarioTexto, nomeLocal, enderecoLocal, trabalhoNome, idsEnvolvidos } = await buscarDadosApresentacao(pageId);
     if (!dataFmt) { console.log('[webhook-apresentacao-escalacao] sem data, ignorando.'); return; }
@@ -6168,6 +6283,7 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
       const apresentacaoExistenteId = dCheckExistente.results[0].id;
       console.log('[webhook-proposta-aprovada] ja tem apresentacao vinculada, sincronizando calendario mesmo assim: ' + apresentacaoExistenteId);
       try { await sincronizarApresentacaoComCalendar(apresentacaoExistenteId); } catch (e) { console.error('[webhook-proposta-aprovada] erro ao sincronizar calendario (apresentacao existente):', e.message); }
+      try { await agendarLembretesProdutor(apresentacaoExistenteId); } catch (e) { console.error('[webhook-proposta-aprovada] erro ao agendar lembretes produtor (apresentacao existente):', e.message); }
       return;
     }
 
@@ -6218,6 +6334,11 @@ app.post('/webhook-proposta-aprovada', async (req, res) => {
       await sincronizarApresentacaoComCalendar(novaApresentacao.id);
     } catch (e) {
       console.error('[webhook-proposta-aprovada] erro ao sincronizar calendario (apresentacao nova):', e.message);
+    }
+    try {
+      await agendarLembretesProdutor(novaApresentacao.id);
+    } catch (e) {
+      console.error('[webhook-proposta-aprovada] erro ao agendar lembretes produtor (apresentacao nova):', e.message);
     }
   } catch (err) {
     console.error('[webhook-proposta-aprovada] erro:', err.message);
