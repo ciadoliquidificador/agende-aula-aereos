@@ -1239,7 +1239,29 @@ function extrairHorarioInicioSimples(texto) {
   return m[1].padStart(2, '0') + ':' + (m[2] || '00');
 }
 
+// Trava em memória por pageId -- essa função é chamada de 3 gatilhos diferentes
+// (calendário, escalação, proposta aprovada) que podem disparar quase ao mesmo
+// tempo pra mesma página; sem isso, duas chamadas concorrentes leem o checkbox
+// "Lembretes Produtor Agendados" como false ANTES de qualquer uma marcar como
+// true, e cada uma agenda os lembretes de novo (confirmado ao vivo: 3x duplicado
+// numa única rajada de chamadas). Só protege contra concorrência dentro do mesmo
+// processo -- suficiente aqui pois é sempre a mesma instância do Railway.
+const lembretesProdutorEmProcessamento = new Set();
+
 async function agendarLembretesProdutor(pageId) {
+  if (lembretesProdutorEmProcessamento.has(pageId)) {
+    console.log('[lembretes-produtor] ja em processamento concorrente, ignorando: ' + pageId);
+    return;
+  }
+  lembretesProdutorEmProcessamento.add(pageId);
+  try {
+    await agendarLembretesProdutorSemTrava(pageId);
+  } finally {
+    lembretesProdutorEmProcessamento.delete(pageId);
+  }
+}
+
+async function agendarLembretesProdutorSemTrava(pageId) {
   const rPage = await fetch('https://api.notion.com/v1/pages/' + pageId, {
     headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28' },
   });
