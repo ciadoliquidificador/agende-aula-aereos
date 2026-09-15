@@ -50,6 +50,7 @@ Cia do Liquidificador é uma escola de artes cênicas operando como **Liquidific
 - **`ALTER COLUMN SET SELECT(...)`** precisa incluir TODAS as opções já existentes, senão elas somem.
 - **Notion Forms:** perguntas e descrições de cabeçalho não podem ser setadas via API — sempre manual na UI do Notion.
 - **Money fields:** sempre `number_format: real` (nunca dollar).
+- **Se um `POST /v1/pages` der 400 "X is not a property that exists" mesmo o código usando o nome certo**, suspeitar de corrupção no NOME da propriedade em si — já aconteceu (set/2026, banco `📋 Lista de Interesse`) da propriedade título ter ficado literalmente nomeada `Título` (barra invertida e tudo, não o "í" de verdade), provavelmente de algum script que usou a string já com `JSON.stringify` aplicado como nome ao criar a coluna. Sempre conferir `GET /v1/databases/{id}` e comparar bytes do nome antes de assumir que é bug no código — resolve com `PATCH /v1/databases/{id}` renomeando a propriedade pelo nome (quebrado) atual.
 - Bancos principais:
   - `Alunas` — `aee12f7f-8cb9-4ee2-80ba-1bcb06d9eda0` (data source `41bb69c4-2d18-4c81-9e43-e60c5f4033f6`)
   - `Presenças 2026` — data source `8365a940-b386-401b-bedb-d26dfff2415e`
