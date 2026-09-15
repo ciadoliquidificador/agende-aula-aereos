@@ -8055,37 +8055,79 @@ const TURMAS_MURAL_EXTRAS = [
   { modalidade: 'Meditação', turma: 'Turma Única 2026', dia: 'Quinta', horario: '09:00', professor: 'Bárbara Mazzola', limite: 10 },
 ];
 
-app.get('/mural/turmas-disponiveis', (req, res) => {
+app.get('/mural/turmas-disponiveis', async (req, res) => {
   const turmas = [];
   for (const [modalidade, dados] of Object.entries(MODALIDADES_MATRICULA)) {
     dados.turmas.forEach(t => turmas.push({ modalidade, turma: t.nome, dia: t.dia, horario: t.horario }));
   }
   turmas.push(...TURMAS_MURAL_EXTRAS);
-  res.json({ ok: true, turmas });
+
+  // Grupos residentes (projetos selecionados no Chamamento de Residência Artística)
+  // -- disparo do Mural pra eles usa o mesmo mecanismo, mas a lista de contatos vem
+  // do banco de Residência, não do Alunas.
+  let residentes = [];
+  try {
+    const rResidentes = await fetch('https://api.notion.com/v1/databases/' + RESIDENCIA_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter: { property: 'Status', select: { equals: 'Selecionada' } }, page_size: 100 }),
+    });
+    const dResidentes = await rResidentes.json();
+    residentes = (dResidentes.results || []).map(p => ({
+      projeto: p.properties['Nome do Projeto']?.rich_text?.[0]?.plain_text || '',
+      coletivo: p.properties['Nome do Coletivo']?.rich_text?.[0]?.plain_text || '',
+    })).filter(r => r.projeto);
+  } catch (e) {
+    console.error('[mural/turmas-disponiveis] erro ao buscar residentes:', e.message);
+  }
+
+  res.json({ ok: true, turmas, residentes });
 });
 
 app.post('/mural/postar', async (req, res) => {
-  const { titulo, mensagem, turmasAlvo, imagemBase64, imagemNomeArquivo } = req.body;
-  if (!titulo || !mensagem || !Array.isArray(turmasAlvo) || turmasAlvo.length === 0) {
-    return res.status(400).json({ ok: false, erro: 'Preencha título, mensagem e ao menos uma turma.' });
+  const { titulo, mensagem, turmasAlvo, residentesAlvo, imagemBase64, imagemNomeArquivo } = req.body;
+  const temTurmas = Array.isArray(turmasAlvo) && turmasAlvo.length > 0;
+  const temResidentes = Array.isArray(residentesAlvo) && residentesAlvo.length > 0;
+  if (!titulo || !mensagem || (!temTurmas && !temResidentes)) {
+    return res.status(400).json({ ok: false, erro: 'Preencha título, mensagem e ao menos uma turma ou grupo residente.' });
   }
   try {
-    const filtrosOr = turmasAlvo.map(t => ({ and: [
-      { property: 'Modalidade', select: { equals: t.modalidade } },
-      { property: 'Turma', select: { equals: t.turma } },
-      { property: 'Status', select: { equals: 'Ativa' } },
-    ]}));
-    const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filter: { or: filtrosOr }, page_size: 200 }),
-    });
-    const dAlunas = await rAlunas.json();
     const contatos = new Set();
-    (dAlunas.results || []).forEach(p => {
-      const contato = p.properties['Contato']?.phone_number;
-      if (contato) contatos.add(contato.replace(/\D/g, ''));
-    });
+
+    if (temTurmas) {
+      const filtrosOr = turmasAlvo.map(t => ({ and: [
+        { property: 'Modalidade', select: { equals: t.modalidade } },
+        { property: 'Turma', select: { equals: t.turma } },
+        { property: 'Status', select: { equals: 'Ativa' } },
+      ]}));
+      const rAlunas = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: { or: filtrosOr }, page_size: 200 }),
+      });
+      const dAlunas = await rAlunas.json();
+      (dAlunas.results || []).forEach(p => {
+        const contato = p.properties['Contato']?.phone_number;
+        if (contato) contatos.add(contato.replace(/\D/g, ''));
+      });
+    }
+
+    if (temResidentes) {
+      const filtrosOrResidentes = residentesAlvo.map(nomeProjeto => ({ and: [
+        { property: 'Nome do Projeto', rich_text: { equals: nomeProjeto } },
+        { property: 'Status', select: { equals: 'Selecionada' } },
+      ]}));
+      const rResidentes = await fetch('https://api.notion.com/v1/databases/' + RESIDENCIA_DB + '/query', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: { or: filtrosOrResidentes }, page_size: 100 }),
+      });
+      const dResidentes = await rResidentes.json();
+      (dResidentes.results || []).forEach(p => {
+        const contato = p.properties['Telefone']?.phone_number;
+        if (contato) contatos.add(contato.replace(/\D/g, ''));
+      });
+    }
 
     // Se veio imagem, sobe pro OneDrive e pega um link de download direto
     // (necessário pro Digisac conseguir buscar e anexar o arquivo de verdade).
@@ -8132,7 +8174,8 @@ app.post('/mural/postar', async (req, res) => {
         properties: {
           'Título': { title: [{ text: { content: titulo } }] },
           'Mensagem': { rich_text: [{ text: { content: mensagem } }] },
-          'Turmas Alvo JSON': { rich_text: [{ text: { content: JSON.stringify(turmasAlvo) } }] },
+          'Turmas Alvo JSON': { rich_text: [{ text: { content: JSON.stringify(turmasAlvo || []) } }] },
+          'Residentes Alvo JSON': { rich_text: [{ text: { content: JSON.stringify(residentesAlvo || []) } }] },
           'Autor': { rich_text: [{ text: { content: 'Fábio' } }] },
           'Enviado': { checkbox: true },
           'Total Destinatarios': { number: enviados },
