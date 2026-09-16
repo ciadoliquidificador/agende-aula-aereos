@@ -7428,12 +7428,16 @@ async function verificarCotaReposicao(cpfLimpo, modalidade) {
   }
   creditos.sort((a, b) => a.prazoLimite.localeCompare(b.prazoLimite)); // mais antigo (prazo mais proximo) primeiro
 
-  // "No limite mas nao bloqueada": com creditos.length === cota, ela ainda pode marcar (consome o mais
-  // antigo). So bloqueia quando ja excede a cota (creditos acumulados sem serem usados) ou nao ha credito algum.
-  const podeAgendar = creditos.length > 0 && creditos.length <= cota;
-  const mensagemBloqueio = creditos.length === 0
-    ? 'Não encontramos nenhuma falta em aberto para repor. Se você acredita que isso é um engano, fale com a gente.'
-    : 'Você já tem uma reposição em aberto. Assim que ela for utilizada ou expirar, você poderá agendar a próxima.';
+  // Só bloqueia quando não há nenhum crédito válido. A cota NÃO trava o agendamento
+  // quando a aluna acumulou mais faltas do que a cota (ex: faltou 2x seguidas sem
+  // marcar reposição entre uma e outra) -- isso já causou um beco sem saída real
+  // (confirmado set/2026, aluna Maíra Bombachini): com creditos.length > cota, a
+  // condição antiga bloqueava o agendamento, mas agendar é a ÚNICA forma de reduzir
+  // o número de créditos abertos -- ou seja, uma vez acima da cota, nunca mais dava
+  // pra usar os créditos. Sempre consome o mais antigo primeiro; a janela de 30 dias
+  // (Prazo Limite) já limita o acúmulo por conta própria, sem precisar de trava aqui.
+  const podeAgendar = creditos.length > 0;
+  const mensagemBloqueio = 'Não encontramos nenhuma falta em aberto para repor. Se você acredita que isso é um engano, fale com a gente.';
   return { cota, creditosAbertos: creditos.length, podeAgendar, creditos, mensagemBloqueio };
 }
 
