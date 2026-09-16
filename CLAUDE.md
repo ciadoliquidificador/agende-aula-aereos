@@ -117,7 +117,10 @@ Login por CPF + OTP único via WhatsApp. Sessão ativa 10min sem pedir novo cód
 
 **Não é um contador de mês-calendário.** É um sistema de créditos individuais com **janela rolante de 30 dias**:
 
-- Toda Falta registrada em `Presenças 2026` gera um crédito em `🔄 Reposições Solicitadas` com `Prazo Limite` = Data da falta + 30 dias, `Status` = "Aberto".
+- Toda Falta registrada em `Presenças 2026` gera um crédito em `🔄 Reposições Solicitadas` com `Status` = "Aberto". `Prazo Limite` depende do Plano (set/2026):
+  - **Mensal:** Data da falta + 30 dias (não tem ciclo fixo, renova mês a mês).
+  - **Semestral/Anual:** TODOS os créditos do mesmo ciclo (semestre/ano) vencem juntos, 30 dias após o término desse ciclo — não 30 dias após cada falta individual. Ciclo é recorrente a partir de `Data/Hora Aceite Contrato` (não usa `Vencimento do Contrato` direto, que é fixo na 1ª fidelidade e não avança nas renovações automáticas — `calcularProximoTerminoCiclo`/`calcularPrazoLimiteCredito`). Se `Data/Hora Aceite Contrato` estiver vazio (gap de dado legado), cai no fallback igual ao Mensal.
+  - `verificarCotaReposicao` extrai a data real da falta do `Título` do crédito (regex `Falta (\d{4}-\d{2}-\d{2})`), nunca de `Prazo Limite - 30` — essa conta só valia quando prazo=falta+30 sempre, o que não é mais verdade pra Semestral/Anual.
 - Cota = quantos créditos "Aberto" a aluna pode ter ao mesmo tempo, por modalidade: 1x/semana → 1, 2x/semana → 2, "Acordo" → 1 (fallback, é caso raro de acordo de pagamento, não de frequência real).
 - Ao usar um crédito (agendar a reposição), Status vira "Usado" — isso libera vaga pra próxima falta em espera, mesmo que ainda dentro do mês.
 - Créditos com `Prazo Limite` vencido e ainda "Aberto" devem ser tratados como "Expirado" (lazy expiration, checar na hora da consulta, sem precisar de cron).
