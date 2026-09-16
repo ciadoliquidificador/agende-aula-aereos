@@ -122,6 +122,8 @@ Login por CPF + OTP único via WhatsApp. Sessão ativa 10min sem pedir novo cód
 - Ao usar um crédito (agendar a reposição), Status vira "Usado" — isso libera vaga pra próxima falta em espera, mesmo que ainda dentro do mês.
 - Créditos com `Prazo Limite` vencido e ainda "Aberto" devem ser tratados como "Expirado" (lazy expiration, checar na hora da consulta, sem precisar de cron).
 - Ver prompt completo de implementação em `prompt_cota_reposicao_v2.md` (histórico de decisão no chat "Cia do Liquidificador" do Claude.ai).
+- **A cota (`calcularCotaReposicao`) diferencia só por Frequência (1x/2x semana), nunca por Plano** (Mensal/Semestral/Anual) — conferido contra a Cláusula Sétima do contrato de matrícula (`montarTextoContratoMatricula`), que também só diferencia por frequência. Se um dia pedirem diferenciação por plano, é regra nova, não um gap a "descobrir" no contrato.
+- **`podeAgendar` NUNCA deve bloquear por excesso de créditos acumulados** (`creditos.length > cota`) — só bloqueia quando não há nenhum crédito válido (`creditos.length === 0`). Já existiu um bug (set/2026, aluna Maíra Bombachini) onde `creditos.length > cota` bloqueava o agendamento, mas agendar é a ÚNICA forma de reduzir créditos abertos — virava um beco sem saída permanente assim que a aluna acumulava mais faltas que a cota (ex: 2 faltas seguidas sem repor entre elas). Sempre consome o crédito mais antigo primeiro (`creditos.sort` por Prazo Limite); a janela de 30 dias já limita o acúmulo por conta própria.
 
 ## Fluxo de trabalho
 
