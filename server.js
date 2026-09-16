@@ -7449,9 +7449,15 @@ async function verificarCotaReposicao(cpfLimpo, modalidade) {
       } catch (e) { console.error('[reposicao] erro ao expirar credito:', e.message); }
       continue; // expirado, nao conta pra cota
     }
+    // Extrai a data real da falta do Título ("Nome - Falta AAAA-MM-DD - Modalidade") em
+    // vez de calcular Prazo Limite - 30, que só valia enquanto TODO crédito expirava
+    // exatamente 30 dias após a própria falta -- não é mais o caso pra Semestral/Anual,
+    // onde vários créditos de faltas diferentes compartilham o mesmo Prazo Limite.
+    const tituloTexto = pagina.properties?.['Título']?.title?.[0]?.plain_text || '';
+    const matchFalta = tituloTexto.match(/Falta (\d{4}-\d{2}-\d{2})/);
     creditos.push({
       id: pagina.id,
-      dataFalta: prazoLimite ? somarDias(prazoLimite, -30) : '',
+      dataFalta: matchFalta ? matchFalta[1] : '',
       prazoLimite,
       turmaOrigem: pagina.properties?.['Turma Origem']?.rich_text?.[0]?.plain_text || '',
     });
