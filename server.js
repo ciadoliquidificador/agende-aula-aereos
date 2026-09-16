@@ -7367,6 +7367,36 @@ function somarDias(dataISO, dias) {
   return d.toISOString().slice(0, 10);
 }
 
+// Prazo de validade do crédito de reposição, por plano:
+// - Mensal: 30 dias após a FALTA (não tem ciclo fixo -- renova mês a mês).
+// - Semestral/Anual: todos os créditos do ciclo vencem juntos, 30 dias após o
+//   TÉRMINO DO CICLO (semestre/ano) em que a falta aconteceu -- não 30 dias após a
+//   falta em si. O "término do ciclo" é recorrente a partir da Data/Hora Aceite
+//   Contrato (não é só o "Vencimento do Contrato" gravado, que é fixo na 1ª
+//   fidelidade e não avança nas renovações automáticas -- decisão set/2026).
+function calcularProximoTerminoCiclo(dataInicioISO, plano, dataReferenciaISO) {
+  if (!dataInicioISO || !dataReferenciaISO) return null;
+  const duracao = DURACAO_FIDELIDADE_MESES[plano] || 1;
+  const inicio = new Date(dataInicioISO);
+  const referencia = new Date(dataReferenciaISO + 'T12:00:00Z');
+  if (isNaN(inicio.getTime()) || isNaN(referencia.getTime())) return null;
+
+  const fimCiclo = new Date(inicio.getTime());
+  fimCiclo.setUTCMonth(fimCiclo.getUTCMonth() + duracao);
+  while (fimCiclo.getTime() < referencia.getTime()) {
+    fimCiclo.setUTCMonth(fimCiclo.getUTCMonth() + duracao);
+  }
+  return fimCiclo.toISOString().slice(0, 10);
+}
+
+function calcularPrazoLimiteCredito(plano, dataInicioContrato, dataFalta) {
+  if (plano === 'Semestral' || plano === 'Anual') {
+    const fimCiclo = calcularProximoTerminoCiclo(dataInicioContrato, plano, dataFalta);
+    if (fimCiclo) return somarDias(fimCiclo, 30);
+  }
+  return somarDias(dataFalta, 30); // Mensal, ou fallback se faltar Data/Hora Aceite Contrato
+}
+
 async function buscarFrequenciaAluna(cpfLimpo, modalidade) {
   const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
     method: 'POST',
@@ -7479,7 +7509,9 @@ async function criarCreditoReposicaoPorFalta({ faltaPageId, alunaId, nomeAluna, 
     const cpf = (alunaData.properties?.CPF?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
     if (!cpf) { console.error('[reposicao] aluna sem CPF, credito nao criado:', alunaId); return; }
 
-    const prazoLimite = somarDias(dataFalta, 30);
+    const plano = alunaData.properties?.Plano?.select?.name || 'Mensal';
+    const dataInicioContrato = alunaData.properties?.['Data/Hora Aceite Contrato']?.date?.start || null;
+    const prazoLimite = calcularPrazoLimiteCredito(plano, dataInicioContrato, dataFalta);
 
     await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
