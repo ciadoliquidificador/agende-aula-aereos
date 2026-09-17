@@ -4931,6 +4931,139 @@ app.post('/portal-admin/recebimentos/conciliar/aplicar', async (req, res) => {
   }
 });
 
+// ---------- Geração das mensalidades do mês ----------
+//
+// O banco Recebimentos foi populado uma única vez pela migração das planilhas (30/08/2026)
+// e nada gerava o mês seguinte: em Set/26 não existia NENHUM registro, então a conciliação
+// do extrato não tinha "Pendente" pra casar com os Pix recebidos e o "quanto devo" da Gabi
+// e da Talita (65% do recebido no mês) dava zero. Esta rota cria os registros Pendente do
+// mês a partir do cadastro de Alunas (Ativa/Ativo/Férias, só professores do controle de
+// pagamento). Idempotente: pula aluna que já tem registro no mês (por relation ou por nome).
+
+const REC_STATUS_ALUNA_GERA = ['Ativa', 'Ativo', 'Férias'];
+
+async function recListarAlunasParaMes() {
+  const professoresControle = new Set([...Object.keys(VALOR_AULA_PROFESSOR), ...Object.keys(PERCENTUAL_PROFESSOR)]);
+  const alunas = [];
+  let cursor;
+  do {
+    const body = {
+      page_size: 100,
+      filter: { or: REC_STATUS_ALUNA_GERA.map(s => ({ property: 'Status', select: { equals: s } })) },
+    };
+    if (cursor) body.start_cursor = cursor;
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error('Erro ao buscar alunas: ' + JSON.stringify(d));
+    for (const pagina of d.results) {
+      const p = pagina.properties;
+      const professor = p['Professor']?.select?.name || null;
+      if (!professor || !professoresControle.has(professor)) continue;
+      alunas.push({
+        id: pagina.id,
+        nome: p['Nome']?.title?.[0]?.plain_text || '',
+        professor,
+        turma: p['Turma']?.select?.name || null,
+        modalidade: p['Modalidade']?.select?.name || null,
+        plano: p['Plano']?.select?.name || null,
+        status: p['Status']?.select?.name || null,
+        valor: p['Valor']?.number ?? null,
+      });
+    }
+    cursor = d.has_more ? d.next_cursor : null;
+  } while (cursor);
+  return alunas;
+}
+
+// Monta a proposta de registros pro mês: o que criar, o que já existe, o que fica de fora.
+async function recMontarPropostaMes(mes) {
+  const [alunas, existentes] = await Promise.all([
+    recListarAlunasParaMes(),
+    pgtBuscarRegistros({ property: 'Mês', select: { equals: mes } }),
+  ]);
+  const idsExistentes = new Set(existentes.map(e => e.alunaId).filter(Boolean));
+  const nomesExistentes = new Set(existentes.map(e => pgtNormalizar(pgtStripParentetico(e.nome))));
+
+  const criar = [];
+  const jaExistem = [];
+  const ignoradas = [];
+  for (const a of alunas) {
+    if (idsExistentes.has(a.id) || nomesExistentes.has(pgtNormalizar(pgtStripParentetico(a.nome)))) {
+      jaExistem.push(a);
+      continue;
+    }
+    // Plano sem mensalidade não gera cobrança.
+    if (['Experimental', 'Avulso', 'Workshop'].includes(a.plano)) {
+      ignoradas.push({ ...a, motivo: `plano ${a.plano}` });
+      continue;
+    }
+    // Sem Valor no cadastro = não é pagante (equipe/professores matriculados na turma
+    // do André, por exemplo). Não gera cobrança — fica na lista de ignoradas pra revisão.
+    if (a.valor === null || a.valor === undefined) {
+      ignoradas.push({ ...a, motivo: 'sem Valor no cadastro' });
+      continue;
+    }
+    let status = 'Pendente';
+    let aPagar = a.valor;
+    if (a.status === 'Férias') { status = 'Férias'; aPagar = 0; }
+    else if (a.plano === 'Gratuito' || a.valor === 0) { status = 'Isento'; aPagar = 0; }
+    criar.push({ ...a, statusRegistro: status, aPagar });
+  }
+  criar.sort((x, y) => (x.professor + x.nome).localeCompare(y.professor + y.nome, 'pt-BR'));
+  return { criar, jaExistem, ignoradas };
+}
+
+// POST /portal-admin/recebimentos/gerar-mes { mes: 'Set/26', confirmar?: true }
+// Sem confirmar: só devolve a prévia. Com confirmar: cria os registros e devolve o resultado.
+app.post('/portal-admin/recebimentos/gerar-mes', async (req, res) => {
+  try {
+    const { mes, confirmar } = req.body || {};
+    if (!mes || !REP_MESES_ORDEM.includes(mes)) {
+      return res.status(400).json({ ok: false, erro: 'mes inválido (ex: Set/26).' });
+    }
+    const proposta = await recMontarPropostaMes(mes);
+    if (!confirmar) {
+      return res.json({ ok: true, mes, previa: true, ...proposta });
+    }
+
+    let criados = 0;
+    const erros = [];
+    for (const a of proposta.criar) {
+      const properties = {
+        'Nome': { title: [{ text: { content: a.nome } }] },
+        'Professor': { select: { name: a.professor } },
+        'Mês': { select: { name: mes } },
+        'Status': { select: { name: a.statusRegistro } },
+        'Aluna': { relation: [{ id: a.id }] },
+      };
+      if (a.aPagar !== null && a.aPagar !== undefined) properties['À Pagar'] = { number: a.aPagar };
+      if (a.turma) properties['Turma'] = { select: { name: a.turma } };
+      if (a.modalidade) properties['Modalidade'] = { select: { name: a.modalidade } };
+      const r = await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent: { database_id: RECEBIMENTOS_DB }, properties }),
+      });
+      if (r.ok) {
+        criados++;
+      } else {
+        const d = await r.json();
+        console.error('[portal-admin/recebimentos/gerar-mes] erro:', a.nome, JSON.stringify(d));
+        erros.push(a.nome);
+      }
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+    res.json({ ok: true, mes, previa: false, criados, erros, jaExistem: proposta.jaExistem.length, ignoradas: proposta.ignoradas.length });
+  } catch (err) {
+    console.error('[portal-admin/recebimentos/gerar-mes] erro:', err.message);
+    res.status(500).json({ ok: false, erro: 'Erro ao gerar mensalidades do mês.' });
+  }
+});
+
 // ---------- Lembretes de cobrança por WhatsApp (disparo manual) ----------
 
 function pgtMontarMensagemLembrete(registro) {
