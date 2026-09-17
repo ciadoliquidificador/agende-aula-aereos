@@ -5001,16 +5001,17 @@ async function recMontarPropostaMes(mes) {
       ignoradas.push({ ...a, motivo: `plano ${a.plano}` });
       continue;
     }
-    // Sem Valor no cadastro = não é pagante (equipe/professores matriculados na turma
-    // do André, por exemplo). Não gera cobrança — fica na lista de ignoradas pra revisão.
-    if (a.valor === null || a.valor === undefined) {
-      ignoradas.push({ ...a, motivo: 'sem Valor no cadastro' });
-      continue;
-    }
     let status = 'Pendente';
     let aPagar = a.valor;
     if (a.status === 'Férias') { status = 'Férias'; aPagar = 0; }
     else if (a.plano === 'Gratuito' || a.valor === 0) { status = 'Isento'; aPagar = 0; }
+    // Pagante sem Valor no cadastro = na prática não é pagante (equipe/professores
+    // matriculados na turma do André, por exemplo). Não gera cobrança — fica na lista
+    // de ignoradas pra revisão.
+    else if (a.valor === null || a.valor === undefined) {
+      ignoradas.push({ ...a, motivo: 'sem Valor no cadastro' });
+      continue;
+    }
     criar.push({ ...a, statusRegistro: status, aPagar });
   }
   criar.sort((x, y) => (x.professor + x.nome).localeCompare(y.professor + y.nome, 'pt-BR'));
