@@ -4790,9 +4790,11 @@ function nomesCompativeisPorToken(nomeA, nomeB) {
   return menor.every(tA => maior.some(tB => tB === tA || tB.startsWith(tA) || tA.startsWith(tB)));
 }
 
-// Mapa alunaId -> miolo do CPF (dígitos 4–9, o único trecho que o extrato Nubank mostra:
-// "•••.268.878-••"). Usado pra ligar um Pix a pendentes de OUTRA aluna cadastrada com o
-// mesmo CPF (responsável pagando pela filha, ex: Karoline Rempel → Maria Flor).
+// Mapa alunaId -> Set de miolos de CPF (dígitos 4–9, o único trecho que o extrato Nubank
+// mostra: "•••.268.878-••"). Entram o `CPF` do cadastro e os miolos listados em
+// `CPF Pagador (Pix)` (ex: "217.348 (Paula Mouzinho), 019.488 (Ana Chã)") — quem paga pela
+// aluna sem ter o CPF dela no cadastro. Usado pra ligar um Pix a pendentes de OUTRA pessoa
+// (responsável pagando pela filha, ex: Karoline Rempel → Maria Flor).
 async function pgtMapaCpfAlunas() {
   const mapa = new Map();
   let cursor;
@@ -4807,8 +4809,12 @@ async function pgtMapaCpfAlunas() {
     const d = await r.json();
     if (!r.ok) throw new Error('Erro ao buscar alunas: ' + JSON.stringify(d));
     for (const pagina of d.results) {
+      const miolos = new Set();
       const cpf = String(pagina.properties['CPF']?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
-      if (cpf.length === 11) mapa.set(pagina.id, cpf.slice(3, 9));
+      if (cpf.length === 11) miolos.add(cpf.slice(3, 9));
+      const pagadores = (pagina.properties['CPF Pagador (Pix)']?.rich_text || []).map(t => t.plain_text).join('');
+      for (const m of pagadores.matchAll(/(\d{3})\.?(\d{3})/g)) miolos.add(m[1] + m[2]);
+      if (miolos.size > 0) mapa.set(pagina.id, miolos);
     }
     cursor = d.has_more ? d.next_cursor : null;
   } while (cursor);
@@ -4905,7 +4911,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
     if (!mapaCpf) mapaCpf = await pgtMapaCpfAlunas();
     const miolo = tx.cpfParcial.replace(/\D/g, '');
     const ids = new Set(jaListados.map(p => p.id));
-    return pendentes.filter(p => !usados.has(p.id) && !ids.has(p.id) && p.alunaId && mapaCpf.get(p.alunaId) === miolo);
+    return pendentes.filter(p => !usados.has(p.id) && !ids.has(p.id) && p.alunaId && mapaCpf.get(p.alunaId)?.has(miolo));
   }
 
   // Segunda trava, pra extratos aplicados antes de existir o Identificador Pix: já há Pago
@@ -4918,7 +4924,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
       if (!mapaCpf) mapaCpf = await pgtMapaCpfAlunas();
       const miolo = tx.cpfParcial.replace(/\D/g, '');
       const ids = new Set(dela.map(r => r.id));
-      dela = dela.concat(mesmaData.filter(r => !ids.has(r.id) && r.alunaId && mapaCpf.get(r.alunaId) === miolo));
+      dela = dela.concat(mesmaData.filter(r => !ids.has(r.id) && r.alunaId && mapaCpf.get(r.alunaId)?.has(miolo)));
     }
     if (dela.length === 0) return false;
     if (dela.some(r => Math.abs(r.valorPago - tx.valor) < 0.005)) return true;
