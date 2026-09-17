@@ -263,6 +263,7 @@ async function enviarWhatsAppComHorarioComercial(numero, texto) {
 }
 
 const FILA_MENSAGENS_DB = '633583f0-c5b0-4e4c-81a0-48fdbd3db891';
+const FILA_MAX_TENTATIVAS = 5;
 
 async function agendarMensagemFila(numero, texto, enviarEmISO) {
   await fetch('https://api.notion.com/v1/pages', {
@@ -290,6 +291,7 @@ setInterval(async () => {
       body: JSON.stringify({
         filter: { and: [
           { property: 'Enviado', checkbox: { equals: false } },
+          { property: 'Falhou', checkbox: { equals: false } },
           { property: 'Enviar Em', date: { on_or_before: agora } },
         ]},
         page_size: 20,
@@ -299,20 +301,35 @@ setInterval(async () => {
     for (const page of (d.results || [])) {
       const numero = page.properties['Número']?.rich_text?.[0]?.plain_text || '';
       const texto = page.properties['Texto']?.rich_text?.[0]?.plain_text || '';
+      const tentativasAntes = page.properties['Tentativas']?.number || 0;
+      // Só marca Enviado depois que o Digisac aceitou de fato. Se falhar, registra
+      // a tentativa e deixa na fila pra tentar de novo no próximo ciclo (60s);
+      // depois de FILA_MAX_TENTATIVAS desiste e marca Falhou, pra não ficar
+      // batendo num número inválido pra sempre.
+      let propsAtualizar;
       try {
-        if (numero && texto) await enviarWhatsApp(numero, texto);
+        if (!numero || !texto) throw new Error('registro sem Número ou Texto');
+        await enviarWhatsApp(numero, texto);
         console.log('[fila-mensagens] enviada para ' + numero);
+        propsAtualizar = { 'Enviado': { checkbox: true } };
       } catch (e) {
-        console.error('[fila-mensagens] erro ao enviar para ' + numero + ':', e.message);
+        const tentativas = tentativasAntes + 1;
+        const desistiu = tentativas >= FILA_MAX_TENTATIVAS;
+        console.error('[fila-mensagens] erro ao enviar para ' + numero + ' (tentativa ' + tentativas + '/' + FILA_MAX_TENTATIVAS + (desistiu ? ', desistindo' : '') + '):', e.message);
+        propsAtualizar = {
+          'Tentativas': { number: tentativas },
+          'Último Erro': { rich_text: [{ text: { content: String(e.message || e).slice(0, 1900) } }] },
+          'Falhou': { checkbox: desistiu },
+        };
       }
       try {
         await fetch('https://api.notion.com/v1/pages/' + page.id, {
           method: 'PATCH',
           headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ properties: { 'Enviado': { checkbox: true } } }),
+          body: JSON.stringify({ properties: propsAtualizar }),
         });
       } catch (e) {
-        console.error('[fila-mensagens] erro ao marcar como enviada:', e.message);
+        console.error('[fila-mensagens] erro ao atualizar registro da fila:', e.message);
       }
     }
   } catch (e) {
