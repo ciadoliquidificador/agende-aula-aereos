@@ -4789,6 +4789,28 @@ function nomesCompativeisPorToken(nomeA, nomeB) {
   return menor.every(tA => maior.some(tB => tB === tA || tB.startsWith(tA) || tA.startsWith(tB)));
 }
 
+// Acha o subconjunto (2+ itens) de pendentes cuja soma de aPagar bate com o valor do Pix.
+// Prefere menos parcelas e, em empate, os meses mais antigos. Devolve null se não houver.
+function pgtCombinacaoQueSoma(pendentes, alvo, mesesOrdem) {
+  const lista = pendentes.filter(p => typeof p.aPagar === 'number' && p.aPagar > 0).slice(0, 14);
+  const n = lista.length;
+  if (n < 2) return null;
+  const achadas = [];
+  for (let mask = 1; mask < (1 << n); mask++) {
+    const itens = [];
+    let soma = 0;
+    for (let i = 0; i < n; i++) if (mask & (1 << i)) { itens.push(lista[i]); soma += lista[i].aPagar; }
+    if (itens.length < 2) continue;
+    if (Math.abs(soma - alvo) < 0.005) achadas.push(itens);
+  }
+  if (achadas.length === 0) return null;
+  const peso = itens => itens.reduce((acc, p) => acc + mesesOrdem.indexOf(p.mes), 0);
+  achadas.sort((a, b) => (a.length - b.length) || (peso(a) - peso(b)));
+  const melhor = achadas[0];
+  const empatadas = achadas.filter(a => a.length === melhor.length).length;
+  return { itens: melhor, ambiguo: empatadas > 1 };
+}
+
 // Analisa um extrato Nubank e cruza os RECEBIMENTOS (Pix recebido) com pagamentos "Pendente"
 // por nome+valor. Não grava nada — só devolve os matches propostos.
 async function pgtAnalisarExtratoRecebimentos(csv) {
@@ -4853,6 +4875,29 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
     const candidatosValor = candidatosNome.filter(p => p.aPagar === tx.valor);
 
     if (candidatosValor.length === 0) {
+      // Um Pix só cobrindo mais de um Pendente (aluna em duas turmas no mesmo mês, ou dois
+      // meses de uma vez): procura a combinação de pendentes dela cuja soma bate com o valor.
+      // Poucos candidatos por aluna, então força bruta em subconjuntos é suficiente.
+      const combinacao = pgtCombinacaoQueSoma(candidatosNome, tx.valor, MESES_ORDEM);
+      if (combinacao) {
+        for (const p of combinacao.itens) {
+          usados.add(p.id);
+          conciliados.push({
+            pendenteId: p.id,
+            data: tx.data,
+            valor: p.aPagar,
+            valorPix: tx.valor,
+            partes: combinacao.itens.length,
+            nomeExtrato: tx.nome,
+            nomeNotion: p.nome,
+            professor: p.professor,
+            turma: p.turma,
+            mes: p.mes,
+            ambiguo: combinacao.ambiguo,
+          });
+        }
+        continue;
+      }
       valorNaoBate.push({ ...tx, pendentesDela: candidatosNome.map(c => ({ mes: c.mes, aPagar: c.aPagar })) });
       continue;
     }
