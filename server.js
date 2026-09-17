@@ -4789,6 +4789,31 @@ function nomesCompativeisPorToken(nomeA, nomeB) {
   return menor.every(tA => maior.some(tB => tB === tA || tB.startsWith(tA) || tA.startsWith(tB)));
 }
 
+// Mapa alunaId -> miolo do CPF (dígitos 4–9, o único trecho que o extrato Nubank mostra:
+// "•••.268.878-••"). Usado pra ligar um Pix a pendentes de OUTRA aluna cadastrada com o
+// mesmo CPF (responsável pagando pela filha, ex: Karoline Rempel → Maria Flor).
+async function pgtMapaCpfAlunas() {
+  const mapa = new Map();
+  let cursor;
+  do {
+    const body = { page_size: 100 };
+    if (cursor) body.start_cursor = cursor;
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error('Erro ao buscar alunas: ' + JSON.stringify(d));
+    for (const pagina of d.results) {
+      const cpf = String(pagina.properties['CPF']?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
+      if (cpf.length === 11) mapa.set(pagina.id, cpf.slice(3, 9));
+    }
+    cursor = d.has_more ? d.next_cursor : null;
+  } while (cursor);
+  return mapa;
+}
+
 // Acha o subconjunto (2+ itens) de pendentes cuja soma de aPagar bate com o valor do Pix.
 // Prefere menos parcelas e, em empate, os meses mais antigos. Devolve null se não houver.
 function pgtCombinacaoQueSoma(pendentes, alvo, mesesOrdem) {
@@ -4863,13 +4888,31 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
   const conciliados = [];
   const valorNaoBate = [];
   const semCandidato = [];
+  let mapaCpf = null; // carregado sob demanda, só se algum Pix precisar
+
+  // Pendentes de alunas cadastradas com o mesmo CPF do pagador (miolo que o Pix mostra),
+  // fora os que já entraram pelo nome. Cobre responsável pagando pela filha num Pix só.
+  async function candidatosPorCpf(tx, jaListados) {
+    if (!tx.cpfParcial) return [];
+    if (!mapaCpf) mapaCpf = await pgtMapaCpfAlunas();
+    const miolo = tx.cpfParcial.replace(/\D/g, '');
+    const ids = new Set(jaListados.map(p => p.id));
+    return pendentes.filter(p => !usados.has(p.id) && !ids.has(p.id) && p.alunaId && mapaCpf.get(p.alunaId) === miolo);
+  }
 
   for (const tx of transacoes) {
-    const candidatosNome = candidatosPorNome(tx.nome).filter(p => !usados.has(p.id));
+    let candidatosNome = candidatosPorNome(tx.nome).filter(p => !usados.has(p.id));
+    let viaCpf = false;
 
     if (candidatosNome.length === 0) {
-      semCandidato.push(tx);
-      continue;
+      // Nome não bateu com ninguém (ex: mãe que não é aluna pagando pela filha) — tenta pelo CPF.
+      const porCpf = await candidatosPorCpf(tx, []);
+      if (porCpf.length === 0) {
+        semCandidato.push(tx);
+        continue;
+      }
+      candidatosNome = porCpf;
+      viaCpf = true;
     }
 
     const candidatosValor = candidatosNome.filter(p => p.aPagar === tx.valor);
@@ -4878,7 +4921,16 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
       // Um Pix só cobrindo mais de um Pendente (aluna em duas turmas no mesmo mês, ou dois
       // meses de uma vez): procura a combinação de pendentes dela cuja soma bate com o valor.
       // Poucos candidatos por aluna, então força bruta em subconjuntos é suficiente.
-      const combinacao = pgtCombinacaoQueSoma(candidatosNome, tx.valor, MESES_ORDEM);
+      let combinacao = pgtCombinacaoQueSoma(candidatosNome, tx.valor, MESES_ORDEM);
+      if (!combinacao) {
+        // Responsável pagando por mais de uma aluna num Pix só: amplia com os pendentes de
+        // quem está cadastrada com o mesmo CPF do pagador.
+        const porCpf = await candidatosPorCpf(tx, candidatosNome);
+        if (porCpf.length > 0) {
+          combinacao = pgtCombinacaoQueSoma([...candidatosNome, ...porCpf], tx.valor, MESES_ORDEM);
+          if (combinacao) viaCpf = true;
+        }
+      }
       if (combinacao) {
         for (const p of combinacao.itens) {
           usados.add(p.id);
@@ -4888,6 +4940,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
             valor: p.aPagar,
             valorPix: tx.valor,
             partes: combinacao.itens.length,
+            viaCpf,
             nomeExtrato: tx.nome,
             nomeNotion: p.nome,
             professor: p.professor,
@@ -4914,6 +4967,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
       professor: escolhido.professor,
       turma: escolhido.turma,
       mes: escolhido.mes,
+      viaCpf,
       ambiguo: candidatosValor.length > 1,
     });
   }
