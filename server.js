@@ -5574,8 +5574,10 @@ async function pagCalcularAulasMesAtual(nome) {
       // Turma sem aluna ativa para de contar aula regular a partir da data em que
       // zerou (não retroage). Só volta a contar num dia específico se tiver aula
       // experimental agendada exatamente pra essa data — se a aluna não virar
-      // Ativa, não conta mais nada depois disso.
-      if (!turma.ativa && turma.inativaDesde && dataStr >= turma.inativaDesde && !ehDiaExperimental) continue;
+      // Ativa, não conta mais nada depois disso. Turma inativa SEM "Inativa Desde"
+      // (desmarcada à mão no Notion) não conta nada — antes caía como ativa e gerou
+      // 8 aulas "devidas" pra Giulia em turmas de Yoga que nunca abriram (set/2026).
+      if (!turma.ativa && !ehDiaExperimental && (!turma.inativaDesde || dataStr >= turma.inativaDesde)) continue;
 
       if (feriadosDoAno.has(dataStr) && decisaoPorData[dataStr] !== 'Mantém a aula') continue;
       totalAulas++;
