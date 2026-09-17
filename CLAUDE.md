@@ -89,6 +89,16 @@ Duas mensagens agendadas (fila Notion-backed, nunca `scheduledAt` do Digisac) pr
 
 Implementado em `agendarLembretesProdutor(pageId)` (server.js), chamado a partir dos 3 gatilhos que já existem pra Apresentações (`/webhook-apresentacao-notion`, `/webhook-apresentacao-escalacao`, `/webhook-proposta-aprovada`) — `/webhook-apresentacao-escalacao` é o mais confiável, pois dispara exatamente quando Produção Liqui é definida. Idempotente via checkbox `Lembretes Produtor Agendados` (propriedade já adicionada ao molde 2026 e ao teste 2027 — bancos novos herdam automaticamente) **+ trava em memória por pageId** (ver regra 12 acima — sem ela, os 3 gatilhos disparando quase juntos duplicavam a mensagem). Não agenda nada se a apresentação já aconteceu há mais de 2h (edição tardia de registro antigo não deve gerar lembrete fora de hora) ou se o produtor não tem telefone/DDD válido cadastrado no Integrantes.
 
+## Conciliação de recebimentos pelo extrato (portal admin, set/2026)
+
+`pgtAnalisarExtratoRecebimentos` (server.js) cruza os Pix recebidos do extrato Nubank com os Recebimentos `Pendente`. Ordem de tentativa por Pix:
+
+1. Nome bate + um Pendente com valor exato.
+2. Nome bate, mas o Pix é a **soma de vários Pendentes** da mesma aluna (duas turmas no mesmo mês, ou dois meses juntos) — `pgtCombinacaoQueSoma`, força bruta em subconjuntos, prefere menos parcelas e meses mais antigos. Cada parte vira um item próprio na tela, com seu valor.
+3. Ainda não fechou → amplia pelo **CPF do pagador**: o extrato mostra só o miolo (`•••.688.788-••` = dígitos 4–9), que é comparado com o `CPF` de Alunas (`pgtMapaCpfAlunas`). Cobre responsável pagando pela filha num Pix só (Karoline 93 + Maria Flor 207 = 300) e pagador que nem é aluna. **Pra isso funcionar, a criança precisa estar cadastrada com o CPF do responsável** — é o único elo.
+
+Só o que sobrar cai em "Valor não bate". Se cair, o mais comum é **cadastro errado em Alunas → Valor** (preço do mensal num plano anual/semestral): `gerar-mes` copia esse campo, então corrigir em Alunas e no Pendente do mês. Conferir o histórico de `Valor Pago` dos meses anteriores da aluna antes de mexer.
+
 ## Disparos de e-mail (portal admin, set/2026)
 
 Tela `disparos.html` (portal admin) + bloco `PORTAL ADMIN — DISPAROS DE E-MAIL` no server.js. Público vem do **CRM de vendas** no Notion, que fica em outro token: `CRM_NOTION_TOKEN` (mesmo token da triagem de e-mail, integração "Triagem Email CRM") — o `NOTION_TOKEN` normal não enxerga esses bancos. IDs de *database* (não de data source): 📧 Contatos `c7d34260-f3d4-4aac-83c5-cd4ce292c5fa`, 🏛️ Locais `ed6c88ae-05d5-4309-a4b8-76ac23b16327`, 📨 Disparos de E-mail `a3405e65-7376-4cb9-8490-7b2a32f948f1` (log, uma linha por contato por campanha).
