@@ -95,7 +95,8 @@ Implementado em `agendarLembretesProdutor(pageId)` (server.js), chamado a partir
 
 1. Nome bate + um Pendente com valor exato.
 2. Nome bate, mas o Pix é a **soma de vários Pendentes** da mesma aluna (duas turmas no mesmo mês, ou dois meses juntos) — `pgtCombinacaoQueSoma`, força bruta em subconjuntos, prefere menos parcelas e meses mais antigos. Cada parte vira um item próprio na tela, com seu valor.
-3. Ainda não fechou → amplia pelo **CPF do pagador**: o extrato mostra só o miolo (`•••.688.788-••` = dígitos 4–9), que é comparado com o `CPF` de Alunas (`pgtMapaCpfAlunas`). Cobre responsável pagando pela filha num Pix só (Karoline 93 + Maria Flor 207 = 300) e pagador que nem é aluna. **Pra isso funcionar, a criança precisa estar cadastrada com o CPF do responsável** — é o único elo.
+3. Ainda não fechou → amplia pelo **CPF do pagador**: o extrato mostra só o miolo (`•••.688.788-••` = dígitos 4–9), comparado com o `CPF` de Alunas **e** com a coluna `CPF Pagador (Pix)` (texto livre com um ou mais miolos, ex: `217.348 (Paula Mouzinho)`) — `pgtMapaCpfAlunas`. Cobre responsável pagando pela filha num Pix só (Karoline 93 + Maria Flor 207 = 300) e pagador que nem é aluna. Quando a mãe não manda o CPF, basta copiar o miolo do extrato pra `CPF Pagador (Pix)` da criança.
+4. Idempotência: `Identificador Pix` (id único do Nubank) gravado ao aplicar + trava "mesma pessoa, mesma data, valor pago ≥ 90% do Pix" pros lançamentos antigos. Subir o mesmo extrato duas vezes (ou um que inclua o mês anterior) não casa de novo — aparece em "🔁 Já aplicados". Isso já aconteceu (set/2026: extrato de agosto casou 16 Set/26) antes da trava existir.
 
 Só o que sobrar cai em "Valor não bate". Se cair, o mais comum é **cadastro errado em Alunas → Valor** (preço do mensal num plano anual/semestral): `gerar-mes` copia esse campo, então corrigir em Alunas e no Pendente do mês. Conferir o histórico de `Valor Pago` dos meses anteriores da aluna antes de mexer.
 
