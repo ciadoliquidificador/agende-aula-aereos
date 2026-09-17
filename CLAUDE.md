@@ -89,6 +89,15 @@ Duas mensagens agendadas (fila Notion-backed, nunca `scheduledAt` do Digisac) pr
 
 Implementado em `agendarLembretesProdutor(pageId)` (server.js), chamado a partir dos 3 gatilhos que já existem pra Apresentações (`/webhook-apresentacao-notion`, `/webhook-apresentacao-escalacao`, `/webhook-proposta-aprovada`) — `/webhook-apresentacao-escalacao` é o mais confiável, pois dispara exatamente quando Produção Liqui é definida. Idempotente via checkbox `Lembretes Produtor Agendados` (propriedade já adicionada ao molde 2026 e ao teste 2027 — bancos novos herdam automaticamente) **+ trava em memória por pageId** (ver regra 12 acima — sem ela, os 3 gatilhos disparando quase juntos duplicavam a mensagem). Não agenda nada se a apresentação já aconteceu há mais de 2h (edição tardia de registro antigo não deve gerar lembrete fora de hora) ou se o produtor não tem telefone/DDD válido cadastrado no Integrantes.
 
+## Disparos de e-mail (portal admin, set/2026)
+
+Tela `disparos.html` (portal admin) + bloco `PORTAL ADMIN — DISPAROS DE E-MAIL` no server.js. Público vem do **CRM de vendas** no Notion, que fica em outro token: `CRM_NOTION_TOKEN` (mesmo token da triagem de e-mail, integração "Triagem Email CRM") — o `NOTION_TOKEN` normal não enxerga esses bancos. IDs de *database* (não de data source): 📧 Contatos `c7d34260-f3d4-4aac-83c5-cd4ce292c5fa`, 🏛️ Locais `ed6c88ae-05d5-4309-a4b8-76ac23b16327`, 📨 Disparos de E-mail `a3405e65-7376-4cb9-8490-7b2a32f948f1` (log, uma linha por contato por campanha).
+
+- Envio pelo SMTP Locaweb do `contato@cialiquidificador.com.br` (vars `DISPARO_SMTP_USER/PASS/SMTP_HOST/SMTP_PORT`, porta 465). **Um e-mail individual por contato, nunca CCO**, intervalo `DISPARO_INTERVALO_MS` (60s) ±15s. Fila em memória (1 réplica); se o Railway reiniciar no meio, reenviar a campanha **com o mesmo nome** pula quem já consta como Enviado.
+- Limites decididos pelo Fábio: **3 MB total** (html + imagens embutidas + anexos, já em base64) e **2 MB por anexo** — estourou, não envia. Imagem colada no editor vira anexo inline `cid:` (Gmail descarta data:URI).
+- Rotas exigem sessão admin via header `X-Admin-Token` (`verificarSessao`). Público sempre deduplicado por e-mail (`casasdecultura@` tem 20 linhas) e ignora `Status do E-mail` preenchido (bounce).
+- Exclusão pedida pelo Fábio: nunca cadastrar/disparar pra `@semparedescultural.com.br` (Paula Simões, produtora intermediária).
+
 ## Apps ativos
 
 | App | URL | FTP path |
