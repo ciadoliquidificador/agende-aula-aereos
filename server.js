@@ -8,7 +8,7 @@ app.use(express.json({ limit: '60mb' }));
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Token');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -5524,6 +5524,448 @@ app.get('/portal-admin/pagamentos/devido', async (req, res) => {
   }
 });
 // ===== FIM PORTAL ADMIN — PAGAMENTOS (professores) =====
+
+// ===== PORTAL ADMIN — DISPAROS DE E-MAIL (campanhas pro CRM de vendas) =====
+//
+// Público vem do CRM de vendas no Notion (📧 Contatos de Venda / 🏛️ Locais de Venda), que
+// fica em OUTRO workspace-token (o da triagem de e-mail, CRM_NOTION_TOKEN) — o NOTION_TOKEN
+// normal do server.js não enxerga esses bancos. Envio pelo SMTP do contato@ (Locaweb), um
+// e-mail individual por contato (nunca CCO em massa), com intervalo de ~1 min entre envios
+// pra não cair em filtro de spam, e cada envio vira uma linha em 📨 Disparos de E-mail.
+//
+// Limites de tamanho (decisão do Fábio, set/2026): o tamanho TOTAL do e-mail (html + imagens
+// embutidas + anexos) tem teto — estourou, não envia e a tela pede revisão. Anexo individual
+// também tem teto. Tudo contado em bytes já codificados (base64 infla ~37%).
+const nodemailer = require('nodemailer');
+
+const CRM_NOTION_TOKEN = process.env.CRM_NOTION_TOKEN || '';
+const CRM_CONTATOS_DB = 'c7d34260-f3d4-4aac-83c5-cd4ce292c5fa';
+const CRM_LOCAIS_DB = 'ed6c88ae-05d5-4309-a4b8-76ac23b16327';
+const DISPAROS_DB = 'a3405e65-7376-4cb9-8490-7b2a32f948f1';
+
+const DISPARO_INTERVALO_MS = parseInt(process.env.DISPARO_INTERVALO_MS || '60000', 10); // ~1 min
+const DISPARO_JITTER_MS = 15000;                       // ±15s pra não parecer robô
+const DISPARO_MAX_TOTAL_BYTES = 3 * 1024 * 1024;       // 3 MB no total (html + imagens + anexos)
+const DISPARO_MAX_ANEXO_BYTES = 2 * 1024 * 1024;       // 2 MB por anexo
+const DISPARO_REMETENTE_NOME = 'Cia. do Liquidificador';
+
+function crmHeaders() {
+  return { 'Authorization': 'Bearer ' + CRM_NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' };
+}
+
+async function crmChamar(metodo, caminho, body) {
+  const r = await fetch('https://api.notion.com/v1' + caminho, { method: metodo, headers: crmHeaders(), body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json();
+  if (!r.ok) throw new Error(`Notion ${r.status} em ${caminho}: ${d.message || JSON.stringify(d)}`);
+  return d;
+}
+
+async function crmQueryTudo(dbId, filter) {
+  const out = [];
+  let cursor;
+  do {
+    const body = { page_size: 100 };
+    if (filter) body.filter = filter;
+    if (cursor) body.start_cursor = cursor;
+    const d = await crmChamar('POST', `/databases/${dbId}/query`, body);
+    out.push(...d.results);
+    cursor = d.has_more ? d.next_cursor : null;
+  } while (cursor);
+  return out;
+}
+
+function exigirSessaoAdmin(req, res) {
+  const token = req.get('X-Admin-Token') || req.body?.token || '';
+  if (!verificarSessao(token)) {
+    res.status(401).json({ ok: false, erro: 'Sessão inválida ou expirada.' });
+    return false;
+  }
+  return true;
+}
+
+function txt(prop) { return (prop?.rich_text || prop?.title || []).map(t => t.plain_text).join('').trim(); }
+
+let dispCacheLocais = { em: 0, dados: null };
+async function dispCarregarLocais() {
+  if (dispCacheLocais.dados && Date.now() - dispCacheLocais.em < 5 * 60 * 1000) return dispCacheLocais.dados;
+  const paginas = await crmQueryTudo(CRM_LOCAIS_DB, null);
+  const porId = {};
+  for (const p of paginas) {
+    const pr = p.properties;
+    porId[p.id] = {
+      id: p.id,
+      nome: txt(pr['Nome']),
+      categoria: pr['Categoria']?.select?.name || '',
+      regiao: pr['Região']?.select?.name || '',
+      cidade: txt(pr['Cidade']),
+    };
+  }
+  dispCacheLocais = { em: Date.now(), dados: porId };
+  return porId;
+}
+
+// GET /portal-admin/disparos/opcoes — o que dá pra filtrar
+app.get('/portal-admin/disparos/opcoes', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const [schema, locais] = await Promise.all([crmChamar('GET', `/databases/${CRM_CONTATOS_DB}`), dispCarregarLocais()]);
+    const opcoes = (nome) => (schema.properties[nome]?.select?.options || schema.properties[nome]?.multi_select?.options || []).map(o => o.name);
+    const categorias = [...new Set(Object.values(locais).map(l => l.categoria).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    const regioes = [...new Set(Object.values(locais).map(l => l.regiao).filter(Boolean))].sort();
+    const listaLocais = Object.values(locais).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    res.json({
+      ok: true,
+      categorias, regioes,
+      funcoes: opcoes('Função'),
+      interesses: opcoes('Tipo de Interesse'),
+      relevancias: opcoes('Relevância p/ Cia'),
+      locais: listaLocais,
+      limites: { totalBytes: DISPARO_MAX_TOTAL_BYTES, anexoBytes: DISPARO_MAX_ANEXO_BYTES, intervaloMs: DISPARO_INTERVALO_MS },
+      remetente: process.env.DISPARO_SMTP_USER || '',
+    });
+  } catch (err) {
+    console.error('[portal-admin/disparos/opcoes] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// Monta o público a partir dos filtros. Regras fixas: só contato com e-mail, nunca e-mail
+// marcado como inválido (bounce), e DEDUPLICADO por e-mail — casasdecultura@ tem 20 linhas
+// (uma por Casa) e receberia 20 cópias sem isso.
+async function dispMontarPublico(f) {
+  const locais = await dispCarregarLocais();
+  const and = [{ property: 'E-mail', email: { is_not_empty: true } }];
+  if (f.funcoes?.length) and.push({ or: f.funcoes.map(v => ({ property: 'Função', select: { equals: v } })) });
+  if (f.interesses?.length) and.push({ or: f.interesses.map(v => ({ property: 'Tipo de Interesse', multi_select: { contains: v } })) });
+  if (f.relevancias?.length) and.push({ or: f.relevancias.map(v => ({ property: 'Relevância p/ Cia', select: { equals: v } })) });
+  const paginas = await crmQueryTudo(CRM_CONTATOS_DB, { and });
+
+  const categorias = new Set(f.categorias || []);
+  const regioes = new Set(f.regioes || []);
+  const excluirLocais = new Set(f.excluirLocais || []);
+  const excluirContatos = new Set(f.excluirContatos || []);
+  const excluirEmails = new Set((f.excluirEmails || []).map(e => e.trim().toLowerCase()).filter(Boolean));
+
+  const candidatos = [];
+  const fora = { semLocal: 0, categoria: 0, regiao: 0, excluidoLocal: 0, excluidoContato: 0, excluidoEmail: 0, invalido: 0, duplicado: 0 };
+  for (const p of paginas) {
+    const pr = p.properties;
+    const email = (pr['E-mail']?.email || '').trim().toLowerCase();
+    if (!email) continue;
+    if (pr['Status do E-mail']?.select?.name) { fora.invalido++; continue; }
+    const localIds = (pr['Local']?.relation || []).map(r => r.id);
+    const locaisDele = localIds.map(id => locais[id]).filter(Boolean);
+    if ((categorias.size || regioes.size) && locaisDele.length === 0) { fora.semLocal++; continue; }
+    if (categorias.size && !locaisDele.some(l => categorias.has(l.categoria))) { fora.categoria++; continue; }
+    if (regioes.size && !locaisDele.some(l => regioes.has(l.regiao))) { fora.regiao++; continue; }
+    if (localIds.some(id => excluirLocais.has(id))) { fora.excluidoLocal++; continue; }
+    if (excluirContatos.has(p.id)) { fora.excluidoContato++; continue; }
+    if (excluirEmails.has(email)) { fora.excluidoEmail++; continue; }
+    candidatos.push({
+      id: p.id,
+      nome: txt(pr['Nome do Contato']),
+      email,
+      funcao: pr['Função']?.select?.name || '',
+      local: locaisDele.map(l => l.nome).join(' / '),
+      localIds,
+      interesses: (pr['Tipo de Interesse']?.multi_select || []).map(o => o.name),
+    });
+  }
+  // dedupe por e-mail (fica o primeiro; os outros viram "duplicado")
+  const vistos = new Map();
+  for (const c of candidatos) {
+    if (vistos.has(c.email)) { fora.duplicado++; vistos.get(c.email).local += ' / ' + c.local; continue; }
+    vistos.set(c.email, c);
+  }
+  const publico = [...vistos.values()].sort((a, b) => (a.local + a.nome).localeCompare(b.local + b.nome, 'pt-BR'));
+  return { publico, fora, totalFiltrados: paginas.length };
+}
+
+// POST /portal-admin/disparos/publico { categorias, regioes, funcoes, interesses, relevancias, excluirLocais, excluirContatos, excluirEmails }
+app.post('/portal-admin/disparos/publico', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const r = await dispMontarPublico(req.body || {});
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    console.error('[portal-admin/disparos/publico] erro:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// ---------- montagem do e-mail ----------
+
+function dispPersonalizar(texto, contato) {
+  const primeiro = (contato.nome || '').split(/[\s—-]+/)[0] || '';
+  return String(texto || '')
+    .replace(/\{nome\}/gi, contato.nome || '')
+    .replace(/\{primeiro_nome\}/gi, primeiro)
+    .replace(/\{local\}/gi, contato.local || '')
+    .replace(/\{email\}/gi, contato.email || '');
+}
+
+function dispHtmlParaTexto(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
+    .replace(/<a [^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gi, '$2 ($1)')
+    .replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Imagens coladas no editor chegam como data:URI (base64). Gmail/Outlook descartam data:URI,
+// então viram anexos inline (cid:) — e entram na conta do tamanho total.
+function dispExtrairImagensInline(html) {
+  const anexos = [];
+  let i = 0;
+  const novoHtml = String(html || '').replace(/src="data:(image\/[a-z0-9.+-]+);base64,([^"]+)"/gi, (m, tipo, b64) => {
+    const cid = `img${++i}@disparo.ciadoliquidificador`;
+    anexos.push({ filename: `imagem-${i}.${tipo.split('/')[1].replace('jpeg', 'jpg')}`, content: Buffer.from(b64, 'base64'), contentType: tipo, cid });
+    return `src="cid:${cid}"`;
+  });
+  return { html: novoHtml, anexos };
+}
+
+// Valida e monta o pacote comum da campanha (html, anexos, tamanhos). Lança erro legível.
+function dispPrepararPacote(body) {
+  const assunto = String(body.assunto || '').trim();
+  if (!assunto) throw new Error('Assunto é obrigatório.');
+  const htmlBruto = String(body.html || '');
+  if (!dispHtmlParaTexto(htmlBruto)) throw new Error('O corpo do e-mail está vazio.');
+
+  const { html, anexos: imagens } = dispExtrairImagensInline(htmlBruto);
+  const anexos = [];
+  for (const a of (body.anexos || [])) {
+    const content = Buffer.from(String(a.base64 || ''), 'base64');
+    if (content.length > DISPARO_MAX_ANEXO_BYTES) {
+      throw new Error(`Anexo "${a.nome}" tem ${(content.length / 1024 / 1024).toFixed(1)} MB — o máximo por anexo é ${(DISPARO_MAX_ANEXO_BYTES / 1024 / 1024)} MB. Mande por link (Drive) em vez de anexar.`);
+    }
+    anexos.push({ filename: String(a.nome || 'anexo'), content, contentType: a.tipo || undefined });
+  }
+  // tamanho como vai na rede: base64 infla ~37%
+  const bytesHtml = Buffer.byteLength(html, 'utf8');
+  const bytesImagens = imagens.reduce((s, a) => s + Math.ceil(a.content.length * 4 / 3), 0);
+  const bytesAnexos = anexos.reduce((s, a) => s + Math.ceil(a.content.length * 4 / 3), 0);
+  const total = bytesHtml + bytesImagens + bytesAnexos;
+  if (total > DISPARO_MAX_TOTAL_BYTES) {
+    throw new Error(`O e-mail ficou com ${(total / 1024 / 1024).toFixed(2)} MB no total (texto ${(bytesHtml / 1024).toFixed(0)} KB + imagens ${(bytesImagens / 1024).toFixed(0)} KB + anexos ${(bytesAnexos / 1024).toFixed(0)} KB). O máximo é ${(DISPARO_MAX_TOTAL_BYTES / 1024 / 1024)} MB — reduza imagens ou troque anexos por link.`);
+  }
+  const rodape = body.rodapeRemover === false ? '' :
+    `<p style="font-size:12px;color:#777;margin-top:28px">Se preferir não receber nossas propostas, responda este e-mail com a palavra <b>remover</b>.</p>`;
+  return { assunto, html: html + rodape, imagens, anexos, tamanho: { html: bytesHtml, imagens: bytesImagens, anexos: bytesAnexos, total } };
+}
+
+let dispTransportador = null;
+function dispTransporte() {
+  if (dispTransportador) return dispTransportador;
+  const port = parseInt(process.env.DISPARO_SMTP_SMTP_PORT || '465', 10);
+  dispTransportador = nodemailer.createTransport({
+    host: process.env.DISPARO_SMTP_SMTP_HOST,
+    port,
+    secure: port === 465,
+    auth: { user: process.env.DISPARO_SMTP_USER, pass: process.env.DISPARO_SMTP_PASS },
+    tls: { rejectUnauthorized: false },
+  });
+  return dispTransportador;
+}
+
+async function dispEnviarUm(pacote, contato) {
+  const remetente = process.env.DISPARO_SMTP_USER;
+  const info = await dispTransporte().sendMail({
+    from: `"${DISPARO_REMETENTE_NOME}" <${remetente}>`,
+    to: contato.nome ? `"${contato.nome.replace(/"/g, '')}" <${contato.email}>` : contato.email,
+    replyTo: remetente,
+    subject: dispPersonalizar(pacote.assunto, contato),
+    html: dispPersonalizar(pacote.html, contato),
+    text: dispHtmlParaTexto(dispPersonalizar(pacote.html, contato)),
+    attachments: [...pacote.imagens, ...pacote.anexos],
+    headers: { 'List-Unsubscribe': `<mailto:${remetente}?subject=remover>` },
+  });
+  return info.messageId;
+}
+
+// ---------- log no Notion ----------
+
+async function dispLogCriar({ campanha, assunto, contato, status, tamanhoKb }) {
+  const props = {
+    'Envio': { title: [{ text: { content: `${contato.nome || contato.email} — ${campanha}`.slice(0, 200) } }] },
+    'Campanha': { rich_text: [{ text: { content: campanha.slice(0, 2000) } }] },
+    'Assunto': { rich_text: [{ text: { content: assunto.slice(0, 2000) } }] },
+    'E-mail': { email: contato.email },
+    'Status': { select: { name: status } },
+    'Tamanho (KB)': { number: Math.round(tamanhoKb) },
+  };
+  if (contato.id) props['Contato'] = { relation: [{ id: contato.id }] };
+  const d = await crmChamar('POST', '/pages', { parent: { database_id: DISPAROS_DB }, properties: props });
+  return d.id;
+}
+
+async function dispLogAtualizar(pageId, { status, erro, messageId }) {
+  const props = { 'Status': { select: { name: status } } };
+  if (status === 'Enviado' || status === 'Teste') props['Data Envio'] = { date: { start: new Date().toISOString() } };
+  if (erro) props['Erro'] = { rich_text: [{ text: { content: String(erro).slice(0, 2000) } }] };
+  if (messageId) props['Message-ID'] = { rich_text: [{ text: { content: String(messageId).slice(0, 2000) } }] };
+  await crmChamar('PATCH', `/pages/${pageId}`, { properties: props });
+}
+
+async function dispMarcarUltimoContato(contatoId) {
+  try {
+    await crmChamar('PATCH', `/pages/${contatoId}`, { properties: { 'Último Contato': { date: { start: new Date().toISOString().slice(0, 10) } } } });
+  } catch (e) { console.error('[disparos] Último Contato:', e.message); }
+}
+
+// Quem já recebeu ESTA campanha (mesmo nome) — pra reenvio depois de restart não duplicar.
+async function dispJaEnviados(campanha) {
+  const rows = await crmQueryTudo(DISPAROS_DB, { and: [
+    { property: 'Campanha', rich_text: { equals: campanha } },
+    { property: 'Status', select: { equals: 'Enviado' } },
+  ]});
+  return new Set(rows.map(r => (r.properties['E-mail']?.email || '').toLowerCase()).filter(Boolean));
+}
+
+// ---------- fila (em memória; 1 réplica no Railway) ----------
+
+const dispFila = { ativa: null, historico: [] };
+// ativa = { id, campanha, assunto, pacote, itens: [{contato, logId, status, erro}], indice, pausada, cancelada, timer, proximoEm, iniciadoEm }
+
+function dispResumo(c) {
+  if (!c) return null;
+  const cont = { enviados: 0, falhas: 0, pendentes: 0, cancelados: 0 };
+  for (const it of c.itens) {
+    if (it.status === 'Enviado') cont.enviados++;
+    else if (it.status === 'Falhou') cont.falhas++;
+    else if (it.status === 'Cancelado') cont.cancelados++;
+    else cont.pendentes++;
+  }
+  return {
+    id: c.id, campanha: c.campanha, assunto: c.assunto, total: c.itens.length, ...cont,
+    pausada: c.pausada, cancelada: c.cancelada, iniciadoEm: c.iniciadoEm, terminadoEm: c.terminadoEm || null,
+    proximoEm: c.proximoEm || null, intervaloMs: DISPARO_INTERVALO_MS,
+    ultimos: c.itens.filter(i => i.status !== 'Na fila').slice(-8).map(i => ({ email: i.contato.email, nome: i.contato.nome, status: i.status, erro: i.erro || null })),
+  };
+}
+
+function dispAgendarProximo(c, atraso) {
+  c.proximoEm = new Date(Date.now() + atraso).toISOString();
+  c.timer = setTimeout(() => dispProcessar(c), atraso);
+}
+
+async function dispProcessar(c) {
+  c.timer = null;
+  if (c.cancelada) return dispEncerrar(c);
+  if (c.pausada) return;
+  const item = c.itens[c.indice];
+  if (!item) return dispEncerrar(c);
+  if (item.status !== 'Na fila') { c.indice++; return dispAgendarProximo(c, 50); }
+  try {
+    const messageId = await dispEnviarUm(c.pacote, item.contato);
+    item.status = 'Enviado';
+    await dispLogAtualizar(item.logId, { status: 'Enviado', messageId });
+    if (item.contato.id) await dispMarcarUltimoContato(item.contato.id);
+  } catch (e) {
+    item.status = 'Falhou'; item.erro = e.message;
+    console.error('[disparos] falha', item.contato.email, e.message);
+    try { await dispLogAtualizar(item.logId, { status: 'Falhou', erro: e.message }); } catch (e2) { console.error('[disparos] log:', e2.message); }
+  }
+  c.indice++;
+  if (c.indice >= c.itens.length) return dispEncerrar(c);
+  const jitter = Math.round((Math.random() * 2 - 1) * DISPARO_JITTER_MS);
+  dispAgendarProximo(c, Math.max(5000, DISPARO_INTERVALO_MS + jitter));
+}
+
+async function dispEncerrar(c) {
+  if (c.timer) { clearTimeout(c.timer); c.timer = null; }
+  c.terminadoEm = new Date().toISOString();
+  c.proximoEm = null;
+  for (const it of c.itens) {
+    if (it.status === 'Na fila') {
+      it.status = 'Cancelado';
+      try { await dispLogAtualizar(it.logId, { status: 'Cancelado' }); } catch (e) { /* segue */ }
+    }
+  }
+  dispFila.historico.unshift(dispResumo(c));
+  dispFila.historico = dispFila.historico.slice(0, 10);
+  if (dispFila.ativa === c) dispFila.ativa = null;
+}
+
+// POST /portal-admin/disparos/teste { assunto, html, anexos, rodapeRemover, para }
+app.post('/portal-admin/disparos/teste', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const pacote = dispPrepararPacote(req.body || {});
+    const para = String(req.body.para || process.env.DISPARO_SMTP_USER || '').trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(para)) throw new Error('E-mail de teste inválido.');
+    const contato = { nome: 'Fábio (teste)', email: para, local: 'Local de exemplo' };
+    const messageId = await dispEnviarUm({ ...pacote, assunto: '[TESTE] ' + pacote.assunto }, contato);
+    try {
+      const logId = await dispLogCriar({ campanha: 'teste', assunto: pacote.assunto, contato, status: 'Teste', tamanhoKb: pacote.tamanho.total / 1024 });
+      await dispLogAtualizar(logId, { status: 'Teste', messageId });
+    } catch (e) { console.error('[disparos/teste] log:', e.message); }
+    res.json({ ok: true, para, tamanho: pacote.tamanho, messageId });
+  } catch (err) {
+    console.error('[portal-admin/disparos/teste] erro:', err.message);
+    res.status(400).json({ ok: false, erro: err.message });
+  }
+});
+
+// POST /portal-admin/disparos/enviar { campanha, assunto, html, anexos, rodapeRemover, contatos: [{id, nome, email, local}] }
+app.post('/portal-admin/disparos/enviar', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    if (dispFila.ativa) return res.status(409).json({ ok: false, erro: 'Já existe um disparo em andamento. Espere terminar ou cancele.' });
+    const body = req.body || {};
+    const campanha = String(body.campanha || '').trim();
+    if (!campanha) throw new Error('Dê um nome pra campanha (ex: "Sesc Programação — Leão e Lenhador — set/2026").');
+    const contatos = Array.isArray(body.contatos) ? body.contatos : [];
+    if (contatos.length === 0) throw new Error('Nenhum contato selecionado.');
+    const pacote = dispPrepararPacote(body);
+
+    // dedupe final por e-mail + pula quem já recebeu esta campanha (restart no meio, reenvio)
+    const jaEnviados = await dispJaEnviados(campanha);
+    const vistos = new Set();
+    const itens = [];
+    let pulados = 0;
+    for (const c of contatos) {
+      const email = String(c.email || '').trim().toLowerCase();
+      if (!email || vistos.has(email)) continue;
+      vistos.add(email);
+      if (jaEnviados.has(email)) { pulados++; continue; }
+      itens.push({ contato: { id: c.id || null, nome: c.nome || '', email, local: c.local || '' }, logId: null, status: 'Na fila', erro: null });
+    }
+    if (itens.length === 0) return res.json({ ok: true, total: 0, pulados, aviso: 'Todo mundo dessa lista já recebeu essa campanha.' });
+
+    for (const it of itens) {
+      it.logId = await dispLogCriar({ campanha, assunto: pacote.assunto, contato: it.contato, status: 'Na fila', tamanhoKb: pacote.tamanho.total / 1024 });
+      await new Promise(r => setTimeout(r, 340));
+    }
+    const c = { id: crypto.randomBytes(6).toString('hex'), campanha, assunto: pacote.assunto, pacote, itens, indice: 0, pausada: false, cancelada: false, timer: null, iniciadoEm: new Date().toISOString() };
+    dispFila.ativa = c;
+    dispAgendarProximo(c, 2000);
+    res.json({ ok: true, id: c.id, total: itens.length, pulados, tamanho: pacote.tamanho, previsaoMin: Math.ceil(itens.length * DISPARO_INTERVALO_MS / 60000) });
+  } catch (err) {
+    console.error('[portal-admin/disparos/enviar] erro:', err.message);
+    res.status(400).json({ ok: false, erro: err.message });
+  }
+});
+
+app.get('/portal-admin/disparos/status', (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  res.json({ ok: true, ativa: dispResumo(dispFila.ativa), historico: dispFila.historico });
+});
+
+app.post('/portal-admin/disparos/controle', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  const c = dispFila.ativa;
+  const acao = req.body?.acao;
+  if (!c) return res.status(404).json({ ok: false, erro: 'Nenhum disparo em andamento.' });
+  if (acao === 'pausar') { c.pausada = true; if (c.timer) { clearTimeout(c.timer); c.timer = null; } c.proximoEm = null; }
+  else if (acao === 'retomar') { if (c.pausada) { c.pausada = false; dispAgendarProximo(c, 2000); } }
+  else if (acao === 'cancelar') { c.cancelada = true; if (c.timer) { clearTimeout(c.timer); c.timer = null; } await dispEncerrar(c); }
+  else return res.status(400).json({ ok: false, erro: 'acao inválida (pausar|retomar|cancelar).' });
+  res.json({ ok: true, ativa: dispResumo(dispFila.ativa) });
+});
+// ===== FIM PORTAL ADMIN — DISPAROS DE E-MAIL =====
+
 
 // ===== PORTAL ADMIN — ALUGUEL DE SALA DE ENSAIO =====
 // SALA_ENSAIO_DB é declarado mais abaixo (bloco "SALA DE ENSAIO — Agendamento"),
