@@ -4735,6 +4735,7 @@ async function pgtBuscarRegistros(filtro) {
         dataPagamento: p['Data Pagamento']?.date?.start || null,
         observacoes: p['Observações']?.rich_text?.[0]?.plain_text || null,
         alunaId: p['Aluna']?.relation?.[0]?.id || null,
+        identificadorPix: p['Identificador Pix']?.rich_text?.[0]?.plain_text || null,
       });
     }
     cursor = d.has_more ? d.next_cursor : null;
@@ -4857,20 +4858,26 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
       valor,
       nome: nomeMatch[1].trim(),
       cpfParcial: cpfMatch ? cpfMatch[1] : null,
+      identificador: m[3].trim() || null,
     });
   }
 
   const pendentes = await pgtBuscarRegistros({ property: 'Status', select: { equals: 'Pendente' } });
+  // Idempotência: o Identificador do Nubank é único por transação. Quem já foi aplicado num
+  // envio anterior sai da conciliação (senão, subir o mesmo extrato de novo casaria o Pix com
+  // o Pendente do mês seguinte da mesma aluna).
+  const pagos = await pgtBuscarRegistros({ property: 'Status', select: { equals: 'Pago' } });
+  const jaAplicadosIds = new Set(pagos.map(r => r.identificadorPix).filter(Boolean));
   const MESES_ORDEM = ['Jan/26', 'Fev/26', 'Mar/26', 'Abr/26', 'Mai/26', 'Jun/26', 'Jul/26', 'Ago/26', 'Set/26', 'Out/26', 'Nov/26', 'Dez/26'];
 
-  function candidatosPorNome(nomeTransacao) {
+  function candidatosPorNome(nomeTransacao, lista = pendentes) {
     const key = pgtNormalizar(pgtStripParentetico(nomeTransacao));
-    let candidatos = pendentes.filter(p => pgtNormalizar(pgtStripParentetico(p.nome)) === key);
+    let candidatos = lista.filter(p => pgtNormalizar(pgtStripParentetico(p.nome)) === key);
     if (candidatos.length > 0) return candidatos;
     const tokens = key.split(' ').filter(Boolean);
     if (tokens.length >= 2) {
       const flKey = `${tokens[0]} ${tokens[tokens.length - 1]}`;
-      candidatos = pendentes.filter(p => {
+      candidatos = lista.filter(p => {
         const pTokens = pgtNormalizar(pgtStripParentetico(p.nome)).split(' ').filter(Boolean);
         if (pTokens.length < 2) return false;
         return `${pTokens[0]} ${pTokens[pTokens.length - 1]}` === flKey;
@@ -4880,7 +4887,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
     // 3ª tentativa: nome cadastrado abreviado (apelido) batendo com nome completo do Pix,
     // onde sobrenome comum não cai no primeiro/último token (ex: "Gab Mazolini" x
     // "Gabriela Mazolini De Oliveira Santos").
-    candidatos = pendentes.filter(p => nomesCompativeisPorToken(key, pgtNormalizar(pgtStripParentetico(p.nome))));
+    candidatos = lista.filter(p => nomesCompativeisPorToken(key, pgtNormalizar(pgtStripParentetico(p.nome))));
     return candidatos;
   }
 
@@ -4888,6 +4895,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
   const conciliados = [];
   const valorNaoBate = [];
   const semCandidato = [];
+  const jaAplicados = [];
   let mapaCpf = null; // carregado sob demanda, só se algum Pix precisar
 
   // Pendentes de alunas cadastradas com o mesmo CPF do pagador (miolo que o Pix mostra),
@@ -4900,7 +4908,30 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
     return pendentes.filter(p => !usados.has(p.id) && !ids.has(p.id) && p.alunaId && mapaCpf.get(p.alunaId) === miolo);
   }
 
+  // Segunda trava, pra extratos aplicados antes de existir o Identificador Pix: já há Pago
+  // (de qualquer mês) da mesma pessoa — por nome ou CPF — na mesma data, cobrindo o valor?
+  async function jaConstaComoPago(tx) {
+    const mesmaData = pagos.filter(r => r.dataPagamento === tx.data && typeof r.valorPago === 'number');
+    if (mesmaData.length === 0) return false;
+    let dela = candidatosPorNome(tx.nome, mesmaData);
+    if (tx.cpfParcial) {
+      if (!mapaCpf) mapaCpf = await pgtMapaCpfAlunas();
+      const miolo = tx.cpfParcial.replace(/\D/g, '');
+      const ids = new Set(dela.map(r => r.id));
+      dela = dela.concat(mesmaData.filter(r => !ids.has(r.id) && r.alunaId && mapaCpf.get(r.alunaId) === miolo));
+    }
+    if (dela.length === 0) return false;
+    if (dela.some(r => Math.abs(r.valorPago - tx.valor) < 0.005)) return true;
+    // >= (não ==) pra continuar segurando mesmo se o dia já tiver sido aplicado em dobro.
+    const soma = dela.reduce((acc, r) => acc + r.valorPago, 0);
+    return soma + 0.005 >= tx.valor;
+  }
+
   for (const tx of transacoes) {
+    if ((tx.identificador && jaAplicadosIds.has(tx.identificador)) || await jaConstaComoPago(tx)) {
+      jaAplicados.push(tx);
+      continue;
+    }
     let candidatosNome = candidatosPorNome(tx.nome).filter(p => !usados.has(p.id));
     let viaCpf = false;
 
@@ -4939,6 +4970,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
             data: tx.data,
             valor: p.aPagar,
             valorPix: tx.valor,
+            identificador: tx.identificador,
             partes: combinacao.itens.length,
             viaCpf,
             nomeExtrato: tx.nome,
@@ -4962,6 +4994,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
       pendenteId: escolhido.id,
       data: tx.data,
       valor: tx.valor,
+      identificador: tx.identificador,
       nomeExtrato: tx.nome,
       nomeNotion: escolhido.nome,
       professor: escolhido.professor,
@@ -4972,7 +5005,7 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
     });
   }
 
-  return { conciliados, valorNaoBate, semCandidato };
+  return { conciliados, valorNaoBate, semCandidato, jaAplicados };
 }
 
 // POST /portal-admin/recebimentos/conciliar { csv: "Data,Valor,Identificador,Descrição\n..." }
@@ -5010,6 +5043,7 @@ app.post('/portal-admin/recebimentos/conciliar/aplicar', async (req, res) => {
             'Status': { select: { name: 'Pago' } },
             'Data Pagamento': { date: { start: item.data } },
             'Valor Pago': { number: item.valor },
+            ...(item.identificador ? { 'Identificador Pix': { rich_text: [{ text: { content: String(item.identificador) } }] } } : {}),
           },
         }),
       });
