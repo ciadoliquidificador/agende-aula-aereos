@@ -4922,9 +4922,11 @@ async function pgtAnalisarExtratoRecebimentos(csv) {
     }
     if (dela.length === 0) return false;
     if (dela.some(r => Math.abs(r.valorPago - tx.valor) < 0.005)) return true;
-    // >= (não ==) pra continuar segurando mesmo se o dia já tiver sido aplicado em dobro.
+    // >= 90% (não ==): segura mesmo se o dia foi aplicado em dobro ou se o valor registrado
+    // ficou um pouco abaixo do Pix (Tamiris: Ago/26 lançado 175+175, Pix de 355). Um segundo
+    // Pix legítimo da mesma pessoa no mesmo dia, de valor bem diferente, continua passando.
     const soma = dela.reduce((acc, r) => acc + r.valorPago, 0);
-    return soma + 0.005 >= tx.valor;
+    return soma + 0.005 >= tx.valor * 0.9;
   }
 
   for (const tx of transacoes) {
