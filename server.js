@@ -6110,6 +6110,342 @@ app.post('/portal-admin/disparos/controle', async (req, res) => {
 // ===== FIM PORTAL ADMIN — DISPAROS DE E-MAIL =====
 
 
+// ===== PORTAL ADMIN — REVISÃO CRÍTICA DE TRABALHOS =====
+// Fluxo (set/2026): Fábio escolhe um Trabalho na lista, baixa um "pacote" (instruções +
+// contexto atual do Notion + arquivos anexados) e discute com o Claude.ai dele — sem custo
+// de API aqui, usa o plano dele. No fim da conversa cola o texto final (formato
+// "=== CAMPO ===") de volta aqui. Sinopse/Classificação Indicativa/Público-Alvo/Temas/
+// Descritores vão direto pras propriedades (texto/select/multi_select); Release, Texto
+// Complementar, Relação BNCC e Proposta Pedagógica são propriedades do tipo "files" no
+// Notion (não aceitam texto solto) — viram PDF via pdfkit e sobem como file_upload.
+// ORCAMENTO_TRABALHOS_DB é declarado mais abaixo (bloco da Calculadora de Orçamento), mas
+// por ser const de módulo já está disponível quando essas rotas são chamadas.
+
+const REV_STATUS_PROP = 'Status de Revisão';
+const REV_PROP_SINOPSE = 'SINOPSE DA PROPOSTA/ATIVIDADE (até 350 caracteres)';
+const REV_PROP_CLASSIFICACAO = 'CLASSIFICAÇÃO INDICATIVA:';
+const REV_PROP_PUBLICO_ALVO = 'PÚBLICO-ALVO ADEQUADO';
+const REV_PROP_TEMAS = 'TEMAS';
+const REV_PROP_DESCRITORES = 'Descritores de Classificação';
+const REV_CAMPOS_MULTI = { PUBLICO_ALVO: REV_PROP_PUBLICO_ALVO, TEMAS: REV_PROP_TEMAS, DESCRITORES: REV_PROP_DESCRITORES };
+const REV_LABEL_MULTI = { PUBLICO_ALVO: 'Público-Alvo Adequado', TEMAS: 'Temas', DESCRITORES: 'Descritores de Classificação' };
+const REV_CAMPOS_ARQUIVO = { RELEASE: 'Release', TEXTO_COMPLEMENTAR: 'Texto Complementar', RELACAO_BNCC: 'Relação BNCC', PROPOSTA_PEDAGOGICA: 'Proposta Pedagógica' };
+
+async function revNotion(metodo, caminho, body) {
+  const r = await fetch('https://api.notion.com/v1' + caminho, {
+    method: metodo,
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(`Notion ${r.status} em ${caminho}: ${d.message || JSON.stringify(d)}`);
+  return d;
+}
+
+function revTxt(richTextArr) {
+  return (richTextArr || []).map(t => t.plain_text).join('').trim();
+}
+
+function revNormalizar(s) {
+  return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+}
+
+async function revListarTodasPaginas() {
+  const paginas = [];
+  let cursor;
+  do {
+    const body = { page_size: 100 };
+    if (cursor) body.start_cursor = cursor;
+    const d = await revNotion('POST', `/databases/${ORCAMENTO_TRABALHOS_DB}/query`, body);
+    paginas.push(...d.results);
+    cursor = d.has_more ? d.next_cursor : null;
+  } while (cursor);
+  return paginas;
+}
+
+let revCacheOpcoes = { em: 0, dados: null };
+async function revBuscarOpcoes() {
+  if (revCacheOpcoes.dados && Date.now() - revCacheOpcoes.em < 5 * 60 * 1000) return revCacheOpcoes.dados;
+  const schema = await revNotion('GET', `/databases/${ORCAMENTO_TRABALHOS_DB}`);
+  const opts = (nome) => (schema.properties[nome]?.select?.options || schema.properties[nome]?.multi_select?.options || []).map(o => o.name);
+  const dados = {
+    classificacao: opts(REV_PROP_CLASSIFICACAO),
+    publicoAlvo: opts(REV_PROP_PUBLICO_ALVO),
+    temas: opts(REV_PROP_TEMAS),
+    descritores: opts(REV_PROP_DESCRITORES),
+  };
+  revCacheOpcoes = { em: Date.now(), dados };
+  return dados;
+}
+
+function revEncontrarOpcao(valor, opcoesValidas) {
+  const alvo = revNormalizar(valor);
+  if (!alvo) return null;
+  let achou = opcoesValidas.find(o => revNormalizar(o) === alvo);
+  if (achou) return achou;
+  achou = opcoesValidas.find(o => revNormalizar(o).includes(alvo) || alvo.includes(revNormalizar(o)));
+  return achou || null;
+}
+
+const REV_ALIAS_CAMPO = {
+  'SINOPSE': 'SINOPSE',
+  'RELEASE': 'RELEASE',
+  'TEXTO COMPLEMENTAR': 'TEXTO_COMPLEMENTAR',
+  'RELACAO BNCC': 'RELACAO_BNCC',
+  'RELACAO COM A BNCC': 'RELACAO_BNCC',
+  'PROPOSTA PEDAGOGICA': 'PROPOSTA_PEDAGOGICA',
+  'CLASSIFICACAO INDICATIVA': 'CLASSIFICACAO_INDICATIVA',
+  'FAIXA ETARIA': 'CLASSIFICACAO_INDICATIVA',
+  'PUBLICO-ALVO': 'PUBLICO_ALVO',
+  'PUBLICO ALVO': 'PUBLICO_ALVO',
+  'TEMAS': 'TEMAS',
+  'DESCRITORES DE CLASSIFICACAO': 'DESCRITORES',
+};
+
+function revParsearTexto(texto) {
+  const linhas = texto.split(/\r?\n/);
+  const blocos = {};
+  let atual = null;
+  for (const linha of linhas) {
+    const m = linha.match(/^===\s*(.+?)\s*===\s*$/);
+    if (m) {
+      atual = REV_ALIAS_CAMPO[revNormalizar(m[1])] || null;
+      if (atual && !(atual in blocos)) blocos[atual] = [];
+      continue;
+    }
+    if (atual) blocos[atual].push(linha);
+  }
+  const resultado = {};
+  for (const [k, arr] of Object.entries(blocos)) resultado[k] = arr.join('\n').trim();
+  return resultado;
+}
+
+async function revGerarPdf(titulo, texto) {
+  const PDFDocument = require('pdfkit');
+  const chunks = [];
+  const doc = new PDFDocument({ margin: 50 });
+  doc.on('data', (c) => chunks.push(c));
+  const fim = new Promise((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+  doc.fontSize(15).text(titulo, { align: 'left' });
+  doc.moveDown();
+  doc.fontSize(11).text(texto || '(vazio)', { align: 'left' });
+  doc.end();
+  return await fim;
+}
+
+function revMontarMultipart(nomeArquivo, bufferConteudo, contentType) {
+  const boundary = 'RevisaoTrabalhos' + crypto.randomBytes(16).toString('hex');
+  const preambulo = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${nomeArquivo}"\r\nContent-Type: ${contentType}\r\n\r\n`
+  );
+  const epilogo = Buffer.from(`\r\n--${boundary}--\r\n`);
+  return { boundary, body: Buffer.concat([preambulo, bufferConteudo, epilogo]) };
+}
+
+async function revSubirArquivoNotion(nomeArquivo, bufferConteudo, contentType) {
+  const criado = await revNotion('POST', '/file_uploads', { mode: 'single_part', filename: nomeArquivo, content_type: contentType });
+  const { boundary, body } = revMontarMultipart(nomeArquivo, bufferConteudo, contentType);
+  const r = await fetch(criado.upload_url, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+    body,
+  });
+  const d = await r.json();
+  if (d.status !== 'uploaded') throw new Error('upload não concluído: ' + JSON.stringify(d));
+  return criado.id;
+}
+
+async function revAtualizarStatus(pageId, status) {
+  await revNotion('PATCH', `/pages/${pageId}`, { properties: { [REV_STATUS_PROP]: { select: { name: status } } } });
+}
+
+app.get('/portal-admin/revisao-trabalhos/lista', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const paginas = await revListarTodasPaginas();
+    const lista = paginas.map(p => ({
+      id: p.id,
+      nome: revTxt(p.properties['Nome']?.title),
+      status: p.properties[REV_STATUS_PROP]?.select?.name || 'Não iniciado',
+    })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    res.json({ ok: true, trabalhos: lista });
+  } catch (err) {
+    console.error('[revisao-trabalhos] erro ao listar:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.get('/portal-admin/revisao-trabalhos/:id/pacote', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const pagina = await revNotion('GET', `/pages/${req.params.id}`);
+    const props = pagina.properties;
+    const nome = revTxt(props['Nome']?.title);
+    const opcoes = await revBuscarOpcoes();
+
+    function coletarArquivos(propName) {
+      return (props[propName]?.files || []).map(f => ({
+        nome: f.name,
+        url: f.type === 'file' ? f.file.url : f.external.url,
+      }));
+    }
+    const arqTextoBase = coletarArquivos('Texto Base');
+    const arqRelease = coletarArquivos('Release');
+    const arqTextoComplementar = coletarArquivos('Texto Complementar');
+    const arqBncc = coletarArquivos('Relação BNCC');
+    const arqPropostaPedagogica = coletarArquivos('Proposta Pedagógica');
+    const arqImagemResumo = coletarArquivos('Imagem Resumo');
+    const linkVideo = props['Link para Vídeo na Íntegra']?.url || '';
+    const linkFotos = props['FOTOS']?.url || '';
+
+    const sinopseAtual = revTxt(props[REV_PROP_SINOPSE]?.rich_text);
+    const classificacaoAtual = props[REV_PROP_CLASSIFICACAO]?.select?.name || '';
+    const publicoAtual = (props[REV_PROP_PUBLICO_ALVO]?.multi_select || []).map(o => o.name);
+    const temasAtual = (props[REV_PROP_TEMAS]?.multi_select || []).map(o => o.name);
+    const descritoresAtual = (props[REV_PROP_DESCRITORES]?.multi_select || []).map(o => o.name);
+
+    let materialBase;
+    if (arqTextoBase.length > 0) {
+      materialBase = `Texto Base anexado no Notion (${arqTextoBase.length} arquivo(s)) — baixe abaixo e suba junto no Claude.ai:\n` + arqTextoBase.map(a => `- ${a.nome}`).join('\n');
+    } else if (linkVideo) {
+      materialBase = `Não há Texto Base em arquivo. Use o vídeo como base:\n${linkVideo}\n(se for playlist, considere todos os vídeos dela — peça pro Claude buscar a transcrição/legenda de cada um)`;
+    } else {
+      materialBase = `⚠️ SEM Texto Base e SEM vídeo — não dá pra fazer uma revisão de qualidade sem material bruto. Sugestão: pule este trabalho e registre pra segunda rodada, depois de completar o material.`;
+    }
+
+    const instrucoes = `# Revisão crítica — ${nome}
+
+## Material disponível
+${materialBase}
+${arqRelease.length ? `\nRelease já existe: ${arqRelease.map(a => a.nome).join(', ')}` : ''}${arqTextoComplementar.length ? `\nTexto Complementar já existe: ${arqTextoComplementar.map(a => a.nome).join(', ')}` : ''}${arqBncc.length ? `\nRelação BNCC já existe: ${arqBncc.map(a => a.nome).join(', ')}` : ''}${arqPropostaPedagogica.length ? `\nProposta Pedagógica já existe: ${arqPropostaPedagogica.map(a => a.nome).join(', ')}` : ''}${arqImagemResumo.length ? `\nFotos de divulgação (Imagem Resumo): ${arqImagemResumo.map(a => a.nome).join(', ')} — suba junto se ajudar no julgamento visual (figurino/cena/faixa etária)` : ''}${linkFotos ? `\nLink de fotos (FOTOS): ${linkFotos}` : ''}
+
+## Valores atuais no Notion (revisar com espírito crítico, não repetir sem questionar)
+- Sinopse atual: ${sinopseAtual || '(vazio)'}
+- Classificação Indicativa atual: ${classificacaoAtual || '(vazio)'}
+- Público-alvo atual: ${publicoAtual.join(', ') || '(vazio)'}
+- Temas atuais: ${temasAtual.join(', ') || '(vazio)'}
+- Descritores atuais: ${descritoresAtual.join(', ') || '(vazio)'}
+
+## Sua tarefa
+Revisar criticamente o material acima e gerar/atualizar: Sinopse (sucinta, até 350 caracteres),
+Release (sucinto), Texto Complementar (texto MAIS ELABORADO de venda/justificativa do projeto,
+com o embasamento da pesquisa por trás — diferente da Sinopse/Release, que são sucintos),
+Relação BNCC, Proposta Pedagógica, Classificação Indicativa, Público-Alvo Adequado, Temas e
+Descritores de Classificação.
+
+**Escolha SOMENTE dentro destas opções já cadastradas no Notion** (não invente uma nova — se
+achar que falta uma categoria, me avise à parte, fora do bloco final):
+- Classificação Indicativa (escolha 1): ${opcoes.classificacao.join(' | ')}
+- Público-Alvo Adequado (escolha 1 ou mais): ${opcoes.publicoAlvo.join(' | ')}
+- Temas (escolha 1 ou mais): ${opcoes.temas.join(' | ')}
+- Descritores de Classificação (0 ou mais, só se aplicável): ${opcoes.descritores.join(' | ')}
+
+## Discussão
+Debata os pontos que achar necessário antes de fechar. Só gere o bloco final abaixo quando eu
+confirmar que estamos de acordo.
+
+## Formato da resposta final (gerar só quando eu pedir)
+=== SINOPSE ===
+(texto)
+=== RELEASE ===
+(texto)
+=== TEXTO COMPLEMENTAR ===
+(texto)
+=== RELACAO BNCC ===
+(texto)
+=== PROPOSTA PEDAGOGICA ===
+(texto)
+=== CLASSIFICACAO INDICATIVA ===
+(uma das opções acima, exatamente)
+=== PUBLICO-ALVO ===
+(opções separadas por vírgula)
+=== TEMAS ===
+(opções separadas por vírgula)
+=== DESCRITORES DE CLASSIFICACAO ===
+(opções separadas por vírgula, ou deixe vazio)
+`;
+
+    const arquivos = [...arqTextoBase, ...arqRelease, ...arqTextoComplementar, ...arqBncc, ...arqPropostaPedagogica, ...arqImagemResumo];
+
+    await revAtualizarStatus(req.params.id, 'Pacote Gerado');
+    res.json({ ok: true, nome, instrucoes, arquivos });
+  } catch (err) {
+    console.error('[revisao-trabalhos] erro ao montar pacote:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const textoColado = req.body?.textoColado || '';
+    if (!textoColado.trim()) return res.status(400).json({ ok: false, erro: 'Cole o texto final antes de publicar.' });
+
+    const blocos = revParsearTexto(textoColado);
+    const opcoes = await revBuscarOpcoes();
+    const resultados = [];
+    const properties = {};
+
+    if (blocos.SINOPSE) {
+      properties[REV_PROP_SINOPSE] = { rich_text: [{ text: { content: blocos.SINOPSE.slice(0, 2000) } }] };
+      resultados.push({ campo: 'Sinopse', status: 'ok' });
+    }
+
+    if (blocos.CLASSIFICACAO_INDICATIVA) {
+      const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoes.classificacao);
+      if (valor) {
+        properties[REV_PROP_CLASSIFICACAO] = { select: { name: valor } };
+        resultados.push({ campo: 'Classificação Indicativa', status: 'ok', valor });
+      } else {
+        resultados.push({ campo: 'Classificação Indicativa', status: 'aviso', mensagem: `"${blocos.CLASSIFICACAO_INDICATIVA}" não bateu com nenhuma opção existente — não gravei.` });
+      }
+    }
+
+    for (const chave of ['PUBLICO_ALVO', 'TEMAS', 'DESCRITORES']) {
+      if (!blocos[chave]) continue;
+      const partes = blocos[chave].split(',').map(s => s.trim()).filter(Boolean);
+      const validas = [], invalidas = [];
+      for (const parte of partes) {
+        const achou = revEncontrarOpcao(parte, opcoes[chave === 'PUBLICO_ALVO' ? 'publicoAlvo' : chave.toLowerCase()]);
+        if (achou) validas.push(achou); else invalidas.push(parte);
+      }
+      if (validas.length) {
+        properties[REV_CAMPOS_MULTI[chave]] = { multi_select: validas.map(n => ({ name: n })) };
+        resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'ok', valor: validas.join(', ') });
+      }
+      if (invalidas.length) {
+        resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'aviso', mensagem: `Não bateram com opções existentes (não gravadas): ${invalidas.join(', ')}` });
+      }
+    }
+
+    const paginaAtual = await revNotion('GET', `/pages/${req.params.id}`);
+    const nomeTrabalho = revTxt(paginaAtual.properties['Nome']?.title) || 'trabalho';
+
+    for (const [chave, propName] of Object.entries(REV_CAMPOS_ARQUIVO)) {
+      if (!blocos[chave]) continue;
+      try {
+        const pdfBuffer = await revGerarPdf(`${propName} — ${nomeTrabalho}`, blocos[chave]);
+        const nomeArquivo = `${propName} - ${nomeTrabalho}.pdf`.replace(/[\\/]/g, '-');
+        const uploadId = await revSubirArquivoNotion(nomeArquivo, pdfBuffer, 'application/pdf');
+        properties[propName] = { files: [{ type: 'file_upload', file_upload: { id: uploadId }, name: nomeArquivo }] };
+        resultados.push({ campo: propName, status: 'ok' });
+      } catch (e) {
+        resultados.push({ campo: propName, status: 'erro', mensagem: e.message });
+      }
+    }
+
+    properties[REV_STATUS_PROP] = { select: { name: 'Publicado' } };
+    await revNotion('PATCH', `/pages/${req.params.id}`, { properties });
+
+    res.json({ ok: true, resultados });
+  } catch (err) {
+    console.error('[revisao-trabalhos] erro ao publicar:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+// ===== FIM PORTAL ADMIN — REVISÃO CRÍTICA DE TRABALHOS =====
+
+
 // ===== PORTAL ADMIN — ALUGUEL DE SALA DE ENSAIO =====
 // SALA_ENSAIO_DB é declarado mais abaixo (bloco "SALA DE ENSAIO — Agendamento"),
 // mas por ser const de módulo já está disponível quando essas rotas são chamadas.
