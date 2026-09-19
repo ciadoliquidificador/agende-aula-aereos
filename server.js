@@ -6131,6 +6131,149 @@ const REV_CAMPOS_MULTI = { PUBLICO_ALVO: REV_PROP_PUBLICO_ALVO, TEMAS: REV_PROP_
 const REV_LABEL_MULTI = { PUBLICO_ALVO: 'Público-Alvo Adequado', TEMAS: 'Temas', DESCRITORES: 'Descritores de Classificação' };
 const REV_CAMPOS_ARQUIVO = { RELEASE: 'Release', TEXTO_COMPLEMENTAR: 'Texto Complementar', RELACAO_BNCC: 'Relação BNCC', PROPOSTA_PEDAGOGICA: 'Proposta Pedagógica' };
 
+// --- Extração de legenda do YouTube (fallback quando não há Texto Base) ---
+// Usa a lib 'youtube-transcript' (API não-oficial do YouTube, pode quebrar com o tempo —
+// por isso toda falha aqui é reportada de forma bem visível, nunca engolida em silêncio,
+// por pedido explícito do Fábio (set/2026): "não pode ter falha oculta").
+const {
+  fetchTranscript,
+  YoutubeTranscriptDisabledError,
+  YoutubeTranscriptNotAvailableError,
+  YoutubeTranscriptNotAvailableLanguageError,
+  YoutubeTranscriptVideoUnavailableError,
+  YoutubeTranscriptTooManyRequestError,
+} = require('youtube-transcript');
+
+function revEhPlaylist(url) {
+  return /[?&]list=/.test(url || '');
+}
+
+function revExtrairPlaylistId(url) {
+  const m = (url || '').match(/[?&]list=([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : null;
+}
+
+function revExtrairVideoId(url) {
+  const m = (url || '').match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/|live\/))([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+// Extração não-oficial (scraping): usa a página de watch com ?list=, que carrega o painel
+// lateral da playlist com todos os itens (a página /playlist sozinha não trouxe o mesmo
+// conteúdo em teste, set/2026 — provavelmente exige JS pra popular). Cada item real tem um
+// "simpleText" (título) e uma URL de thumbnail "i.ytimg.com/vi/<ID>/" próximos um do outro;
+// exigir os dois evita pegar falsos positivos (ex: um bloco de nomes de tipo de renderer
+// que aparece antes da lista de itens de verdade).
+async function revListarVideosDaPlaylist(playlistId) {
+  const r = await fetch(`https://www.youtube.com/watch?list=${playlistId}`, {
+    headers: {
+      'Accept-Language': 'pt-BR',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+    },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status} ao tentar abrir a playlist no YouTube.`);
+  const html = await r.text();
+  const marcador = 'playlistPanelVideoRenderer":{"title"';
+  const itens = [];
+  const idsVistos = new Set();
+  let idx = -1;
+  while (true) {
+    idx = html.indexOf(marcador, idx + 1);
+    if (idx === -1) break;
+    const janela = html.slice(idx, idx + 1000);
+    const simpleText = janela.match(/"simpleText":"([^"]+)"/);
+    const thumb = janela.match(/i\.ytimg\.com\/vi\/([a-zA-Z0-9_-]{11})\//);
+    if (simpleText && thumb && !idsVistos.has(thumb[1])) {
+      idsVistos.add(thumb[1]);
+      itens.push({ id: thumb[1], titulo: simpleText[1] });
+    }
+  }
+  if (itens.length === 0) throw new Error('Não encontrei nenhum vídeo dentro da playlist — a página do YouTube pode ter mudado de formato (extração não-oficial, scraping).');
+  return itens;
+}
+
+async function revBuscarTituloVideo(videoId) {
+  try {
+    const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.title || null;
+  } catch {
+    return null;
+  }
+}
+
+function revMensagemErroTranscricao(e, videoId) {
+  if (e instanceof YoutubeTranscriptDisabledError) return `legendas desativadas pelo dono do vídeo (${videoId})`;
+  if (e instanceof YoutubeTranscriptNotAvailableError) return `vídeo sem nenhuma legenda disponível (${videoId})`;
+  if (e instanceof YoutubeTranscriptNotAvailableLanguageError) return `sem legenda no idioma pedido (${videoId})`;
+  if (e instanceof YoutubeTranscriptVideoUnavailableError) return `vídeo indisponível/privado/removido (${videoId})`;
+  if (e instanceof YoutubeTranscriptTooManyRequestError) return `YouTube bloqueou por excesso de requisições — tente gerar o pacote de novo em alguns minutos (${videoId})`;
+  return `erro inesperado ao extrair legenda de ${videoId}: ${e.message}`;
+}
+
+async function revExtrairLegendaPorId(videoId) {
+  try {
+    const partes = await fetchTranscript(videoId, { lang: 'pt' });
+    if (partes && partes.length) return partes.map(p => p.text).join(' ');
+  } catch (e) {
+    if (!(e instanceof YoutubeTranscriptNotAvailableLanguageError)) throw new Error(revMensagemErroTranscricao(e, videoId));
+  }
+  // sem faixa em pt — tenta a faixa padrão disponível (geralmente auto-gerada)
+  try {
+    const partes = await fetchTranscript(videoId);
+    if (partes && partes.length) return partes.map(p => p.text).join(' ');
+    throw new Error(`transcrição vazia (${videoId})`);
+  } catch (e) {
+    throw new Error(revMensagemErroTranscricao(e, videoId));
+  }
+}
+
+// Retorna { materialTexto, avisos } — avisos nunca fica escondido: some sempre no bloco de
+// instruções E na resposta JSON (pra tela mostrar um banner bem visível).
+async function revMaterialDeVideo(linkVideo) {
+  const avisos = [];
+  let itensVideo; // [{ id, titulo }]
+  try {
+    if (revEhPlaylist(linkVideo)) {
+      const playlistId = revExtrairPlaylistId(linkVideo);
+      if (!playlistId) throw new Error(`Link parece ser playlist mas não consegui extrair o ID: ${linkVideo}`);
+      itensVideo = await revListarVideosDaPlaylist(playlistId);
+      avisos.push(`Extração de playlist é scraping não-oficial (experimental) — confira se os ${itensVideo.length} vídeo(s) abaixo batem com o que a playlist real mostra no navegador, antes de confiar 100% na lista.`);
+    } else {
+      const videoId = revExtrairVideoId(linkVideo);
+      if (!videoId) throw new Error(`Não reconheci o formato do link como vídeo do YouTube: ${linkVideo}`);
+      itensVideo = [{ id: videoId, titulo: null }];
+    }
+  } catch (e) {
+    const aviso = `FALHA TOTAL ao processar o vídeo/playlist (${linkVideo}): ${e.message}`;
+    avisos.push(aviso);
+    return {
+      materialTexto: `⚠️⚠️ FALHA NA EXTRAÇÃO DE VÍDEO — NÃO IGNORE ⚠️⚠️\n${aviso}\nNÃO trate este trabalho como se tivesse material de vídeo disponível — está SEM material até isso ser corrigido.`,
+      avisos,
+    };
+  }
+
+  const partesTexto = [];
+  for (const item of itensVideo) {
+    const titulo = item.titulo || (await revBuscarTituloVideo(item.id)) || item.id;
+    try {
+      const texto = await revExtrairLegendaPorId(item.id);
+      partesTexto.push(`--- ${titulo} ---\n${texto}`);
+    } catch (e) {
+      const aviso = `Falha ao extrair legenda de "${titulo}": ${e.message}`;
+      avisos.push(aviso);
+      partesTexto.push(`--- ${titulo} ---\n⚠️ FALHA NA EXTRAÇÃO — ${e.message} — este vídeo NÃO entrou como material, não finja que leu o conteúdo dele.`);
+    }
+  }
+
+  let materialTexto = `Vídeo usado como material-base (não há Texto Base em arquivo):\n\n${partesTexto.join('\n\n')}`;
+  if (avisos.length) {
+    materialTexto += `\n\n⚠️⚠️ ATENÇÃO — LEIA OS AVISOS — NÃO IGNORE ⚠️⚠️\n${avisos.join('\n')}`;
+  }
+  return { materialTexto, avisos };
+}
+
 async function revNotion(metodo, caminho, body) {
   const r = await fetch('https://api.notion.com/v1' + caminho, {
     method: metodo,
@@ -6305,16 +6448,20 @@ app.get('/portal-admin/revisao-trabalhos/:id/pacote', async (req, res) => {
     const descritoresAtual = (props[REV_PROP_DESCRITORES]?.multi_select || []).map(o => o.name);
 
     let materialBase;
+    const avisos = [];
     if (arqTextoBase.length > 0) {
       materialBase = `Texto Base anexado no Notion (${arqTextoBase.length} arquivo(s)) — baixe abaixo e suba junto no Claude.ai:\n` + arqTextoBase.map(a => `- ${a.nome}`).join('\n');
     } else if (linkVideo) {
-      materialBase = `Não há Texto Base em arquivo. Use o vídeo como base:\n${linkVideo}\n(se for playlist, considere todos os vídeos dela — peça pro Claude buscar a transcrição/legenda de cada um)`;
+      const resultadoVideo = await revMaterialDeVideo(linkVideo);
+      materialBase = resultadoVideo.materialTexto;
+      avisos.push(...resultadoVideo.avisos);
     } else {
       materialBase = `⚠️ SEM Texto Base e SEM vídeo — não dá pra fazer uma revisão de qualidade sem material bruto. Sugestão: pule este trabalho e registre pra segunda rodada, depois de completar o material.`;
+      avisos.push('Sem Texto Base e sem vídeo — trabalho sem material bruto, precisa de correção manual antes de revisar.');
     }
 
     const instrucoes = `# Revisão crítica — ${nome}
-
+${avisos.length ? `\n## ⚠️⚠️ AVISOS — LEIA ANTES DE CONTINUAR ⚠️⚠️\n${avisos.map(a => '- ' + a).join('\n')}\n` : ''}
 ## Material disponível
 ${materialBase}
 ${arqRelease.length ? `\nRelease já existe: ${arqRelease.map(a => a.nome).join(', ')}` : ''}${arqTextoComplementar.length ? `\nTexto Complementar já existe: ${arqTextoComplementar.map(a => a.nome).join(', ')}` : ''}${arqBncc.length ? `\nRelação BNCC já existe: ${arqBncc.map(a => a.nome).join(', ')}` : ''}${arqPropostaPedagogica.length ? `\nProposta Pedagógica já existe: ${arqPropostaPedagogica.map(a => a.nome).join(', ')}` : ''}${arqImagemResumo.length ? `\nFotos de divulgação (Imagem Resumo): ${arqImagemResumo.map(a => a.nome).join(', ')} — suba junto se ajudar no julgamento visual (figurino/cena/faixa etária)` : ''}${linkFotos ? `\nLink de fotos (FOTOS): ${linkFotos}` : ''}
@@ -6368,7 +6515,7 @@ confirmar que estamos de acordo.
     const arquivos = [...arqTextoBase, ...arqRelease, ...arqTextoComplementar, ...arqBncc, ...arqPropostaPedagogica, ...arqImagemResumo];
 
     await revAtualizarStatus(req.params.id, 'Pacote Gerado');
-    res.json({ ok: true, nome, instrucoes, arquivos });
+    res.json({ ok: true, nome, instrucoes, arquivos, avisos });
   } catch (err) {
     console.error('[revisao-trabalhos] erro ao montar pacote:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
