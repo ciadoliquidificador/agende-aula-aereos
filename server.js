@@ -6121,6 +6121,7 @@ app.post('/portal-admin/disparos/controle', async (req, res) => {
 // ORCAMENTO_TRABALHOS_DB é declarado mais abaixo (bloco da Calculadora de Orçamento), mas
 // por ser const de módulo já está disponível quando essas rotas são chamadas.
 
+const pdfParse = require('pdf-parse');
 const REV_STATUS_PROP = 'Status de Revisão';
 const REV_PROP_SINOPSE = 'SINOPSE DA PROPOSTA/ATIVIDADE (até 350 caracteres)';
 const REV_PROP_CLASSIFICACAO = 'CLASSIFICAÇÃO INDICATIVA:';
@@ -6321,6 +6322,25 @@ async function revBuscarOpcoes() {
   return dados;
 }
 
+// Banco de vendas — sem relation com Trabalhos, o match é só por Nome exato (ver rota de
+// publicar). Nomes de propriedade e opções são independentes dos de Trabalhos, por isso um
+// cache/schema separado (ex: 'Público-Alvo' aqui, 'PÚBLICO-ALVO ADEQUADO' em Trabalhos).
+const PORTFOLIO_ONLINE_DB = '37bc45031f73804eb25cc0555239c3e7';
+let revCacheOpcoesPortfolio = { em: 0, dados: null };
+async function revBuscarOpcoesPortfolio() {
+  if (revCacheOpcoesPortfolio.dados && Date.now() - revCacheOpcoesPortfolio.em < 5 * 60 * 1000) return revCacheOpcoesPortfolio.dados;
+  const schema = await revNotion('GET', `/databases/${PORTFOLIO_ONLINE_DB}`);
+  const opts = (nome) => (schema.properties[nome]?.select?.options || schema.properties[nome]?.multi_select?.options || []).map(o => o.name);
+  const dados = {
+    classificacao: opts('Classificação Indicativa'),
+    publicoAlvo: opts('Público-Alvo'),
+    temas: opts('Temas'),
+    descritores: opts('Descritores de Classificação'),
+  };
+  revCacheOpcoesPortfolio = { em: Date.now(), dados };
+  return dados;
+}
+
 function revEncontrarOpcao(valor, opcoesValidas) {
   const alvo = revNormalizar(valor);
   if (!alvo) return null;
@@ -6343,6 +6363,7 @@ const REV_ALIAS_CAMPO = {
   'PUBLICO ALVO': 'PUBLICO_ALVO',
   'TEMAS': 'TEMAS',
   'DESCRITORES DE CLASSIFICACAO': 'DESCRITORES',
+  'TEXTO BASE TRANSCRITO': 'TEXTO_BASE_TRANSCRITO',
 };
 
 function revParsearTexto(texto) {
@@ -6402,6 +6423,77 @@ async function revAtualizarStatus(pageId, status) {
   await revNotion('PATCH', `/pages/${pageId}`, { properties: { [REV_STATUS_PROP]: { select: { name: status } } } });
 }
 
+// Resolve os campos de texto/select/multi_select (sem efeito colateral, sem gravar nada) —
+// usado tanto pela pré-visualização quanto pela publicação de verdade, pra garantir que os
+// dois mostrem exatamente o mesmo resultado.
+function revResolverCamposSimples(blocos, opcoes) {
+  const properties = {};
+  const resultados = [];
+
+  if (blocos.SINOPSE) {
+    properties[REV_PROP_SINOPSE] = { rich_text: [{ text: { content: blocos.SINOPSE.slice(0, 2000) } }] };
+    resultados.push({ campo: 'Sinopse', status: 'ok' });
+  }
+
+  if (blocos.CLASSIFICACAO_INDICATIVA) {
+    const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoes.classificacao);
+    if (valor) {
+      properties[REV_PROP_CLASSIFICACAO] = { select: { name: valor } };
+      resultados.push({ campo: 'Classificação Indicativa', status: 'ok', valor });
+    } else {
+      resultados.push({ campo: 'Classificação Indicativa', status: 'aviso', mensagem: `"${blocos.CLASSIFICACAO_INDICATIVA}" não bateu com nenhuma opção existente — não será gravado.` });
+    }
+  }
+
+  for (const chave of ['PUBLICO_ALVO', 'TEMAS', 'DESCRITORES']) {
+    if (!blocos[chave]) continue;
+    const partes = blocos[chave].split(',').map(s => s.trim()).filter(Boolean);
+    const validas = [], invalidas = [];
+    for (const parte of partes) {
+      const achou = revEncontrarOpcao(parte, opcoes[chave === 'PUBLICO_ALVO' ? 'publicoAlvo' : chave.toLowerCase()]);
+      if (achou) validas.push(achou); else invalidas.push(parte);
+    }
+    if (validas.length) {
+      properties[REV_CAMPOS_MULTI[chave]] = { multi_select: validas.map(n => ({ name: n })) };
+      resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'ok', valor: validas.join(', ') });
+    }
+    if (invalidas.length) {
+      resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'aviso', mensagem: `Não bateram com opções existentes (não serão gravadas): ${invalidas.join(', ')}` });
+    }
+  }
+
+  return { properties, resultados };
+}
+
+function revColetarArquivos(props, propName) {
+  return (props[propName]?.files || []).map(f => ({
+    nome: f.name,
+    url: f.type === 'file' ? f.file.url : f.external.url,
+  }));
+}
+
+function revAdivinharContentType(nome) {
+  return /\.pdf$/i.test(nome || '') ? 'application/pdf' : 'application/octet-stream';
+}
+
+// Checa se um PDF do Texto Base é provavelmente uma foto/scan (sem texto extraível) — mesma
+// lógica já validada com pypdf em set/2026 ("A Lenda do Uirapuru": 0 chars, confirmado
+// escaneado). Nunca lança erro pra fora: falha de download/parse vira { verificavel: false,
+// erro }, reportado como aviso visível na tela, nunca escondida.
+async function revChecarPdfEscaneado(arquivo) {
+  if (!/\.pdf$/i.test(arquivo.nome || '')) return { verificavel: false };
+  try {
+    const resp = await fetch(arquivo.url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ao baixar pra checagem`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const d = await pdfParse(buf);
+    const chars = (d.text || '').trim().length;
+    return { verificavel: true, provavelImagem: chars < 100, chars, paginas: d.numpages };
+  } catch (e) {
+    return { verificavel: false, erro: e.message };
+  }
+}
+
 app.get('/portal-admin/revisao-trabalhos/lista', async (req, res) => {
   if (!exigirSessaoAdmin(req, res)) return;
   try {
@@ -6426,18 +6518,12 @@ app.get('/portal-admin/revisao-trabalhos/:id/pacote', async (req, res) => {
     const nome = revTxt(props['Nome']?.title);
     const opcoes = await revBuscarOpcoes();
 
-    function coletarArquivos(propName) {
-      return (props[propName]?.files || []).map(f => ({
-        nome: f.name,
-        url: f.type === 'file' ? f.file.url : f.external.url,
-      }));
-    }
-    const arqTextoBase = coletarArquivos('Texto Base');
-    const arqRelease = coletarArquivos('Release');
-    const arqTextoComplementar = coletarArquivos('Texto Complementar');
-    const arqBncc = coletarArquivos('Relação BNCC');
-    const arqPropostaPedagogica = coletarArquivos('Proposta Pedagógica');
-    const arqImagemResumo = coletarArquivos('Imagem Resumo');
+    const arqTextoBase = revColetarArquivos(props, 'Texto Base');
+    const arqRelease = revColetarArquivos(props, 'Release');
+    const arqTextoComplementar = revColetarArquivos(props, 'Texto Complementar');
+    const arqBncc = revColetarArquivos(props, 'Relação BNCC');
+    const arqPropostaPedagogica = revColetarArquivos(props, 'Proposta Pedagógica');
+    const arqImagemResumo = revColetarArquivos(props, 'Imagem Resumo');
     const linkVideo = props['Link para Vídeo na Íntegra']?.url || '';
     const linkFotos = props['FOTOS']?.url || '';
 
@@ -6449,8 +6535,21 @@ app.get('/portal-admin/revisao-trabalhos/:id/pacote', async (req, res) => {
 
     let materialBase;
     const avisos = [];
+    let temSuspeitoDeImagem = false;
     if (arqTextoBase.length > 0) {
       materialBase = `Texto Base anexado no Notion (${arqTextoBase.length} arquivo(s)) — baixe abaixo e suba junto no Claude.ai:\n` + arqTextoBase.map(a => `- ${a.nome}`).join('\n');
+
+      const checagens = await Promise.all(arqTextoBase.map(revChecarPdfEscaneado));
+      const suspeitos = arqTextoBase.filter((a, i) => checagens[i].provavelImagem);
+      const falhasChecagem = arqTextoBase.map((a, i) => ({ a, c: checagens[i] })).filter(x => x.c.verificavel === false && x.c.erro);
+      if (suspeitos.length) {
+        temSuspeitoDeImagem = true;
+        materialBase += `\n\n⚠️ Provavelmente IMAGEM ESCANEADA (sem texto extraível — confirme lendo no Claude.ai): ${suspeitos.map(a => a.nome).join(', ')}.`;
+        avisos.push(`Texto Base provavelmente escaneado (sem texto extraível, checagem automática): ${suspeitos.map(a => a.nome).join(', ')} — confirme visualmente antes de assumir.`);
+      }
+      if (falhasChecagem.length) {
+        avisos.push(`Não consegui checar se é imagem ou texto (falha na verificação automática, não é erro do conteúdo em si): ${falhasChecagem.map(x => `${x.a.nome} (${x.c.erro})`).join('; ')}`);
+      }
     } else if (linkVideo) {
       const resultadoVideo = await revMaterialDeVideo(linkVideo);
       materialBase = resultadoVideo.materialTexto;
@@ -6487,13 +6586,16 @@ achar que falta uma categoria, me avise à parte, fora do bloco final):
 - Temas (escolha 1 ou mais): ${opcoes.temas.join(' | ')}
 - Descritores de Classificação (0 ou mais, só se aplicável): ${opcoes.descritores.join(' | ')}
 
+${temSuspeitoDeImagem ? `\n## Texto Base escaneado (imagem)\nAlgum(ns) arquivo(s) do Texto Base parecem ser foto/scan sem texto extraível (aviso acima). Leia a imagem direto (você lê nativamente) e TRANSCREVA o conteúdo por completo, com fidelidade — essa transcrição vai virar um arquivo de texto novo, reanexado ao lado do original, pra não precisar reabrir a imagem numa próxima consulta. Inclua essa transcrição no bloco === TEXTO BASE TRANSCRITO === do resultado final.\n` : ''}
 ## Discussão
 Debata os pontos que achar necessário antes de fechar. Só gere o bloco final abaixo quando eu
 confirmar que estamos de acordo.
 
 ## Formato da resposta final (gerar só quando eu pedir)
 === SINOPSE ===
-(texto)
+(texto)${temSuspeitoDeImagem ? `
+=== TEXTO BASE TRANSCRITO ===
+(transcrição completa e fiel do(s) arquivo(s) escaneado(s) — só se aplicável)` : ''}
 === RELEASE ===
 (texto)
 === TEXTO COMPLEMENTAR ===
@@ -6522,6 +6624,37 @@ confirmar que estamos de acordo.
   }
 });
 
+// Pré-visualização: mostra o que SERIA gravado, sem gravar nada (exceto marcar o status pra
+// "Aguardando Publicação", que é só um sinalizador de progresso, não conteúdo de verdade).
+// Pedido do Fábio pra ter uma etapa de confirmação antes do PATCH de verdade no Notion.
+app.post('/portal-admin/revisao-trabalhos/:id/pre-visualizar', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const textoColado = req.body?.textoColado || '';
+    if (!textoColado.trim()) return res.status(400).json({ ok: false, erro: 'Cole o texto final antes de pré-visualizar.' });
+
+    const blocos = revParsearTexto(textoColado);
+    const opcoes = await revBuscarOpcoes();
+    const { resultados } = revResolverCamposSimples(blocos, opcoes);
+
+    for (const [chave, propName] of Object.entries(REV_CAMPOS_ARQUIVO)) {
+      if (blocos[chave]) resultados.push({ campo: propName, status: 'ok', mensagem: 'será gerado como PDF e anexado ao confirmar' });
+    }
+    if (blocos.TEXTO_BASE_TRANSCRITO) {
+      resultados.push({ campo: 'Texto Base (transcrito)', status: 'ok', mensagem: 'será gerado como PDF novo e reanexado (mantendo o(s) original(is)) ao confirmar' });
+    }
+    if (!blocos.SINOPSE && !blocos.RELEASE) {
+      resultados.push({ campo: 'Aviso geral', status: 'aviso', mensagem: 'Não encontrei os marcadores "=== CAMPO ===" esperados — confira se colou o bloco completo.' });
+    }
+
+    await revAtualizarStatus(req.params.id, 'Aguardando Publicação');
+    res.json({ ok: true, resultados, preview: true });
+  } catch (err) {
+    console.error('[revisao-trabalhos] erro ao pré-visualizar:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
 app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
   if (!exigirSessaoAdmin(req, res)) return;
   try {
@@ -6530,40 +6663,7 @@ app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
 
     const blocos = revParsearTexto(textoColado);
     const opcoes = await revBuscarOpcoes();
-    const resultados = [];
-    const properties = {};
-
-    if (blocos.SINOPSE) {
-      properties[REV_PROP_SINOPSE] = { rich_text: [{ text: { content: blocos.SINOPSE.slice(0, 2000) } }] };
-      resultados.push({ campo: 'Sinopse', status: 'ok' });
-    }
-
-    if (blocos.CLASSIFICACAO_INDICATIVA) {
-      const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoes.classificacao);
-      if (valor) {
-        properties[REV_PROP_CLASSIFICACAO] = { select: { name: valor } };
-        resultados.push({ campo: 'Classificação Indicativa', status: 'ok', valor });
-      } else {
-        resultados.push({ campo: 'Classificação Indicativa', status: 'aviso', mensagem: `"${blocos.CLASSIFICACAO_INDICATIVA}" não bateu com nenhuma opção existente — não gravei.` });
-      }
-    }
-
-    for (const chave of ['PUBLICO_ALVO', 'TEMAS', 'DESCRITORES']) {
-      if (!blocos[chave]) continue;
-      const partes = blocos[chave].split(',').map(s => s.trim()).filter(Boolean);
-      const validas = [], invalidas = [];
-      for (const parte of partes) {
-        const achou = revEncontrarOpcao(parte, opcoes[chave === 'PUBLICO_ALVO' ? 'publicoAlvo' : chave.toLowerCase()]);
-        if (achou) validas.push(achou); else invalidas.push(parte);
-      }
-      if (validas.length) {
-        properties[REV_CAMPOS_MULTI[chave]] = { multi_select: validas.map(n => ({ name: n })) };
-        resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'ok', valor: validas.join(', ') });
-      }
-      if (invalidas.length) {
-        resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'aviso', mensagem: `Não bateram com opções existentes (não gravadas): ${invalidas.join(', ')}` });
-      }
-    }
+    const { properties, resultados } = revResolverCamposSimples(blocos, opcoes);
 
     const paginaAtual = await revNotion('GET', `/pages/${req.params.id}`);
     const nomeTrabalho = revTxt(paginaAtual.properties['Nome']?.title) || 'trabalho';
@@ -6581,8 +6681,84 @@ app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
       }
     }
 
+    // Texto Base transcrito (quando o original é imagem/scan): reanexa como arquivo NOVO,
+    // ao lado do(s) original(is) — nunca substitui. Como o PATCH de "files" sempre exige a
+    // lista inteira, os originais precisam ser rebaixados e re-subidos (não dá pra "manter"
+    // um arquivo já hospedado só citando a URL assinada — ela expira em ~1h e viraria link
+    // quebrado no Notion).
+    if (blocos.TEXTO_BASE_TRANSCRITO) {
+      try {
+        const existentes = revColetarArquivos(paginaAtual.properties, 'Texto Base');
+        const filesProp = [];
+        for (const a of existentes) {
+          const resp = await fetch(a.url);
+          if (!resp.ok) throw new Error(`falha ao baixar "${a.nome}" pra reanexar (HTTP ${resp.status})`);
+          const buf = Buffer.from(await resp.arrayBuffer());
+          const uid = await revSubirArquivoNotion(a.nome, buf, revAdivinharContentType(a.nome));
+          filesProp.push({ type: 'file_upload', file_upload: { id: uid }, name: a.nome });
+        }
+        const pdfTranscrito = await revGerarPdf(`Texto Base (transcrito) — ${nomeTrabalho}`, blocos.TEXTO_BASE_TRANSCRITO);
+        const nomeTranscrito = `Texto Base (transcrito) - ${nomeTrabalho}.pdf`.replace(/[\\/]/g, '-');
+        const uidTranscrito = await revSubirArquivoNotion(nomeTranscrito, pdfTranscrito, 'application/pdf');
+        filesProp.push({ type: 'file_upload', file_upload: { id: uidTranscrito }, name: nomeTranscrito });
+        properties['Texto Base'] = { files: filesProp };
+        resultados.push({ campo: 'Texto Base (transcrito)', status: 'ok', mensagem: `mantidos ${existentes.length} arquivo(s) original(is) + 1 transcrição nova` });
+      } catch (e) {
+        resultados.push({ campo: 'Texto Base (transcrito)', status: 'erro', mensagem: e.message });
+      }
+    }
+
     properties[REV_STATUS_PROP] = { select: { name: 'Publicado' } };
     await revNotion('PATCH', `/pages/${req.params.id}`, { properties });
+
+    // Publicação também no Portfólio Online (banco de vendas) — não há relation entre os
+    // dois bancos, então o match é só por Nome EXATO. Ambíguo ou sem match: reporta e pula,
+    // nunca adivinha em cima de dado de venda.
+    try {
+      const candidatos = await revNotion('POST', `/databases/${PORTFOLIO_ONLINE_DB}/query`, {
+        filter: { property: 'Nome', title: { equals: nomeTrabalho } }, page_size: 10,
+      });
+      if (candidatos.results.length === 0) {
+        resultados.push({ campo: 'Portfólio Online', status: 'aviso', mensagem: `Não encontrei "${nomeTrabalho}" no Portfólio Online (o nome precisa bater exatamente) — publicação lá foi pulada.` });
+      } else if (candidatos.results.length > 1) {
+        resultados.push({ campo: 'Portfólio Online', status: 'aviso', mensagem: `Encontrei ${candidatos.results.length} páginas com o nome "${nomeTrabalho}" no Portfólio Online — ambíguo, publicação lá foi pulada.` });
+      } else {
+        const paginaPortfolio = candidatos.results[0];
+        const opcoesPortfolio = await revBuscarOpcoesPortfolio();
+        const propsPortfolio = {};
+
+        if (blocos.SINOPSE) propsPortfolio['Sinopse'] = { rich_text: [{ text: { content: blocos.SINOPSE.slice(0, 2000) } }] };
+        if (blocos.RELEASE) propsPortfolio['Release - Texto'] = { rich_text: [{ text: { content: blocos.RELEASE.slice(0, 2000) } }] };
+
+        if (blocos.CLASSIFICACAO_INDICATIVA) {
+          const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoesPortfolio.classificacao);
+          if (valor) propsPortfolio['Classificação Indicativa'] = { select: { name: valor } };
+        }
+        const mapaMultiPortfolio = { PUBLICO_ALVO: ['Público-Alvo', 'publicoAlvo'], TEMAS: ['Temas', 'temas'], DESCRITORES: ['Descritores de Classificação', 'descritores'] };
+        for (const [chave, [propName, chaveOpcoes]] of Object.entries(mapaMultiPortfolio)) {
+          if (!blocos[chave]) continue;
+          const validas = blocos[chave].split(',').map(s => s.trim()).filter(Boolean)
+            .map(p => revEncontrarOpcao(p, opcoesPortfolio[chaveOpcoes])).filter(Boolean);
+          if (validas.length) propsPortfolio[propName] = { multi_select: validas.map(n => ({ name: n })) };
+        }
+
+        for (const [chave, propName] of [['RELACAO_BNCC', 'Relação BNCC'], ['PROPOSTA_PEDAGOGICA', 'Proposta Pedagógica'], ['RELEASE', 'Release']]) {
+          if (!blocos[chave]) continue;
+          const pdfBuffer = await revGerarPdf(`${propName} — ${nomeTrabalho}`, blocos[chave]);
+          const nomeArquivo = `${propName} - ${nomeTrabalho}.pdf`.replace(/[\\/]/g, '-');
+          const uid = await revSubirArquivoNotion(nomeArquivo, pdfBuffer, 'application/pdf');
+          propsPortfolio[propName] = { files: [{ type: 'file_upload', file_upload: { id: uid }, name: nomeArquivo }] };
+        }
+
+        await revNotion('PATCH', `/pages/${paginaPortfolio.id}`, { properties: propsPortfolio });
+        resultados.push({
+          campo: 'Portfólio Online', status: 'ok',
+          mensagem: `publicado em "${nomeTrabalho}" (Texto Complementar não existe como campo lá — só ficou em Trabalhos; Temas foi pro campo genérico "Temas", não nos 3 campos de esfera — Tema Geral/Específico/Social-Edital continuam manuais)`,
+        });
+      }
+    } catch (e) {
+      resultados.push({ campo: 'Portfólio Online', status: 'erro', mensagem: e.message });
+    }
 
     res.json({ ok: true, resultados });
   } catch (err) {
