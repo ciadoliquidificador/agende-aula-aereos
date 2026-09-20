@@ -6334,8 +6334,13 @@ async function revBuscarOpcoesPortfolio() {
   const dados = {
     classificacao: opts('Classificação Indicativa'),
     publicoAlvo: opts('Público-Alvo'),
-    temas: opts('Temas'),
+    temaGeral: opts('Tema Geral'),
+    temaSocialEdital: opts('Tema Social/Edital'),
     descritores: opts('Descritores de Classificação'),
+    // 'Temas' é campo DEPRECIADO (diretriz do projeto, set/2026) — não usar pra escrever
+    // conteúdo novo, só serve pra ser limpo na migração de cada peça.
+    // 'Tema Específico' é vocabulário ABERTO (cresce por peça) — não busca opções fixas,
+    // escreve direto o que vier, o Notion cria a opção nova sozinho no PATCH da página.
   };
   revCacheOpcoesPortfolio = { em: Date.now(), dados };
   return dados;
@@ -6362,6 +6367,11 @@ const REV_ALIAS_CAMPO = {
   'PUBLICO-ALVO': 'PUBLICO_ALVO',
   'PUBLICO ALVO': 'PUBLICO_ALVO',
   'TEMAS': 'TEMAS',
+  'TEMA GERAL': 'TEMA_GERAL',
+  'TEMA ESPECIFICO': 'TEMA_ESPECIFICO',
+  'TEMA SOCIAL/EDITAL': 'TEMA_SOCIAL_EDITAL',
+  'TEMA SOCIAL EDITAL': 'TEMA_SOCIAL_EDITAL',
+  'TEMA SOCIAL-EDITAL': 'TEMA_SOCIAL_EDITAL',
   'DESCRITORES DE CLASSIFICACAO': 'DESCRITORES',
   'TEXTO BASE TRANSCRITO': 'TEXTO_BASE_TRANSCRITO',
 };
@@ -6445,20 +6455,25 @@ function revResolverCamposSimples(blocos, opcoes) {
     }
   }
 
-  for (const chave of ['PUBLICO_ALVO', 'TEMAS', 'DESCRITORES']) {
+  // Em Trabalhos, a propriedade TEMAS espelha o vocabulário de "Tema Social/Edital" (diretriz
+  // do projeto, set/2026) — o bloco antigo "TEMAS" do resultado colado não existe mais no
+  // template novo, então a fonte pra Trabalhos.TEMAS agora é TEMA_SOCIAL_EDITAL.
+  for (const [chave, chaveOpcoes] of [['PUBLICO_ALVO', 'publicoAlvo'], ['TEMA_SOCIAL_EDITAL', 'temas'], ['DESCRITORES', 'descritores']]) {
     if (!blocos[chave]) continue;
     const partes = blocos[chave].split(',').map(s => s.trim()).filter(Boolean);
     const validas = [], invalidas = [];
     for (const parte of partes) {
-      const achou = revEncontrarOpcao(parte, opcoes[chave === 'PUBLICO_ALVO' ? 'publicoAlvo' : chave.toLowerCase()]);
+      const achou = revEncontrarOpcao(parte, opcoes[chaveOpcoes]);
       if (achou) validas.push(achou); else invalidas.push(parte);
     }
+    const propName = chave === 'TEMA_SOCIAL_EDITAL' ? REV_PROP_TEMAS : REV_CAMPOS_MULTI[chave];
+    const label = chave === 'TEMA_SOCIAL_EDITAL' ? 'Temas (Trabalhos, via Tema Social/Edital)' : REV_LABEL_MULTI[chave];
     if (validas.length) {
-      properties[REV_CAMPOS_MULTI[chave]] = { multi_select: validas.map(n => ({ name: n })) };
-      resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'ok', valor: validas.join(', ') });
+      properties[propName] = { multi_select: validas.map(n => ({ name: n })) };
+      resultados.push({ campo: label, status: 'ok', valor: validas.join(', ') });
     }
     if (invalidas.length) {
-      resultados.push({ campo: REV_LABEL_MULTI[chave], status: 'aviso', mensagem: `Não bateram com opções existentes (não serão gravadas): ${invalidas.join(', ')}` });
+      resultados.push({ campo: label, status: 'aviso', mensagem: `Não bateram com opções existentes (não serão gravadas): ${invalidas.join(', ')}` });
     }
   }
 
@@ -6510,58 +6525,66 @@ app.get('/portal-admin/revisao-trabalhos/lista', async (req, res) => {
   }
 });
 
-app.get('/portal-admin/revisao-trabalhos/:id/pacote', async (req, res) => {
-  if (!exigirSessaoAdmin(req, res)) return;
-  try {
-    const pagina = await revNotion('GET', `/pages/${req.params.id}`);
-    const props = pagina.properties;
-    const nome = revTxt(props['Nome']?.title);
-    const opcoes = await revBuscarOpcoes();
+// Monta todo o material de um trabalho + o texto do prompt de REVISÃO (sem a parte de
+// imagem, que agora é gerada à parte, depois da revisão — ver rota /prompt-imagens).
+// Compartilhado entre a rota JSON (/pacote) e o download em zip (/pacote.zip).
+async function revMontarDadosRevisao(pageId) {
+  const pagina = await revNotion('GET', `/pages/${pageId}`);
+  const props = pagina.properties;
+  const nome = revTxt(props['Nome']?.title);
+  const opcoes = await revBuscarOpcoes();
+  const opcoesPortfolio = await revBuscarOpcoesPortfolio();
 
-    const arqTextoBase = revColetarArquivos(props, 'Texto Base');
-    const arqRelease = revColetarArquivos(props, 'Release');
-    const arqTextoComplementar = revColetarArquivos(props, 'Texto Complementar');
-    const arqBncc = revColetarArquivos(props, 'Relação BNCC');
-    const arqPropostaPedagogica = revColetarArquivos(props, 'Proposta Pedagógica');
-    const arqImagemResumo = revColetarArquivos(props, 'Imagem Resumo');
-    const linkVideo = props['Link para Vídeo na Íntegra']?.url || '';
-    const linkFotos = props['FOTOS']?.url || '';
+  const arqTextoBase = revColetarArquivos(props, 'Texto Base');
+  const arqRelease = revColetarArquivos(props, 'Release');
+  const arqTextoComplementar = revColetarArquivos(props, 'Texto Complementar');
+  const arqBncc = revColetarArquivos(props, 'Relação BNCC');
+  const arqPropostaPedagogica = revColetarArquivos(props, 'Proposta Pedagógica');
+  const arqImagemResumo = revColetarArquivos(props, 'Imagem Resumo');
+  const linkVideo = props['Link para Vídeo na Íntegra']?.url || '';
+  const linkFotos = props['FOTOS']?.url || '';
 
-    const sinopseAtual = revTxt(props[REV_PROP_SINOPSE]?.rich_text);
-    const classificacaoAtual = props[REV_PROP_CLASSIFICACAO]?.select?.name || '';
-    const publicoAtual = (props[REV_PROP_PUBLICO_ALVO]?.multi_select || []).map(o => o.name);
-    const temasAtual = (props[REV_PROP_TEMAS]?.multi_select || []).map(o => o.name);
-    const descritoresAtual = (props[REV_PROP_DESCRITORES]?.multi_select || []).map(o => o.name);
-    const duracaoAtual = (props['DURAÇÃO DA APRESENTAÇÃO']?.multi_select || []).map(o => o.name);
+  const sinopseAtual = revTxt(props[REV_PROP_SINOPSE]?.rich_text);
+  const classificacaoAtual = props[REV_PROP_CLASSIFICACAO]?.select?.name || '';
+  const publicoAtual = (props[REV_PROP_PUBLICO_ALVO]?.multi_select || []).map(o => o.name);
+  const temasAtual = (props[REV_PROP_TEMAS]?.multi_select || []).map(o => o.name);
+  const descritoresAtual = (props[REV_PROP_DESCRITORES]?.multi_select || []).map(o => o.name);
+  const duracaoAtual = (props['DURAÇÃO DA APRESENTAÇÃO']?.multi_select || []).map(o => o.name);
 
-    let materialBase;
-    const avisos = [];
-    let temSuspeitoDeImagem = false;
-    if (arqTextoBase.length > 0) {
-      materialBase = `Texto Base anexado no Notion (${arqTextoBase.length} arquivo(s)) — baixe abaixo e suba junto no Claude.ai:\n` + arqTextoBase.map(a => `- ${a.nome}`).join('\n');
+  let materialBase;
+  const avisos = [];
+  let temSuspeitoDeImagem = false;
+  if (arqTextoBase.length > 0) {
+    materialBase = `Texto Base anexado no Notion (${arqTextoBase.length} arquivo(s)) — baixe abaixo e suba junto no Claude.ai:\n` + arqTextoBase.map(a => `- ${a.nome}`).join('\n');
 
-      const checagens = await Promise.all(arqTextoBase.map(revChecarPdfEscaneado));
-      const suspeitos = arqTextoBase.filter((a, i) => checagens[i].provavelImagem);
-      const falhasChecagem = arqTextoBase.map((a, i) => ({ a, c: checagens[i] })).filter(x => x.c.verificavel === false && x.c.erro);
-      if (suspeitos.length) {
-        temSuspeitoDeImagem = true;
-        materialBase += `\n\n⚠️ Provavelmente IMAGEM ESCANEADA (sem texto extraível — confirme lendo no Claude.ai): ${suspeitos.map(a => a.nome).join(', ')}.`;
-        avisos.push(`Texto Base provavelmente escaneado (sem texto extraível, checagem automática): ${suspeitos.map(a => a.nome).join(', ')} — confirme visualmente antes de assumir.`);
-      }
-      if (falhasChecagem.length) {
-        avisos.push(`Não consegui checar se é imagem ou texto (falha na verificação automática, não é erro do conteúdo em si): ${falhasChecagem.map(x => `${x.a.nome} (${x.c.erro})`).join('; ')}`);
-      }
-    } else if (linkVideo) {
-      const resultadoVideo = await revMaterialDeVideo(linkVideo);
-      materialBase = resultadoVideo.materialTexto;
-      avisos.push(...resultadoVideo.avisos);
-    } else {
-      materialBase = `⚠️ SEM Texto Base e SEM vídeo — não dá pra fazer uma revisão de qualidade sem material bruto. Sugestão: pule este trabalho e registre pra segunda rodada, depois de completar o material.`;
-      avisos.push('Sem Texto Base e sem vídeo — trabalho sem material bruto, precisa de correção manual antes de revisar.');
+    const checagens = await Promise.all(arqTextoBase.map(revChecarPdfEscaneado));
+    const suspeitos = arqTextoBase.filter((a, i) => checagens[i].provavelImagem);
+    const falhasChecagem = arqTextoBase.map((a, i) => ({ a, c: checagens[i] })).filter(x => x.c.verificavel === false && x.c.erro);
+    if (suspeitos.length) {
+      temSuspeitoDeImagem = true;
+      materialBase += `\n\n⚠️ Provavelmente IMAGEM ESCANEADA (sem texto extraível — confirme lendo no Claude.ai): ${suspeitos.map(a => a.nome).join(', ')}.`;
+      avisos.push(`Texto Base provavelmente escaneado (sem texto extraível, checagem automática): ${suspeitos.map(a => a.nome).join(', ')} — confirme visualmente antes de assumir.`);
     }
+    if (falhasChecagem.length) {
+      avisos.push(`Não consegui checar se é imagem ou texto (falha na verificação automática, não é erro do conteúdo em si): ${falhasChecagem.map(x => `${x.a.nome} (${x.c.erro})`).join('; ')}`);
+    }
+  } else if (linkVideo) {
+    const resultadoVideo = await revMaterialDeVideo(linkVideo);
+    materialBase = resultadoVideo.materialTexto;
+    avisos.push(...resultadoVideo.avisos);
+  } else {
+    materialBase = `⚠️ SEM Texto Base e SEM vídeo — não dá pra fazer uma revisão de qualidade sem material bruto. Sugestão: pule este trabalho e registre pra segunda rodada, depois de completar o material.`;
+    avisos.push('Sem Texto Base e sem vídeo — trabalho sem material bruto, precisa de correção manual antes de revisar.');
+  }
 
-    const instrucoes = `# Revisão crítica — ${nome}
+  const instrucoesRevisao = `# Prompt de REVISÃO — ${nome}
 ${avisos.length ? `\n## ⚠️⚠️ AVISOS — LEIA ANTES DE CONTINUAR ⚠️⚠️\n${avisos.map(a => '- ' + a).join('\n')}\n` : ''}
+## Onde rodar isso
+Cole isso numa conversa dentro do seu **Project "vendas de espetáculos" no Claude.ai**
+(não um chat solto) — é lá que já estão os guias de BNCC e CLASSIND que você usa pra
+classificação indicativa e alinhamento curricular. Fora desse Project, a análise não tem
+acesso a esses guias.
+
 ## Material disponível
 ${materialBase}
 ${arqRelease.length ? `\nRelease já existe: ${arqRelease.map(a => a.nome).join(', ')}` : ''}${arqTextoComplementar.length ? `\nTexto Complementar já existe: ${arqTextoComplementar.map(a => a.nome).join(', ')}` : ''}${arqBncc.length ? `\nRelação BNCC já existe: ${arqBncc.map(a => a.nome).join(', ')}` : ''}${arqPropostaPedagogica.length ? `\nProposta Pedagógica já existe: ${arqPropostaPedagogica.map(a => a.nome).join(', ')}` : ''}${arqImagemResumo.length ? `\nFotos de divulgação (Imagem Resumo): ${arqImagemResumo.map(a => a.nome).join(', ')} — suba junto se ajudar no julgamento visual (figurino/cena/faixa etária)` : ''}${linkFotos ? `\nLink de fotos (FOTOS): ${linkFotos}` : ''}
@@ -6570,21 +6593,29 @@ ${arqRelease.length ? `\nRelease já existe: ${arqRelease.map(a => a.nome).join(
 - Sinopse atual: ${sinopseAtual || '(vazio)'}
 - Classificação Indicativa atual: ${classificacaoAtual || '(vazio)'}
 - Público-alvo atual: ${publicoAtual.join(', ') || '(vazio)'}
-- Temas atuais: ${temasAtual.join(', ') || '(vazio)'}
+- Temas atuais (campo antigo "TEMAS", só como referência): ${temasAtual.join(', ') || '(vazio)'}
 - Descritores atuais: ${descritoresAtual.join(', ') || '(vazio)'}
 
 ## Sua tarefa
+Siga a diretriz de padronização do projeto (já está no conhecimento do seu Project) pra
+metodologia de Classificação Indicativa/Descritores — inclusive: peça "Livre" PODE e DEVE
+registrar Descritores quando há tendência relevante do CLASSIND, isso não muda a faixa etária.
+
 Revisar criticamente o material acima e gerar/atualizar: Sinopse (sucinta, até 350 caracteres),
 Release (sucinto), Texto Complementar (texto MAIS ELABORADO de venda/justificativa do projeto,
 com o embasamento da pesquisa por trás — diferente da Sinopse/Release, que são sucintos),
-Relação BNCC, Proposta Pedagógica, Classificação Indicativa, Público-Alvo Adequado, Temas e
-Descritores de Classificação.
+Relação BNCC, Proposta Pedagógica, Classificação Indicativa, Público-Alvo Adequado, Descritores
+de Classificação e os 3 eixos de tema (Tema Geral / Tema Específico / Tema Social-Edital — o
+campo antigo "TEMAS" acima é só referência histórica, **não usar nem preencher ele de novo**).
 
-**Escolha SOMENTE dentro destas opções já cadastradas no Notion** (não invente uma nova — se
-achar que falta uma categoria, me avise à parte, fora do bloco final):
+**Escolha SOMENTE dentro destas opções já cadastradas** pra tudo que é vocabulário fechado (não
+invente — se achar que falta uma categoria, me avise à parte, fora do bloco final). **Exceção:
+Tema Específico é vocabulário ABERTO** (cresce por peça — nomes próprios, obras, movimentos
+específicos entram livremente, pode criar termo novo):
 - Classificação Indicativa (escolha 1): ${opcoes.classificacao.join(' | ')}
 - Público-Alvo Adequado (escolha 1 ou mais): ${opcoes.publicoAlvo.join(' | ')}
-- Temas (escolha 1 ou mais): ${opcoes.temas.join(' | ')}
+- Tema Geral (escolha 1 ou mais, termos amplos, SEM nome próprio): ${opcoesPortfolio.temaGeral.join(' | ')}
+- Tema Social/Edital (escolha 1 ou mais): ${opcoesPortfolio.temaSocialEdital.join(' | ')}
 - Descritores de Classificação (0 ou mais, só se aplicável): ${opcoes.descritores.join(' | ')}
 
 ${temSuspeitoDeImagem ? `\n## Texto Base escaneado (imagem)\nAlgum(ns) arquivo(s) do Texto Base parecem ser foto/scan sem texto extraível (aviso acima). Leia a imagem direto (você lê nativamente) e TRANSCREVA o conteúdo por completo, com fidelidade — essa transcrição vai virar um arquivo de texto novo, reanexado ao lado do original, pra não precisar reabrir a imagem numa próxima consulta. Inclua essa transcrição no bloco === TEXTO BASE TRANSCRITO === do resultado final.\n` : ''}
@@ -6609,30 +6640,118 @@ confirmar que estamos de acordo.
 (uma das opções acima, exatamente)
 === PUBLICO-ALVO ===
 (opções separadas por vírgula)
-=== TEMAS ===
-(opções separadas por vírgula)
+=== TEMA GERAL ===
+(opções separadas por vírgula, dentre as listadas acima)
+=== TEMA ESPECIFICO ===
+(opções separadas por vírgula — livre, pode ser termo novo)
+=== TEMA SOCIAL/EDITAL ===
+(opções separadas por vírgula, dentre as listadas acima)
 === DESCRITORES DE CLASSIFICACAO ===
 (opções separadas por vírgula, ou deixe vazio)
+`;
 
-## Imagens de divulgação (gerar no ChatGPT, no seu plano — sem custo de API)
-${(pagina.cover || arqImagemResumo.length > 0) ? 'Este trabalho já tem imagem de divulgação — rode os prompts abaixo só se quiser atualizar.' : '⚠️ Este trabalho ainda NÃO tem imagem de divulgação (nem capa, nem Imagem Resumo).'}
+  const arquivos = [...arqTextoBase, ...arqRelease, ...arqTextoComplementar, ...arqBncc, ...arqPropostaPedagogica, ...arqImagemResumo];
 
-Isso é feito numa conversa SEPARADA, no ChatGPT (não no Claude.ai) — abra uma
-conversa nova lá e siga os passos:
+  return {
+    pagina, nome, instrucoesRevisao, arquivos, avisos,
+    arqImagemResumo, linkFotos, sinopseAtual, classificacaoAtual, publicoAtual, temasAtual, duracaoAtual,
+  };
+}
 
-**Passo 1 — suba as fotos reais da apresentação.** Baixe e anexe nessa
-conversa do ChatGPT:
-${arqImagemResumo.length ? arqImagemResumo.map(a => `- ${a.nome}: ${a.url}`).join('\n') : '(nenhum arquivo em "Imagem Resumo" ainda)'}
-${linkFotos ? `- Pasta com mais fotos (FOTOS): ${linkFotos}` : ''}
+app.get('/portal-admin/revisao-trabalhos/:id/pacote', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const d = await revMontarDadosRevisao(req.params.id);
+    await revAtualizarStatus(req.params.id, 'Pacote Gerado');
+    res.json({ ok: true, nome: d.nome, instrucoes: d.instrucoesRevisao, arquivos: d.arquivos, avisos: d.avisos });
+  } catch (err) {
+    console.error('[revisao-trabalhos] erro ao montar pacote:', err.message);
+    res.status(500).json({ ok: false, erro: err.message });
+  }
+});
 
-**Passo 2 — cole este texto do projeto na mesma conversa** (pra ele usar como conteúdo, não só como imagem de referência):
+// Baixa tudo num zip só: o prompt de revisão (.md) + todos os arquivos de referência.
+// Motivo (pedido do Fábio, set/2026): baixar/subir arquivo um por um no Claude.ai era
+// muito atrito — com zip vira 1 download aqui + 1 seleção de "tudo" pra soltar na conversa.
+app.get('/portal-admin/revisao-trabalhos/:id/pacote.zip', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const d = await revMontarDadosRevisao(req.params.id);
+    await revAtualizarStatus(req.params.id, 'Pacote Gerado');
+
+    const archiver = require('archiver');
+    const nomeArquivoZip = `pacote-revisao-${d.nome}.zip`.replace(/[\\/]/g, '-');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivoZip}"`);
+
+    const arquivo = archiver('zip', { zlib: { level: 9 } });
+    arquivo.on('error', (e) => { console.error('[revisao-trabalhos] erro ao zipar:', e.message); res.destroy(e); });
+    arquivo.pipe(res);
+    arquivo.append(d.instrucoesRevisao, { name: '0-prompt-revisao.md' });
+
+    const nomesUsados = new Set(['0-prompt-revisao.md']);
+    for (const a of d.arquivos) {
+      try {
+        const resp = await fetch(a.url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        let nomeFinal = a.nome || 'arquivo';
+        while (nomesUsados.has(nomeFinal)) nomeFinal = `_${nomeFinal}`;
+        nomesUsados.add(nomeFinal);
+        arquivo.append(buf, { name: nomeFinal });
+      } catch (e) {
+        arquivo.append(`Falha ao baixar este arquivo pra incluir no zip: ${a.nome} — ${e.message}\nBaixe manualmente em: ${a.url}`, { name: `FALHA - ${a.nome}.txt` });
+      }
+    }
+    await arquivo.finalize();
+  } catch (err) {
+    console.error('[revisao-trabalhos] erro ao montar zip:', err.message);
+    if (!res.headersSent) res.status(500).json({ ok: false, erro: err.message });
+  }
+});
+
+// Prompt de IMAGENS — gerado DEPOIS da revisão, usando o texto RESOLVIDO (o que foi colado
+// como resultado final), não os valores antigos do Notion. Se um campo não veio no texto
+// colado, cai pro valor atual do Notion e avisa isso explicitamente (nunca finge que veio
+// da revisão quando não veio).
+app.post('/portal-admin/revisao-trabalhos/:id/prompt-imagens', async (req, res) => {
+  if (!exigirSessaoAdmin(req, res)) return;
+  try {
+    const textoColado = req.body?.textoColado || '';
+    const blocos = textoColado.trim() ? revParsearTexto(textoColado) : {};
+    const d = await revMontarDadosRevisao(req.params.id);
+
+    function resolvido(chave, valorAtual, label) {
+      if (blocos[chave]) return { valor: blocos[chave], origem: 'revisão' };
+      return { valor: valorAtual || '(vazio)', origem: `valor atual do Notion — NÃO veio da revisão (${label} não estava no texto colado)` };
+    }
+    const sinopseR = resolvido('SINOPSE', d.sinopseAtual, 'Sinopse');
+    const temasR = resolvido('TEMAS', d.temasAtual.join(', '), 'Temas');
+    const publicoR = resolvido('PUBLICO_ALVO', d.publicoAtual.join(', '), 'Público-alvo');
+    const classificacaoR = resolvido('CLASSIFICACAO_INDICATIVA', d.classificacaoAtual, 'Classificação Indicativa');
+
+    const temImagem = !!(d.pagina.cover) || d.arqImagemResumo.length > 0;
+
+    const instrucoesImagem = `# Prompt de IMAGENS — ${d.nome}
+(gerar DEPOIS de fechar a revisão — usa o conteúdo já revisado, não o antigo)
+
+${temImagem ? 'Este trabalho já tem imagem de divulgação — rode os prompts abaixo só se quiser atualizar.' : '⚠️ Este trabalho ainda NÃO tem imagem de divulgação (nem capa, nem Imagem Resumo).'}
+
+Isso é feito numa conversa SEPARADA, no ChatGPT (não no Claude.ai) — abra uma conversa nova
+lá e siga os passos.
+
+**Passo 1 — suba as fotos reais da apresentação.** Baixe e anexe nessa conversa do ChatGPT:
+${d.arqImagemResumo.length ? d.arqImagemResumo.map(a => `- ${a.nome}: ${a.url}`).join('\n') : '(nenhum arquivo em "Imagem Resumo" ainda)'}
+${d.linkFotos ? `- Pasta com mais fotos (FOTOS): ${d.linkFotos}` : ''}
+
+**Passo 2 — cole este texto do projeto na mesma conversa** (conteúdo já revisado, quando disponível):
 """
-Projeto: ${nome}
-Sinopse: ${sinopseAtual || '(vazio, usar o que estiver no material anexado)'}
-Temas: ${temasAtual.join(', ') || '(vazio)'}
-Público-alvo: ${publicoAtual.join(', ') || '(vazio)'}
-Classificação indicativa: ${classificacaoAtual || '(vazio)'}
-Duração: ${duracaoAtual.join(', ') || '(vazio)'}
+Projeto: ${d.nome}
+Sinopse (${sinopseR.origem}): ${sinopseR.valor}
+Temas (${temasR.origem}): ${temasR.valor}
+Público-alvo (${publicoR.origem}): ${publicoR.valor}
+Classificação indicativa (${classificacaoR.origem}): ${classificacaoR.valor}
+Duração: ${d.duracaoAtual.join(', ') || '(vazio)'}
 """
 
 **Passo 3 — rode os 3 prompts abaixo, um de cada vez, na mesma conversa** (assim ele reaproveita as fotos e o texto já enviados):
@@ -6655,12 +6774,9 @@ formato A4 retrato"
 - Imagem 3 (card de e-mail) → propriedade "Card E-mail" na página correspondente deste trabalho no **Portfólio Online** (banco de vendas) — não fica em 🎭 Trabalhos.
 `;
 
-    const arquivos = [...arqTextoBase, ...arqRelease, ...arqTextoComplementar, ...arqBncc, ...arqPropostaPedagogica, ...arqImagemResumo];
-
-    await revAtualizarStatus(req.params.id, 'Pacote Gerado');
-    res.json({ ok: true, nome, instrucoes, arquivos, avisos });
+    res.json({ ok: true, instrucoesImagem, avisoTextoNaoColado: !textoColado.trim() });
   } catch (err) {
-    console.error('[revisao-trabalhos] erro ao montar pacote:', err.message);
+    console.error('[revisao-trabalhos] erro ao montar prompt de imagens:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
   }
 });
@@ -6775,12 +6891,25 @@ app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
           const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoesPortfolio.classificacao);
           if (valor) propsPortfolio['Classificação Indicativa'] = { select: { name: valor } };
         }
-        const mapaMultiPortfolio = { PUBLICO_ALVO: ['Público-Alvo', 'publicoAlvo'], TEMAS: ['Temas', 'temas'], DESCRITORES: ['Descritores de Classificação', 'descritores'] };
-        for (const [chave, [propName, chaveOpcoes]] of Object.entries(mapaMultiPortfolio)) {
+        // Vocabulário fechado (Público-Alvo, Tema Geral, Tema Social/Edital, Descritores):
+        // só grava o que bater com opção existente.
+        const mapaMultiFechadoPortfolio = { PUBLICO_ALVO: ['Público-Alvo', 'publicoAlvo'], TEMA_GERAL: ['Tema Geral', 'temaGeral'], TEMA_SOCIAL_EDITAL: ['Tema Social/Edital', 'temaSocialEdital'], DESCRITORES: ['Descritores de Classificação', 'descritores'] };
+        for (const [chave, [propName, chaveOpcoes]] of Object.entries(mapaMultiFechadoPortfolio)) {
           if (!blocos[chave]) continue;
           const validas = blocos[chave].split(',').map(s => s.trim()).filter(Boolean)
             .map(p => revEncontrarOpcao(p, opcoesPortfolio[chaveOpcoes])).filter(Boolean);
           if (validas.length) propsPortfolio[propName] = { multi_select: validas.map(n => ({ name: n })) };
+        }
+        // Tema Específico é vocabulário ABERTO (diretriz do projeto) — grava direto, sem
+        // checar contra lista fixa; o Notion cria a opção nova sozinho se ainda não existir.
+        if (blocos.TEMA_ESPECIFICO) {
+          const partes = blocos.TEMA_ESPECIFICO.split(',').map(s => s.trim()).filter(Boolean);
+          if (partes.length) propsPortfolio['Tema Específico'] = { multi_select: partes.map(n => ({ name: n })) };
+        }
+        // Campo "Temas" é DEPRECIADO (diretriz do projeto) — limpa ao publicar pelos 3 eixos
+        // novos, pra não deixar dado antigo/duplicado dessincronizado.
+        if (blocos.TEMA_GERAL || blocos.TEMA_ESPECIFICO || blocos.TEMA_SOCIAL_EDITAL) {
+          propsPortfolio['Temas'] = { multi_select: [] };
         }
 
         for (const [chave, propName] of [['RELACAO_BNCC', 'Relação BNCC'], ['PROPOSTA_PEDAGOGICA', 'Proposta Pedagógica'], ['RELEASE', 'Release']]) {
@@ -6794,7 +6923,7 @@ app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
         await revNotion('PATCH', `/pages/${paginaPortfolio.id}`, { properties: propsPortfolio });
         resultados.push({
           campo: 'Portfólio Online', status: 'ok',
-          mensagem: `publicado em "${nomeTrabalho}" (Texto Complementar não existe como campo lá — só ficou em Trabalhos; Temas foi pro campo genérico "Temas", não nos 3 campos de esfera — Tema Geral/Específico/Social-Edital continuam manuais)`,
+          mensagem: `publicado em "${nomeTrabalho}" (Texto Complementar não existe nesse banco — só ficou em Trabalhos)${propsPortfolio['Temas'] ? '; campo antigo "Temas" (depreciado) foi limpo' : ''}`,
         });
       }
     } catch (e) {
