@@ -6623,15 +6623,20 @@ registro, o vocabulário nem a profundidade desses dois documentos pra ficar "ap
 criança" — eles não são material de leitura direta pro público-alvo da apresentação, são
 subsídio de bastidor pra quem organiza/media a experiência.
 
-**Escolha SOMENTE dentro destas opções já cadastradas** pra tudo que é vocabulário fechado (não
-invente — se achar que falta uma categoria, me avise à parte, fora do bloco final). **Exceção:
-Tema Específico é vocabulário ABERTO** (cresce por peça — nomes próprios, obras, movimentos
-específicos entram livremente, pode criar termo novo):
-- Classificação Indicativa (escolha 1): ${opcoes.classificacao.join(' | ')}
-- Público-Alvo Adequado (escolha 1 ou mais): ${opcoes.publicoAlvo.join(' | ')}
-- Tema Geral (escolha 1 ou mais, termos amplos, SEM nome próprio): ${opcoesPortfolio.temaGeral.join(' | ')}
-- Tema Social/Edital (escolha 1 ou mais): ${opcoesPortfolio.temaSocialEdital.join(' | ')}
-- Descritores de Classificação (0 ou mais, só se aplicável): ${opcoes.descritores.join(' | ')}
+**Vocabulário de cada campo — três regimes diferentes, não misturar:**
+- **NUNCA inventar, mesmo se achar que falta categoria** (é sistema fixo/regulatório — se achar
+  que falta algo, me avise à parte, fora do bloco final, eu decido manualmente):
+  - Classificação Indicativa (escolha 1, só isso existe oficialmente no CLASSIND): ${opcoes.classificacao.join(' | ')}
+  - Público-Alvo Adequado (escolha 1 ou mais): ${opcoes.publicoAlvo.join(' | ')}
+  - Tema Social/Edital (escolha 1 ou mais): ${opcoesPortfolio.temaSocialEdital.join(' | ')}
+  - Descritores de Classificação (0 ou mais, só os do guia CLASSIND, se aplicável): ${opcoes.descritores.join(' | ')}
+- **Pode criar opção nova, mas só depois de checar que não existe equivalente** (evitar
+  duplicata tipo "Poesia" vs "poesia brasileira" — se criar, é uma decisão sua, não do Portal
+  Admin, que só registra o que vier):
+  - Tema Geral (termos amplos, SEM nome próprio) — opções já cadastradas: ${opcoesPortfolio.temaGeral.join(' | ')}
+- **Vocabulário ABERTO, cria à vontade** (cresce por peça — nomes próprios, obras, movimentos
+  específicos):
+  - Tema Específico
 
 ${temSuspeitoDeImagem ? `\n## Texto Base escaneado (imagem)\nAlgum(ns) arquivo(s) do Texto Base parecem ser foto/scan sem texto extraível (aviso acima). Leia a imagem direto (você lê nativamente) e TRANSCREVA o conteúdo por completo, com fidelidade — essa transcrição vai virar um arquivo de texto novo, reanexado ao lado do original, pra não precisar reabrir a imagem numa próxima consulta. Inclua essa transcrição no bloco === TEXTO BASE TRANSCRITO === do resultado final.\n` : ''}
 ## Discussão
@@ -6902,18 +6907,45 @@ app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
         if (blocos.SINOPSE) propsPortfolio['Sinopse'] = { rich_text: [{ text: { content: blocos.SINOPSE.slice(0, 2000) } }] };
         if (blocos.RELEASE) propsPortfolio['Release - Texto'] = { rich_text: [{ text: { content: blocos.RELEASE.slice(0, 2000) } }] };
 
+        // Classificação Indicativa é sistema regulatório FIXO (só existem os 6 níveis oficiais
+        // do CLASSIND) — nunca cria valor novo. Se não bater, avisa alto, não grava em silêncio.
         if (blocos.CLASSIFICACAO_INDICATIVA) {
           const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoesPortfolio.classificacao);
-          if (valor) propsPortfolio['Classificação Indicativa'] = { select: { name: valor } };
+          if (valor) {
+            propsPortfolio['Classificação Indicativa'] = { select: { name: valor } };
+          } else {
+            resultados.push({ campo: 'Classificação Indicativa (Portfólio Online)', status: 'aviso', mensagem: `"${blocos.CLASSIFICACAO_INDICATIVA}" não é um dos 6 níveis oficiais do CLASSIND — não gravei. Opções válidas: ${opcoesPortfolio.classificacao.join(' | ')}` });
+          }
         }
-        // Vocabulário fechado (Público-Alvo, Tema Geral, Tema Social/Edital, Descritores):
-        // só grava o que bater com opção existente.
-        const mapaMultiFechadoPortfolio = { PUBLICO_ALVO: ['Público-Alvo', 'publicoAlvo'], TEMA_GERAL: ['Tema Geral', 'temaGeral'], TEMA_SOCIAL_EDITAL: ['Tema Social/Edital', 'temaSocialEdital'], DESCRITORES: ['Descritores de Classificação', 'descritores'] };
+        // Vocabulário fechado de verdade (Público-Alvo, Tema Social/Edital, Descritores) —
+        // taxonomia institucional/edital, não deve crescer por decisão da revisão. Só grava o
+        // que bater com opção existente; o que não bater vira aviso (nunca falha em silêncio).
+        const mapaMultiFechadoPortfolio = { PUBLICO_ALVO: ['Público-Alvo', 'publicoAlvo'], TEMA_SOCIAL_EDITAL: ['Tema Social/Edital', 'temaSocialEdital'], DESCRITORES: ['Descritores de Classificação', 'descritores'] };
         for (const [chave, [propName, chaveOpcoes]] of Object.entries(mapaMultiFechadoPortfolio)) {
           if (!blocos[chave]) continue;
-          const validas = blocos[chave].split(',').map(s => s.trim()).filter(Boolean)
-            .map(p => revEncontrarOpcao(p, opcoesPortfolio[chaveOpcoes])).filter(Boolean);
+          const partes = blocos[chave].split(',').map(s => s.trim()).filter(Boolean);
+          const validas = [], invalidas = [];
+          for (const p of partes) {
+            const achou = revEncontrarOpcao(p, opcoesPortfolio[chaveOpcoes]);
+            if (achou) validas.push(achou); else invalidas.push(p);
+          }
           if (validas.length) propsPortfolio[propName] = { multi_select: validas.map(n => ({ name: n })) };
+          if (invalidas.length) resultados.push({ campo: `${propName} (Portfólio Online)`, status: 'aviso', mensagem: `Não bateram com opções existentes (não gravadas): ${invalidas.join(', ')}` });
+        }
+        // Tema Geral é vocabulário CONTROLADO, mas pode crescer com moderação (diretriz do
+        // projeto: "checar se já existe equivalente antes de criar opção nova" — quem faz essa
+        // checagem é a revisão no Claude.ai, não o Portal Admin). Por isso: tenta bater com
+        // opção existente; se não bater, GRAVA mesmo assim (Notion cria a opção nova), mas
+        // sempre reporta como "opção nova" pra ficar visível — nunca cria em silêncio.
+        if (blocos.TEMA_GERAL) {
+          const partes = blocos.TEMA_GERAL.split(',').map(s => s.trim()).filter(Boolean);
+          const finais = [], novas = [];
+          for (const p of partes) {
+            const achou = revEncontrarOpcao(p, opcoesPortfolio.temaGeral);
+            if (achou) finais.push(achou); else { finais.push(p); novas.push(p); }
+          }
+          if (finais.length) propsPortfolio['Tema Geral'] = { multi_select: finais.map(n => ({ name: n })) };
+          if (novas.length) resultados.push({ campo: 'Tema Geral (Portfólio Online)', status: 'aviso', mensagem: `Opção(ões) NOVA(S) criada(s), não existiam antes — confirme que não é duplicata de uma já cadastrada: ${novas.join(', ')}` });
         }
         // Tema Específico é vocabulário ABERTO (diretriz do projeto) — grava direto, sem
         // checar contra lista fixa; o Notion cria a opção nova sozinho se ainda não existir.
