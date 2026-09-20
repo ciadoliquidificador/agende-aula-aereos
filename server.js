@@ -6652,7 +6652,7 @@ formato A4 retrato"
 **Passo 4 — depois de gerar, suba cada imagem no lugar certo:**
 - Imagem 1 (capa) → capa da PÁGINA do Trabalho no Notion (topo da página, "Adicionar capa" / trocar capa existente).
 - Imagem 2 (infográfico) → propriedade "Imagem Resumo" desta página (arquivo).
-- Imagem 3 (card de e-mail) → NÃO vai pro Notion — guarde o arquivo pra usar depois na tela "Disparos de E-mail" do Portal Admin, quando for montar uma campanha pra este trabalho.
+- Imagem 3 (card de e-mail) → propriedade "Card E-mail" na página correspondente deste trabalho no **Portfólio Online** (banco de vendas) — não fica em 🎭 Trabalhos.
 `;
 
     const arquivos = [...arqTextoBase, ...arqRelease, ...arqTextoComplementar, ...arqBncc, ...arqPropostaPedagogica, ...arqImagemResumo];
