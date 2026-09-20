@@ -6612,6 +6612,23 @@ confirmar que estamos de acordo.
 (opções separadas por vírgula)
 === DESCRITORES DE CLASSIFICACAO ===
 (opções separadas por vírgula, ou deixe vazio)
+
+## Imagens de divulgação (opcional — gerar no ChatGPT, no seu plano, sem custo de API)
+${(pagina.cover || arqImagemResumo.length > 0) ? 'Este trabalho já tem imagem de divulgação — rode os prompts abaixo só se quiser atualizar.' : '⚠️ Este trabalho ainda NÃO tem imagem de divulgação (nem capa, nem Imagem Resumo).'}
+
+Antes de rodar os prompts, suba nessa mesma conversa do ChatGPT as fotos reais da apresentação (arquivos de "Imagem Resumo"/link de FOTOS listados acima, se tiver) e o texto do projeto (sinopse, temas, público-alvo, classificação, duração — já estão na seção "Valores atuais no Notion" acima). Depois rode os 3 prompts abaixo, um de cada vez, na mesma conversa (assim ele reaproveita as fotos e o contexto já enviados):
+
+1) Capa (A4 paisagem, minimalista):
+"criar imagem de capa A4 paisagem para o projeto
+formato paisagem
+minimalista"
+
+2) Página resumo/infográfico (A4 retrato):
+"criar uma pagina resumo/infografico da apresentação
+formato A4 retrato"
+
+3) Card pra corpo de e-mail (atrativo pra contratantes):
+"criar uma arte tipo um card para enviar no corpo do email com imagem e texto que descreva brevemente o projeto para ser atrativo para contratantes"
 `;
 
     const arquivos = [...arqTextoBase, ...arqRelease, ...arqTextoComplementar, ...arqBncc, ...arqPropostaPedagogica, ...arqImagemResumo];
