@@ -6532,6 +6532,7 @@ app.get('/portal-admin/revisao-trabalhos/:id/pacote', async (req, res) => {
     const publicoAtual = (props[REV_PROP_PUBLICO_ALVO]?.multi_select || []).map(o => o.name);
     const temasAtual = (props[REV_PROP_TEMAS]?.multi_select || []).map(o => o.name);
     const descritoresAtual = (props[REV_PROP_DESCRITORES]?.multi_select || []).map(o => o.name);
+    const duracaoAtual = (props['DURAÇÃO DA APRESENTAÇÃO']?.multi_select || []).map(o => o.name);
 
     let materialBase;
     const avisos = [];
@@ -6613,10 +6614,28 @@ confirmar que estamos de acordo.
 === DESCRITORES DE CLASSIFICACAO ===
 (opções separadas por vírgula, ou deixe vazio)
 
-## Imagens de divulgação (opcional — gerar no ChatGPT, no seu plano, sem custo de API)
+## Imagens de divulgação (gerar no ChatGPT, no seu plano — sem custo de API)
 ${(pagina.cover || arqImagemResumo.length > 0) ? 'Este trabalho já tem imagem de divulgação — rode os prompts abaixo só se quiser atualizar.' : '⚠️ Este trabalho ainda NÃO tem imagem de divulgação (nem capa, nem Imagem Resumo).'}
 
-Antes de rodar os prompts, suba nessa mesma conversa do ChatGPT as fotos reais da apresentação (arquivos de "Imagem Resumo"/link de FOTOS listados acima, se tiver) e o texto do projeto (sinopse, temas, público-alvo, classificação, duração — já estão na seção "Valores atuais no Notion" acima). Depois rode os 3 prompts abaixo, um de cada vez, na mesma conversa (assim ele reaproveita as fotos e o contexto já enviados):
+Isso é feito numa conversa SEPARADA, no ChatGPT (não no Claude.ai) — abra uma
+conversa nova lá e siga os passos:
+
+**Passo 1 — suba as fotos reais da apresentação.** Baixe e anexe nessa
+conversa do ChatGPT:
+${arqImagemResumo.length ? arqImagemResumo.map(a => `- ${a.nome}: ${a.url}`).join('\n') : '(nenhum arquivo em "Imagem Resumo" ainda)'}
+${linkFotos ? `- Pasta com mais fotos (FOTOS): ${linkFotos}` : ''}
+
+**Passo 2 — cole este texto do projeto na mesma conversa** (pra ele usar como conteúdo, não só como imagem de referência):
+"""
+Projeto: ${nome}
+Sinopse: ${sinopseAtual || '(vazio, usar o que estiver no material anexado)'}
+Temas: ${temasAtual.join(', ') || '(vazio)'}
+Público-alvo: ${publicoAtual.join(', ') || '(vazio)'}
+Classificação indicativa: ${classificacaoAtual || '(vazio)'}
+Duração: ${duracaoAtual.join(', ') || '(vazio)'}
+"""
+
+**Passo 3 — rode os 3 prompts abaixo, um de cada vez, na mesma conversa** (assim ele reaproveita as fotos e o texto já enviados):
 
 1) Capa (A4 paisagem, minimalista):
 "criar imagem de capa A4 paisagem para o projeto
@@ -6629,6 +6648,11 @@ formato A4 retrato"
 
 3) Card pra corpo de e-mail (atrativo pra contratantes):
 "criar uma arte tipo um card para enviar no corpo do email com imagem e texto que descreva brevemente o projeto para ser atrativo para contratantes"
+
+**Passo 4 — depois de gerar, suba cada imagem no lugar certo:**
+- Imagem 1 (capa) → capa da PÁGINA do Trabalho no Notion (topo da página, "Adicionar capa" / trocar capa existente).
+- Imagem 2 (infográfico) → propriedade "Imagem Resumo" desta página (arquivo).
+- Imagem 3 (card de e-mail) → NÃO vai pro Notion — guarde o arquivo pra usar depois na tela "Disparos de E-mail" do Portal Admin, quando for montar uma campanha pra este trabalho.
 `;
 
     const arquivos = [...arqTextoBase, ...arqRelease, ...arqTextoComplementar, ...arqBncc, ...arqPropostaPedagogica, ...arqImagemResumo];
