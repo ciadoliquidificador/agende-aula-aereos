@@ -6616,6 +6616,13 @@ levantar as habilidades da BNCC que realmente se aplicam (conferindo cada códig
 documento oficial da BNCC, disponível no conhecimento do Project) e escrever o documento
 inteiro novo — mesmo que o resultado final seja parecido com o antigo.
 
+**Proposta Pedagógica e Texto Complementar são de uso EXCLUSIVO do adulto** (professor,
+educador, produtor cultural) — cabe a esse adulto filtrar o que repassar ou não pra criança,
+mesmo quando a peça em si é classificada como infantil/infanto-juvenil. Não simplificar o
+registro, o vocabulário nem a profundidade desses dois documentos pra ficar "apropriado pra
+criança" — eles não são material de leitura direta pro público-alvo da apresentação, são
+subsídio de bastidor pra quem organiza/media a experiência.
+
 **Escolha SOMENTE dentro destas opções já cadastradas** pra tudo que é vocabulário fechado (não
 invente — se achar que falta uma categoria, me avise à parte, fora do bloco final). **Exceção:
 Tema Específico é vocabulário ABERTO** (cresce por peça — nomes próprios, obras, movimentos
