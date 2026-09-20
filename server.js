@@ -6608,6 +6608,14 @@ Relação BNCC, Proposta Pedagógica, Classificação Indicativa, Público-Alvo 
 de Classificação e os 3 eixos de tema (Tema Geral / Tema Específico / Tema Social-Edital — o
 campo antigo "TEMAS" acima é só referência histórica, **não usar nem preencher ele de novo**).
 
+**Relação BNCC: ESCREVER DE NOVO DO ZERO, não corrigir/editar o documento existente em cima
+do material anexado.** Já foram encontrados códigos BNCC incorretos em documentos antigos da
+Cia. (citando habilidades diferentes do que o texto afirmava) — partir de um documento com erro
+e tentar consertar ponto a ponto arrisca manter erro escondido. Ler o roteiro/material do zero,
+levantar as habilidades da BNCC que realmente se aplicam (conferindo cada código contra o
+documento oficial da BNCC, disponível no conhecimento do Project) e escrever o documento
+inteiro novo — mesmo que o resultado final seja parecido com o antigo.
+
 **Escolha SOMENTE dentro destas opções já cadastradas** pra tudo que é vocabulário fechado (não
 invente — se achar que falta uma categoria, me avise à parte, fora do bloco final). **Exceção:
 Tema Específico é vocabulário ABERTO** (cresce por peça — nomes próprios, obras, movimentos
