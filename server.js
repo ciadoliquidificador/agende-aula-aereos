@@ -6634,7 +6634,15 @@ usar nem preencher ele de novo**).
 
 **Sinopse e Release finais também vão ser aplicados no design do Canva** (a peça gráfica de
 venda, não só o Notion) — por isso os dois precisam sair desta revisão já prontos pra publicação
-final, sem placeholder, colchete ou nota de rascunho.
+final, sem placeholder, colchete ou nota de rascunho.${arqReleaseCanva.length ? ` **Quando eu
+aprovar o resultado, aplique você mesmo a Sinopse e o Release direto no link do Canva listado em
+Materiais Obrigatórios acima**, usando o conector Canva desta conversa (se disponível) — não
+preciso colar o link de novo. Isso é só pro Canva.` : ''} **A publicação no Notion (Trabalhos e
+Portfólio Online) continua sendo feita por mim colando o bloco final no Portal Admin — não tente
+escrever no Notion direto por essa conversa**, mesmo que exista conector disponível: o Portal
+Admin faz upload de arquivo/PDF pras propriedades que exigem isso, valida vocabulário fechado
+contra opção nova (3 regimes diferentes) e casa Trabalhos com Portfólio Online por nome exato —
+lógica que não existe fora dele.
 
 **Relação BNCC: ESCREVER DE NOVO DO ZERO, não corrigir/editar o documento existente em cima
 do material anexado.** Já foram encontrados códigos BNCC incorretos em documentos antigos da
