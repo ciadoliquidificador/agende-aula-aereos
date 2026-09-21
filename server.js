@@ -6624,11 +6624,17 @@ metodologia de Classificação Indicativa/Descritores — inclusive: peça "Livr
 registrar Descritores quando há tendência relevante do CLASSIND, isso não muda a faixa etária.
 
 Revisar criticamente o material acima e gerar/atualizar: Sinopse (sucinta, até 350 caracteres),
-Release (sucinto), Texto Complementar (texto MAIS ELABORADO de venda/justificativa do projeto,
-com o embasamento da pesquisa por trás — diferente da Sinopse/Release, que são sucintos),
-Relação BNCC, Proposta Pedagógica, Classificação Indicativa, Público-Alvo Adequado, Descritores
-de Classificação e os 3 eixos de tema (Tema Geral / Tema Específico / Tema Social-Edital — o
-campo antigo "TEMAS" acima é só referência histórica, **não usar nem preencher ele de novo**).
+Release (sucinto, mas com ENFOQUE em relevância/pertinência do projeto — por que essa proposta
+importa pro contratante, não só do que ela trata), Texto Complementar (texto MAIS ELABORADO de
+venda/justificativa do projeto, com o embasamento da pesquisa por trás — diferente da
+Sinopse/Release, que são sucintos), Relação BNCC, Proposta Pedagógica, Classificação Indicativa,
+Público-Alvo Adequado, Descritores de Classificação e os 3 eixos de tema (Tema Geral / Tema
+Específico / Tema Social-Edital — o campo antigo "TEMAS" acima é só referência histórica, **não
+usar nem preencher ele de novo**).
+
+**Sinopse e Release finais também vão ser aplicados no design do Canva** (a peça gráfica de
+venda, não só o Notion) — por isso os dois precisam sair desta revisão já prontos pra publicação
+final, sem placeholder, colchete ou nota de rascunho.
 
 **Relação BNCC: ESCREVER DE NOVO DO ZERO, não corrigir/editar o documento existente em cima
 do material anexado.** Já foram encontrados códigos BNCC incorretos em documentos antigos da
