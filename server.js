@@ -6552,6 +6552,7 @@ async function revMontarDadosRevisao(pageId) {
   const duracaoAtual = (props['DURAÇÃO DA APRESENTAÇÃO']?.multi_select || []).map(o => o.name);
 
   let materialBase;
+  let materialVideoComplementar = '';
   const avisos = [];
   let temSuspeitoDeImagem = false;
   if (arqTextoBase.length > 0) {
@@ -6568,6 +6569,15 @@ async function revMontarDadosRevisao(pageId) {
     if (falhasChecagem.length) {
       avisos.push(`Não consegui checar se é imagem ou texto (falha na verificação automática, não é erro do conteúdo em si): ${falhasChecagem.map(x => `${x.a.nome} (${x.c.erro})`).join('; ')}`);
     }
+
+    // Texto Base cobre a intenção escrita, mas a Classificação Indicativa precisa refletir o
+    // que o público vê em cena — quando há vídeo, ele entra como material complementar
+    // obrigatório mesmo já existindo Texto Base (achado real do piloto, set/2026).
+    if (linkVideo) {
+      const resultadoVideo = await revMaterialDeVideo(linkVideo);
+      materialVideoComplementar = resultadoVideo.materialTexto;
+      avisos.push(...resultadoVideo.avisos);
+    }
   } else if (linkVideo) {
     const resultadoVideo = await revMaterialDeVideo(linkVideo);
     materialBase = resultadoVideo.materialTexto;
@@ -6575,6 +6585,17 @@ async function revMontarDadosRevisao(pageId) {
   } else {
     materialBase = `⚠️ SEM Texto Base e SEM vídeo — não dá pra fazer uma revisão de qualidade sem material bruto. Sugestão: pule este trabalho e registre pra segunda rodada, depois de completar o material.`;
     avisos.push('Sem Texto Base e sem vídeo — trabalho sem material bruto, precisa de correção manual antes de revisar.');
+  }
+
+  const arqReleaseCanva = arqRelease.filter(a => /canva\.com/i.test(a.url || ''));
+  const materiaisObrigatorios = [];
+  if (arqReleaseCanva.length) {
+    materiaisObrigatorios.push(`- **Release em Canva — abrir o link, é conteúdo visual, não dá pra avaliar pelo nome do arquivo:** ${arqReleaseCanva.map(a => a.url).join(', ')}. Confira consistência de tom/dados com o que já está publicado antes de revisar.`);
+  }
+  if (linkVideo) {
+    materiaisObrigatorios.push(materialVideoComplementar
+      ? `- **Vídeo (material complementar abaixo) — leitura obrigatória:** a rubrica escrita no Texto Base pode estar resolvida de forma diferente na encenação real. Classificação Indicativa e Descritores devem considerar o que o público efetivamente vê em cena, não só o texto.`
+      : `- **Vídeo (usado como material-base, ver acima) — leitura obrigatória** já que não há Texto Base pra essa peça.`);
   }
 
   const instrucoesRevisao = `# Prompt de REVISÃO — ${nome}
@@ -6588,6 +6609,7 @@ acesso a esses guias.
 ## Material disponível
 ${materialBase}
 ${arqRelease.length ? `\nRelease já existe: ${arqRelease.map(a => a.nome).join(', ')}` : ''}${arqTextoComplementar.length ? `\nTexto Complementar já existe: ${arqTextoComplementar.map(a => a.nome).join(', ')}` : ''}${arqBncc.length ? `\nRelação BNCC já existe: ${arqBncc.map(a => a.nome).join(', ')}` : ''}${arqPropostaPedagogica.length ? `\nProposta Pedagógica já existe: ${arqPropostaPedagogica.map(a => a.nome).join(', ')}` : ''}${arqImagemResumo.length ? `\nFotos de divulgação (Imagem Resumo): ${arqImagemResumo.map(a => a.nome).join(', ')} — suba junto se ajudar no julgamento visual (figurino/cena/faixa etária)` : ''}${linkFotos ? `\nLink de fotos (FOTOS): ${linkFotos}` : ''}
+${materiaisObrigatorios.length ? `\n## ⚠️ Materiais OBRIGATÓRIOS antes de fechar a revisão\n${materiaisObrigatorios.join('\n')}\n` : ''}${materialVideoComplementar ? `\n## Material complementar — vídeo (como a peça se desenvolve em cena)\n${materialVideoComplementar}\n` : ''}
 
 ## Valores atuais no Notion (revisar com espírito crítico, não repetir sem questionar)
 - Sinopse atual: ${sinopseAtual || '(vazio)'}
@@ -6640,7 +6662,7 @@ subsídio de bastidor pra quem organiza/media a experiência.
 
 ${temSuspeitoDeImagem ? `\n## Texto Base escaneado (imagem)\nAlgum(ns) arquivo(s) do Texto Base parecem ser foto/scan sem texto extraível (aviso acima). Leia a imagem direto (você lê nativamente) e TRANSCREVA o conteúdo por completo, com fidelidade — essa transcrição vai virar um arquivo de texto novo, reanexado ao lado do original, pra não precisar reabrir a imagem numa próxima consulta. Inclua essa transcrição no bloco === TEXTO BASE TRANSCRITO === do resultado final.\n` : ''}
 ## Discussão
-Debata os pontos que achar necessário antes de fechar. Só gere o bloco final abaixo quando eu
+${materiaisObrigatorios.length ? `Antes de qualquer coisa, confirme que abriu/leu cada item listado em "Materiais OBRIGATÓRIOS" acima — sem isso a revisão fica incompleta (baseada só no texto escrito, não no que existe de fato em imagem/cena). ` : ''}Debata os pontos que achar necessário antes de fechar. Só gere o bloco final abaixo quando eu
 confirmar que estamos de acordo.
 
 ## Formato da resposta final (gerar só quando eu pedir)
