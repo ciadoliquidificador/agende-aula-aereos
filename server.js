@@ -11876,7 +11876,7 @@ app.post('/reservar-sala', async (req, res) => {
     const msgCliente = 'Olá, ' + primeiroNome + '! 🎭\n\nSeu ensaio está pré-agendado!\n\n🎬 Projeto: ' + projeto + '\n' + resumoDias + '\n\n⏱️ Total de horas: ' + totalHorasMsg + '\n💲 Valor/hora: R$ ' + resultado.valorPorHoraMedio.toFixed(2) + '\n📊 Sub-total: R$ ' + resultado.valorBruto.toFixed(2) + '\n🏷️ Desconto: ' + descontoTexto + '\n📋 Subtotal com desconto: R$ ' + resultado.subtotal.toFixed(2) + notaTexto + '\n💰 Total: R$ ' + totalFinal.toFixed(2) + '\n💵 Sinal para garantir a reserva: R$ ' + deposito.toFixed(2) + '\n🔑 Chave PIX: ' + chavePix + '\n\nPara confirmar, faça o pagamento do sinal e mande o comprovante aqui mesmo.\n\nResponda por aqui:\n1️⃣ Confirmar agendamento\n2️⃣ Cancelar agendamento\n3️⃣ Falar com atendente';
 
     await enviarWhatsApp(numBr, msgCliente);
-    CONVERSAS_ESTADO[numBr] = { estado: 'aguardando_confirmacao_ensaio', reservaId, nome: primeiroNome, valorTotal: totalFinal, deposito, criadoEm: Date.now(), lembreteEnviado: false };
+    CONVERSAS_ESTADO[numBr] = { estado: 'aguardando_confirmacao_ensaio', reservaId, nome: primeiroNome, valorTotal: totalFinal, deposito, projeto, blocos, chavePix, criadoEm: Date.now(), lembreteEnviado: false };
 
     // Notificar residente sobre os blocos que tomamos do horario dele (ja verificados acima)
     try {
@@ -11966,6 +11966,79 @@ async function transferirParaHumano(ticketId) {
   }
 }
 
+// Dado um horario-alvo (Date), empurra pro proximo horario comercial (8h-18h, seg-sex,
+// sem feriado) se o alvo cair fora disso -- ex: cai num sabado/domingo/feriado. Diferente
+// de calcularProximoHorarioComercial() (que parte de "agora" e retorna null se ja esta
+// dentro do horario): aqui o ponto de partida e um horario futuro arbitrario e a funcao
+// SEMPRE retorna um Date (o proprio alvo, se ja valido, ou o proximo horario valido).
+async function proximoHorarioComercialAPartirDe(dataAlvo) {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    hour: 'numeric', hour12: false,
+    weekday: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const diasMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+  function partesDe(data) {
+    const parts = fmt.formatToParts(data);
+    const obj = {};
+    parts.forEach(p => { obj[p.type] = p.value; });
+    return { hora: parseInt(obj.hour, 10), diaSemana: diasMap[obj.weekday], dataStr: obj.year + '-' + obj.month + '-' + obj.day, ano: obj.year };
+  }
+
+  const p0 = partesDe(dataAlvo);
+  const feriadosCache = { [p0.ano]: await getFeriadosDoAno(p0.ano) };
+  const dentroHorario = p0.hora >= 8 && p0.hora < 18 && p0.diaSemana >= 1 && p0.diaSemana <= 5 && !feriadosCache[p0.ano].has(p0.dataStr);
+  if (dentroHorario) return dataAlvo;
+
+  let candidato = new Date(dataAlvo);
+  for (let i = 0; i < 24 * 10; i++) {
+    candidato = new Date(candidato.getTime() + 60 * 60000);
+    const pc = partesDe(candidato);
+    if (!feriadosCache[pc.ano]) feriadosCache[pc.ano] = await getFeriadosDoAno(pc.ano);
+    if (pc.hora === 8 && pc.diaSemana >= 1 && pc.diaSemana <= 5 && !feriadosCache[pc.ano].has(pc.dataStr)) {
+      return candidato;
+    }
+  }
+  return dataAlvo; // nunca deveria chegar aqui
+}
+
+// Ensaios que começam até 18h (manhã/tarde): lembrete às 16:30 do dia ANTERIOR.
+// Ensaios que começam a partir das 18h (noite): lembrete às 11h do dia DO ensaio.
+// Sempre em cima do primeiro bloco da reserva (se houver vários dias, o saldo
+// vence antes do início do uso como um todo -- Cláusula 4.2 do contrato).
+function calcularHorarioAlvoLembreteSaldo(blocoInicial) {
+  const horaInicio = parseInt(blocoInicial.inicio.split(':')[0], 10);
+  if (horaInicio >= 18) {
+    return new Date(blocoInicial.data + 'T11:00:00-03:00');
+  }
+  const dataEnsaio = new Date(blocoInicial.data + 'T12:00:00-03:00'); // meio-dia evita virada por fuso
+  const diaAnteriorStr = new Date(dataEnsaio.getTime() - 24 * 60 * 60000).toISOString().slice(0, 10);
+  return new Date(diaAnteriorStr + 'T16:30:00-03:00');
+}
+
+async function agendarLembreteSaldoEnsaio({ numero, nome, reservaId, projeto, blocos, chavePix, valorTotal, deposito }) {
+  try {
+    const alvo = calcularHorarioAlvoLembreteSaldo(blocos[0]);
+    const enviarEm = await proximoHorarioComercialAPartirDe(alvo);
+
+    const saldo = Math.round((valorTotal - deposito) * 100) / 100;
+    const resumoDias = blocos.map(b => '📅 ' + b.data.split('-').reverse().join('/') + ' — ' + b.inicio + ' às ' + b.fim).join('\n');
+    const texto = 'Oi, ' + nome + '! 🎭\n\nPassando pra confirmar seu ensaio:\n\n🎬 Projeto: ' + projeto + '\n' + resumoDias +
+      '\n\n💰 Valor total: R$ ' + valorTotal.toFixed(2) +
+      '\n✅ Valor pago (sinal): R$ ' + deposito.toFixed(2) +
+      '\n💵 Saldo a quitar até o início do ensaio: R$ ' + saldo.toFixed(2) +
+      '\n🔑 Chave PIX: ' + chavePix +
+      '\n\nQualquer dúvida, é só chamar por aqui!';
+
+    await agendarMensagemFila(numero, texto, enviarEm.toISOString());
+    console.log('[sala-ensaio] lembrete de saldo agendado — reserva ' + reservaId + ' para ' + enviarEm.toISOString());
+  } catch (e) {
+    console.error('[sala-ensaio] erro ao agendar lembrete de saldo:', e.message);
+  }
+}
+
 // Extensao do webhook: fluxo de confirmacao da Sala de Ensaio
 async function processarRespostaSalaEnsaio(numero, texto, tipo, ticketId, estado) {
   const t = (texto || '').trim().toLowerCase();
@@ -11990,6 +12063,13 @@ async function processarRespostaSalaEnsaio(numero, texto, tipo, ticketId, estado
       const msgInterna = '✅ Cliente confirmou intenção — Reserva ' + estado.reservaId + '. Aguardando comprovante de R$ ' + estado.deposito.toFixed(2) + '.';
       try { await enviarWhatsApp(WHATSAPP_FABIO, msgInterna); } catch(e) {}
       try { await enviarWhatsApp(WHATSAPP_CIA, msgInterna); } catch(e) {}
+
+      if (Array.isArray(estado.blocos) && estado.blocos.length > 0) {
+        await agendarLembreteSaldoEnsaio({
+          numero, nome: estado.nome, reservaId: estado.reservaId, projeto: estado.projeto,
+          blocos: estado.blocos, chavePix: estado.chavePix, valorTotal: estado.valorTotal, deposito: estado.deposito,
+        });
+      }
       return true;
     }
 
