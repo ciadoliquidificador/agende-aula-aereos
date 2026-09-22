@@ -9000,7 +9000,7 @@ const REPOSICOES_DB = 'dde8519e6e0f4157b2bb56b545e2ef84';
 
 // ============================================================
 // COTA DE REPOSIÇÃO — créditos individuais com janela rolante de 30 dias
-// Cada Falta gera um crédito (Prazo Limite = Data da falta + 30 dias).
+// Cada Falta gera um crédito (Prazo Limite, no plano Mensal, = fim do mês da falta + 30 dias).
 // A cota é quantos créditos "Aberto" simultâneos a aluna pode ter por modalidade.
 // ============================================================
 function calcularCotaReposicao(frequencia) {
@@ -9016,7 +9016,8 @@ function somarDias(dataISO, dias) {
 }
 
 // Prazo de validade do crédito de reposição, por plano:
-// - Mensal: 30 dias após a FALTA (não tem ciclo fixo -- renova mês a mês).
+// - Mensal: 30 dias após o FIM DO MÊS da falta (não tem ciclo fixo -- renova mês a
+//   mês; decisão set/2026, antes era 30 dias direto da data da falta).
 // - Semestral/Anual: todos os créditos do ciclo vencem juntos, 30 dias após o
 //   TÉRMINO DO CICLO (semestre/ano) em que a falta aconteceu -- não 30 dias após a
 //   falta em si. O "término do ciclo" é recorrente a partir da Data/Hora Aceite
@@ -9037,12 +9038,18 @@ function calcularProximoTerminoCiclo(dataInicioISO, plano, dataReferenciaISO) {
   return fimCiclo.toISOString().slice(0, 10);
 }
 
+function fimDoMes(dataISO) {
+  const d = new Date(dataISO + 'T12:00:00Z');
+  const fim = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)); // dia 0 do mês seguinte = último dia deste mês
+  return fim.toISOString().slice(0, 10);
+}
+
 function calcularPrazoLimiteCredito(plano, dataInicioContrato, dataFalta) {
   if (plano === 'Semestral' || plano === 'Anual') {
     const fimCiclo = calcularProximoTerminoCiclo(dataInicioContrato, plano, dataFalta);
     if (fimCiclo) return somarDias(fimCiclo, 30);
   }
-  return somarDias(dataFalta, 30); // Mensal, ou fallback se faltar Data/Hora Aceite Contrato
+  return somarDias(fimDoMes(dataFalta), 30); // Mensal, ou fallback se faltar Data/Hora Aceite Contrato
 }
 
 async function buscarFrequenciaAluna(cpfLimpo, modalidade) {
