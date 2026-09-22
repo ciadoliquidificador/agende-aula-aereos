@@ -9102,7 +9102,7 @@ async function verificarCotaReposicao(cpfLimpo, modalidade) {
     // exatamente 30 dias após a própria falta -- não é mais o caso pra Semestral/Anual,
     // onde vários créditos de faltas diferentes compartilham o mesmo Prazo Limite.
     const tituloTexto = pagina.properties?.['Título']?.title?.[0]?.plain_text || '';
-    const matchFalta = tituloTexto.match(/Falta (\d{4}-\d{2}-\d{2})/);
+    const matchFalta = tituloTexto.match(/(?:Falta|Feriado) (\d{4}-\d{2}-\d{2})/);
     creditos.push({
       id: pagina.id,
       dataFalta: matchFalta ? matchFalta[1] : '',
@@ -9187,6 +9187,121 @@ async function criarCreditoReposicaoPorFalta({ faltaPageId, alunaId, nomeAluna, 
     console.error('[reposicao] erro ao criar credito por falta:', e.message);
   }
 }
+
+// ============================================================
+// COTA DE REPOSIÇÃO — crédito automático quando um feriado cai num dia de
+// aula fixa. Mesma mecânica da Falta (mesmo Prazo Limite por plano), só que
+// sem "Falta Relacionada" (não existe registro de Presença nesse dia, já
+// que a escola não abre). Vale só a partir de 2026-09-22 (decisão do
+// Fábio) -- não gera crédito retroativo pra feriados já passados antes
+// disso; a partir dessa data, todo feriado nacional/estadual/municipal
+// detectado passa a gerar crédito pra quem tem aula fixa naquele dia.
+// Exclui Circo - Acrobacia: Agende Acro não tem a distinção de
+// reposição/cota que os outros apps têm (CLAUDE.md).
+// ============================================================
+const DATA_INICIO_CREDITO_FERIADO = '2026-09-22';
+const MODALIDADES_SEM_COTA_REPOSICAO = ['Circo - Acrobacia'];
+
+// Idempotente: se já existir um crédito com "Feriado <data>" no Título pra esse CPF, não duplica.
+async function criarCreditoReposicaoPorFeriado({ nomeAluna, cpf, modalidade, turma, dataFeriado, plano, dataInicioContrato }) {
+  try {
+    const rExiste = await fetch('https://api.notion.com/v1/databases/' + REPOSICOES_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'CPF Aluna', rich_text: { equals: cpf } },
+          { property: 'Título', title: { contains: `Feriado ${dataFeriado}` } },
+        ]},
+        page_size: 1,
+      }),
+    });
+    const dExiste = await rExiste.json();
+    if ((dExiste.results || []).length > 0) return; // credito ja existe pra esse feriado+aluna
+
+    const prazoLimite = calcularPrazoLimiteCredito(plano, dataInicioContrato, dataFeriado);
+
+    await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parent: { database_id: REPOSICOES_DB },
+        properties: {
+          'Título': { title: [{ text: { content: `${nomeAluna} - Feriado ${dataFeriado} - ${modalidade}` } }] },
+          'CPF Aluna': { rich_text: [{ text: { content: cpf } }] },
+          'Modalidade': { rich_text: [{ text: { content: modalidade } }] },
+          'Turma Origem': { rich_text: [{ text: { content: turma || '' } }] },
+          'Prazo Limite': { date: { start: prazoLimite } },
+          'Status': { select: { name: 'Aberto' } },
+        },
+      }),
+    });
+  } catch (e) {
+    console.error('[reposicao] erro ao criar credito por feriado:', e.message);
+  }
+}
+
+// Busca todas as alunas Ativas com aula fixa no dia da semana do feriado e gera 1 crédito cada.
+async function gerarCreditosReposicaoPorFeriado(dataFeriadoISO) {
+  const nomesDias = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  const diaSemanaNome = nomesDias[new Date(dataFeriadoISO + 'T12:00:00Z').getUTCDay()];
+  console.log(`[reposicao-feriado] ${dataFeriadoISO} é feriado (${diaSemanaNome}) -- gerando créditos...`);
+
+  let startCursor;
+  let hasMore = true;
+  let totalProcessadas = 0;
+  while (hasMore) {
+    const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Status', select: { equals: 'Ativa' } },
+          { property: 'Dia', select: { equals: diaSemanaNome } },
+        ]},
+        page_size: 100,
+        start_cursor: startCursor,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) { console.error('[reposicao-feriado] erro ao buscar alunas:', JSON.stringify(d)); return; }
+
+    for (const pagina of (d.results || [])) {
+      const props = pagina.properties;
+      const nome = props['Nome']?.title?.[0]?.plain_text || '';
+      const cpf = (props['CPF']?.rich_text?.[0]?.plain_text || '').replace(/\D/g, '');
+      const modalidade = props['Modalidade']?.select?.name || '';
+      if (MODALIDADES_SEM_COTA_REPOSICAO.includes(modalidade)) continue;
+      if (!cpf) { console.error(`[reposicao-feriado] aluna sem CPF, pulando: ${nome} (${pagina.id})`); continue; }
+      const turma = props['Turma']?.select?.name || '';
+      const plano = props['Plano']?.select?.name || 'Mensal';
+      const dataInicioContrato = props['Data/Hora Aceite Contrato']?.date?.start || null;
+      await criarCreditoReposicaoPorFeriado({ nomeAluna: nome, cpf, modalidade, turma, dataFeriado: dataFeriadoISO, plano, dataInicioContrato });
+      totalProcessadas++;
+    }
+    hasMore = d.has_more;
+    startCursor = d.next_cursor;
+  }
+  console.log(`[reposicao-feriado] ${dataFeriadoISO}: ${totalProcessadas} aluna(s) processada(s).`);
+}
+
+// Checagem diária (single-replica, em memória -- se o Railway reiniciar no meio do dia,
+// no pior caso reprocessa o mesmo dia, o que é inofensivo pela checagem de idempotência acima).
+let _ultimoDiaVerificadoFeriadoReposicao = null;
+setInterval(async () => {
+  try {
+    const hojeISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    if (hojeISO === _ultimoDiaVerificadoFeriadoReposicao) return;
+    if (hojeISO < DATA_INICIO_CREDITO_FERIADO) return;
+    const feriados = await getFeriadosDoAno(hojeISO.split('-')[0]);
+    if (feriados.has(hojeISO)) {
+      await gerarCreditosReposicaoPorFeriado(hojeISO);
+    }
+    _ultimoDiaVerificadoFeriadoReposicao = hojeISO;
+  } catch (e) {
+    console.error('[reposicao-feriado] erro na verificação diária:', e.message);
+  }
+}, 30 * 60 * 1000);
 
 async function buscarMatriculasPorCpf(cpfLimpo) {
   const r = await fetch('https://api.notion.com/v1/databases/' + ALUNAS_DB + '/query', {
