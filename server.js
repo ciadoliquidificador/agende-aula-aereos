@@ -11541,7 +11541,7 @@ function montarTextoContrato({ nome, rg, cpf, endereco, blocos, valorTotal, tipo
     '3. DAS DATAS E HORÁRIOS DE USO\n\n' + linhasDatas + '\n\n' +
     '4. DO PREÇO E DA FORMA DE PAGAMENTO\n\n' +
     '4.1. Pelo uso do espaço, o BENEFICIÁRIO pagará à CEDENTE o valor total de R$ ' + valorTotal.toFixed(2) + ', apurado conforme a tabela de valores vigente do Espaço Liquidificador.\n' +
-    '4.5. O pagamento será integral e antecipado (sinal de 30% para garantir a reserva, saldo até o início do uso), por PIX, com envio do comprovante pelo WhatsApp.\n\n' +
+    '4.2. O pagamento será integral e antecipado (sinal de 30% para garantir a reserva, saldo até o início do uso), por PIX, com envio do comprovante pelo WhatsApp.\n\n' +
     '5. DA RESPONSABILIDADE POR ACIDENTES\n\n' +
     '5.1. O BENEFICIÁRIO reconhece que as atividades artísticas, físicas e circenses são executadas por sua própria conta, iniciativa e risco, declarando possuir a aptidão técnica necessária.\n' +
     '5.2. O BENEFICIÁRIO responde pelos acidentes e lesões que decorram de sua própria conduta, do uso inadequado do espaço ou equipamentos, ou de atos de seus convidados.\n\n' +
@@ -11553,16 +11553,16 @@ function montarTextoContrato({ nome, rg, cpf, endereco, blocos, valorTotal, tipo
     '6.5. Respeitar a vizinhança, os níveis de ruído e os horários contratados. Vedada a realização de festas ou eventos comerciais sem autorização prévia e por escrito.\n\n' +
     'SEGURO PESSOAL: ' + (seguro || 'Não informado') + '\n' +
     'CONTATO DE EMERGÊNCIA: ' + (contatoEmergenciaNome || '-') + ' — ' + (contatoEmergenciaTelefone || '-') + '\n\n' +
-    '9. DA POLÍTICA DE CANCELAMENTO E REMARCAÇÃO\n\n' +
-    '9.1. Cancelamento com 48h ou mais de antecedência: direito à remarcação ou devolução do valor.\n' +
-    '9.2. Cancelamento entre 24h e 48h: retenção de 50% do valor.\n' +
-    '9.3. Cancelamento com menos de 24h ou não comparecimento: retenção integral do valor.\n\n' +
-    '10. DA PROTEÇÃO DE DADOS (LGPD)\n\n' +
-    '10.1. Os dados pessoais do BENEFICIÁRIO são tratados exclusivamente para a execução deste contrato e cumprimento de obrigações legais (art. 7º, II e V, Lei 13.709/2018), não sendo compartilhados com terceiros salvo exigência legal.\n\n' +
-    '12. DA ASSINATURA ELETRÔNICA\n\n' +
-    '12.1. As partes reconhecem a validade da assinatura eletrônica deste instrumento, nos termos do art. 10, §2º, da MP 2.200-2/2001.\n\n' +
-    '13. DO FORO\n\n' +
-    '13.1. Fica eleito o foro da comarca de São Paulo/SP.';
+    '7. DA POLÍTICA DE CANCELAMENTO E REMARCAÇÃO\n\n' +
+    '7.1. Cancelamento com 48h ou mais de antecedência: direito à remarcação ou devolução do valor.\n' +
+    '7.2. Cancelamento entre 24h e 48h: retenção de 50% do valor.\n' +
+    '7.3. Cancelamento com menos de 24h ou não comparecimento: retenção integral do valor.\n\n' +
+    '8. DA PROTEÇÃO DE DADOS (LGPD)\n\n' +
+    '8.1. Os dados pessoais do BENEFICIÁRIO são tratados exclusivamente para a execução deste contrato e cumprimento de obrigações legais (art. 7º, II e V, Lei 13.709/2018), não sendo compartilhados com terceiros salvo exigência legal.\n\n' +
+    '9. DA ASSINATURA ELETRÔNICA\n\n' +
+    '9.1. As partes reconhecem a validade da assinatura eletrônica deste instrumento, nos termos do art. 10, §2º, da MP 2.200-2/2001.\n\n' +
+    '10. DO FORO\n\n' +
+    '10.1. Fica eleito o foro da comarca de São Paulo/SP.';
 }
 
 async function gerarPdfContrato(textoContrato, { nome, dataHoraISO, ip, dispositivo, assinaturaDigitada }) {
