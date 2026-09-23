@@ -383,9 +383,6 @@ const DOMINIOS_MONITORADOS_SSL = [
   'reposicao.ciadoliquidificador.com.br',
   'remarcar-residente.ciadoliquidificador.com.br',
 ];
-const SSL_ALERTA_DIAS = 14; // avisa quando faltar <= 14 dias pro vencimento
-const SSL_JANELA_CHECAGEM_DIAS = 20; // só reconecta via TLS num domínio quando a data guardada em cache estiver a <= N dias (ou não tiver cache ainda)
-
 function checarCertificadoSSL(host) {
   return new Promise((resolve) => {
     let resolvido = false;
@@ -414,11 +411,19 @@ function checarCertificadoSSL(host) {
   });
 }
 
-// Cache em memória: host -> { validoAte }. Some com reinício do Railway (redeploy),
-// o que só significa uma checagem completa "de auditoria" no primeiro dia depois de
-// cada deploy — no resto do tempo, cada domínio só é reconectado via TLS quando a
-// data guardada estiver perto de vencer (ver SSL_JANELA_CHECAGEM_DIAS).
+// Cache em memória: host -> { validoAte, proximaChecagem }. Some com reinício do
+// Railway (redeploy) — nesse caso o próximo ciclo trata cada host como descoberta
+// inicial de novo (silenciosa, sem WhatsApp). Fora isso, cada domínio só é
+// reconectado via TLS no dia seguinte ao vencimento conhecido daquele domínio
+// (não fica testando todo mundo todo dia). Quando reconecta, manda pro Fábio se
+// renovou (com a nova data) ou não (e tenta de novo no dia seguinte). Erro de
+// conexão/certificado (ex: SNI não bate) também é resultado, avisa e tenta de
+// novo no dia seguinte até resolver.
 const _sslCertCache = {};
+
+function maisUmDia(data) {
+  return new Date(data.getTime() + 24 * 60 * 60 * 1000);
+}
 
 let _ultimoDiaVerificadoSSL = null;
 setInterval(async () => {
@@ -427,34 +432,52 @@ setInterval(async () => {
     if (hojeISO === _ultimoDiaVerificadoSSL) return;
     _ultimoDiaVerificadoSSL = hojeISO;
 
+    const agora = new Date();
     const paraChecar = DOMINIOS_MONITORADOS_SSL.filter((host) => {
       const cache = _sslCertCache[host];
-      if (!cache) return true; // nunca checado nesse processo — precisa descobrir a data real
-      const diasRestantesCache = Math.floor((cache.validoAte - Date.now()) / (24 * 60 * 60 * 1000));
-      return diasRestantesCache <= SSL_JANELA_CHECAGEM_DIAS; // só reconecta perto do vencimento (ou já vencido)
+      return !cache || agora >= cache.proximaChecagem; // sem cache = descoberta inicial; senão só no dia da próxima checagem agendada
     });
 
     if (paraChecar.length === 0) {
-      console.log('[ssl-monitor] nenhum domínio dentro da janela de checagem hoje (todos com cache válido por mais de ' + SSL_JANELA_CHECAGEM_DIAS + ' dias) — sem chamadas de rede.');
+      console.log('[ssl-monitor] nenhum domínio com checagem agendada pra hoje — sem chamadas de rede.');
       return;
     }
 
     const resultados = await Promise.all(paraChecar.map(checarCertificadoSSL));
+    const mensagens = [];
+
     for (const r of resultados) {
-      if (!r.erro) _sslCertCache[r.host] = { validoAte: r.validoAte };
+      const anterior = _sslCertCache[r.host];
+
+      if (r.erro) {
+        mensagens.push('❌ ' + r.host + ' — erro ao verificar: ' + r.erro + ' (verificando de novo amanhã)');
+        _sslCertCache[r.host] = { validoAte: anterior?.validoAte || null, proximaChecagem: maisUmDia(agora) };
+        continue;
+      }
+
+      if (!anterior || !anterior.validoAte) {
+        // primeira vez que descobrimos a data real desse domínio — só registra, sem alerta
+        console.log('[ssl-monitor] ' + r.host + ' — vencimento descoberto: ' + r.validoAte.toLocaleDateString('pt-BR') + '. Próxima checagem: ' + maisUmDia(r.validoAte).toLocaleDateString('pt-BR'));
+        _sslCertCache[r.host] = { validoAte: r.validoAte, proximaChecagem: maisUmDia(r.validoAte) };
+        continue;
+      }
+
+      const renovou = r.validoAte.getTime() > anterior.validoAte.getTime();
+      if (renovou) {
+        const proximaChecagem = maisUmDia(r.validoAte);
+        mensagens.push('✅ ' + r.host + ' — renovado! Novo vencimento: ' + r.validoAte.toLocaleDateString('pt-BR') + '. Próxima verificação: ' + proximaChecagem.toLocaleDateString('pt-BR'));
+        _sslCertCache[r.host] = { validoAte: r.validoAte, proximaChecagem };
+      } else {
+        mensagens.push('🔴 ' + r.host + ' — NÃO renovado, vencido desde ' + anterior.validoAte.toLocaleDateString('pt-BR') + '. Verificando de novo amanhã.');
+        _sslCertCache[r.host] = { validoAte: anterior.validoAte, proximaChecagem: maisUmDia(agora) };
+      }
     }
-    const problemas = resultados.filter(r => r.erro || r.diasRestantes <= SSL_ALERTA_DIAS);
 
-    console.log('[ssl-monitor] ' + paraChecar.length + ' de ' + DOMINIOS_MONITORADOS_SSL.length + ' domínio(s) checado(s) via TLS hoje, ' + problemas.length + ' com problema.');
+    console.log('[ssl-monitor] ' + paraChecar.length + ' de ' + DOMINIOS_MONITORADOS_SSL.length + ' domínio(s) checado(s) via TLS hoje, ' + mensagens.length + ' com aviso.');
 
-    if (problemas.length > 0) {
-      const linhas = problemas.map(r => {
-        if (r.erro) return '❌ ' + r.host + ' — erro ao verificar: ' + r.erro;
-        if (r.diasRestantes < 0) return '🔴 ' + r.host + ' — certificado VENCIDO há ' + Math.abs(r.diasRestantes) + ' dia(s)';
-        return '⚠️ ' + r.host + ' — vence em ' + r.diasRestantes + ' dia(s) (' + r.validoAte.toLocaleDateString('pt-BR') + ')';
-      });
+    if (mensagens.length > 0) {
       try {
-        await enviarWhatsApp(WHATSAPP_FABIO, '🔒 *Monitor de SSL* — ' + problemas.length + ' domínio(s) precisam de atenção:\n\n' + linhas.join('\n'));
+        await enviarWhatsApp(WHATSAPP_FABIO, '🔒 *Monitor de SSL*\n\n' + mensagens.join('\n'));
       } catch (e) {
         console.error('[ssl-monitor] erro ao notificar Fábio:', e.message);
       }
