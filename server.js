@@ -1,6 +1,7 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const crypto = require('crypto');
+const tls = require('tls');
 const app = express();
 
 app.use(express.json({ limit: '60mb' }));
@@ -341,6 +342,127 @@ setInterval(async () => {
     console.error('[fila-mensagens] erro ao verificar fila:', e.message);
   }
 }, 60000);
+
+// ============================================================
+// MONITOR DE CERTIFICADO SSL
+// A Locaweb renova os certificados Let's Encrypt sozinha (AutoSSL), mas
+// renovação automática pode falhar silenciosamente (validação de domínio
+// expirada, DNS mudou, etc). Isso é só uma rede de segurança: verifica uma
+// vez por dia e avisa o Fábio no WhatsApp se algum domínio estiver perto de
+// vencer, já vencido, ou não respondendo TLS. Não cobre o backend Railway
+// (*.up.railway.app usa certificado gerenciado pela própria plataforma).
+// ============================================================
+const DOMINIOS_MONITORADOS_SSL = [
+  'ciadoliquidificador.com.br',
+  'agende-aereos.ciadoliquidificador.com.br',
+  'agende-acro.ciadoliquidificador.com.br',
+  'agende-infantil.ciadoliquidificador.com.br',
+  'percussao.ciadoliquidificador.com.br',
+  'commedia.ciadoliquidificador.com.br',
+  'agende-ensaio.ciadoliquidificador.com.br',
+  'agende-yoga.ciadoliquidificador.com.br',
+  'admin.ciadoliquidificador.com.br',
+  'aluna.ciadoliquidificador.com.br',
+  'prof.ciadoliquidificador.com.br',
+  'equipe.ciadoliquidificador.com.br',
+  'presenca.ciadoliquidificador.com.br',
+  'sub.ciadoliquidificador.com.br',
+  'migracao.ciadoliquidificador.com.br',
+  'matricula.ciadoliquidificador.com.br',
+  'links.ciadoliquidificador.com.br',
+  'meditacao.ciadoliquidificador.com.br',
+  'dancas-brasileiras.ciadoliquidificador.com.br',
+  'yoga.ciadoliquidificador.com.br',
+  'residencia.ciadoliquidificador.com.br',
+  'contratos-professores.ciadoliquidificador.com.br',
+  'aereos.ciadoliquidificador.com.br',
+  'acro.ciadoliquidificador.com.br',
+  'infantil.ciadoliquidificador.com.br',
+  'espaco.ciadoliquidificador.com.br',
+  'apresentacao.ciadoliquidificador.com.br',
+  'reposicao.ciadoliquidificador.com.br',
+  'remarcar-residente.ciadoliquidificador.com.br',
+];
+const SSL_ALERTA_DIAS = 14; // avisa quando faltar <= 14 dias pro vencimento
+const SSL_JANELA_CHECAGEM_DIAS = 20; // só reconecta via TLS num domínio quando a data guardada em cache estiver a <= N dias (ou não tiver cache ainda)
+
+function checarCertificadoSSL(host) {
+  return new Promise((resolve) => {
+    let resolvido = false;
+    const finalizar = (resultado) => {
+      if (resolvido) return;
+      resolvido = true;
+      resolve(resultado);
+    };
+    try {
+      const socket = tls.connect({ host, port: 443, servername: host, timeout: 10000 }, () => {
+        const cert = socket.getPeerCertificate();
+        socket.end();
+        if (!cert || !cert.valid_to) {
+          finalizar({ host, erro: 'certificado vazio na resposta TLS' });
+          return;
+        }
+        const validoAte = new Date(cert.valid_to);
+        const diasRestantes = Math.floor((validoAte - Date.now()) / (24 * 60 * 60 * 1000));
+        finalizar({ host, validoAte, diasRestantes });
+      });
+      socket.on('error', (e) => finalizar({ host, erro: e.message }));
+      socket.on('timeout', () => { socket.destroy(); finalizar({ host, erro: 'timeout na conexão TLS' }); });
+    } catch (e) {
+      finalizar({ host, erro: e.message });
+    }
+  });
+}
+
+// Cache em memória: host -> { validoAte }. Some com reinício do Railway (redeploy),
+// o que só significa uma checagem completa "de auditoria" no primeiro dia depois de
+// cada deploy — no resto do tempo, cada domínio só é reconectado via TLS quando a
+// data guardada estiver perto de vencer (ver SSL_JANELA_CHECAGEM_DIAS).
+const _sslCertCache = {};
+
+let _ultimoDiaVerificadoSSL = null;
+setInterval(async () => {
+  try {
+    const hojeISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    if (hojeISO === _ultimoDiaVerificadoSSL) return;
+    _ultimoDiaVerificadoSSL = hojeISO;
+
+    const paraChecar = DOMINIOS_MONITORADOS_SSL.filter((host) => {
+      const cache = _sslCertCache[host];
+      if (!cache) return true; // nunca checado nesse processo — precisa descobrir a data real
+      const diasRestantesCache = Math.floor((cache.validoAte - Date.now()) / (24 * 60 * 60 * 1000));
+      return diasRestantesCache <= SSL_JANELA_CHECAGEM_DIAS; // só reconecta perto do vencimento (ou já vencido)
+    });
+
+    if (paraChecar.length === 0) {
+      console.log('[ssl-monitor] nenhum domínio dentro da janela de checagem hoje (todos com cache válido por mais de ' + SSL_JANELA_CHECAGEM_DIAS + ' dias) — sem chamadas de rede.');
+      return;
+    }
+
+    const resultados = await Promise.all(paraChecar.map(checarCertificadoSSL));
+    for (const r of resultados) {
+      if (!r.erro) _sslCertCache[r.host] = { validoAte: r.validoAte };
+    }
+    const problemas = resultados.filter(r => r.erro || r.diasRestantes <= SSL_ALERTA_DIAS);
+
+    console.log('[ssl-monitor] ' + paraChecar.length + ' de ' + DOMINIOS_MONITORADOS_SSL.length + ' domínio(s) checado(s) via TLS hoje, ' + problemas.length + ' com problema.');
+
+    if (problemas.length > 0) {
+      const linhas = problemas.map(r => {
+        if (r.erro) return '❌ ' + r.host + ' — erro ao verificar: ' + r.erro;
+        if (r.diasRestantes < 0) return '🔴 ' + r.host + ' — certificado VENCIDO há ' + Math.abs(r.diasRestantes) + ' dia(s)';
+        return '⚠️ ' + r.host + ' — vence em ' + r.diasRestantes + ' dia(s) (' + r.validoAte.toLocaleDateString('pt-BR') + ')';
+      });
+      try {
+        await enviarWhatsApp(WHATSAPP_FABIO, '🔒 *Monitor de SSL* — ' + problemas.length + ' domínio(s) precisam de atenção:\n\n' + linhas.join('\n'));
+      } catch (e) {
+        console.error('[ssl-monitor] erro ao notificar Fábio:', e.message);
+      }
+    }
+  } catch (e) {
+    console.error('[ssl-monitor] erro na verificação diária de SSL:', e.message);
+  }
+}, 30 * 60 * 1000);
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
