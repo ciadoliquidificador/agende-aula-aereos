@@ -41,6 +41,13 @@
             "command": "cd /Users/fabiospila/Public/Agende-Aula && if err=$(node --check server.js 2>&1); then exit 0; else jq -n --arg err \"$err\" '{hookSpecificOutput: {hookEventName: \"PreToolUse\", permissionDecision: \"deny\", permissionDecisionReason: (\"Commit bloqueado: server.js tem erro de sintaxe.\\n\" + $err)}}'; fi",
             "timeout": 30,
             "statusMessage": "Confirmando que server.js está sem erro antes do commit..."
+          },
+          {
+            "type": "command",
+            "if": "Bash(railway up*)",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-railway-up.sh\"",
+            "timeout": 15,
+            "statusMessage": "Confirmando que o código está commitado e no GitHub antes do deploy..."
           }
         ]
       }
