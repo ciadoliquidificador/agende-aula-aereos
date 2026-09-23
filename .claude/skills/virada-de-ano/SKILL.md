@@ -36,7 +36,7 @@ Pra confirmar que uma automação funciona: editar uma página de teste no banco
 
 Rode `grep -n "2026" server.js` e revise com o usuário. Pontos conhecidos (set/2026):
 
-- **`APRESENTACOES_2026_DB` fixo** em `/webhook-cache-pago` (proposta de outro ano não acha as apresentações, então o elenco não é avisado do cachê pago), em `/portal-artista/apresentacoes` (anos ≠ 2026 retornam lista vazia com aviso, decisão consciente) e em `/admin/sincronizar-apresentacoes-pendentes` (backfill manual). Os dois primeiros deveriam buscar o banco do ano via `listarTodosBancosOrcamento()`.
+- **`APRESENTACOES_2026_DB` fixo** em `/portal-artista/apresentacoes` (anos ≠ 2026 retornam lista vazia com aviso, decisão consciente do Fábio) e em `/admin/sincronizar-apresentacoes-pendentes` (backfill manual). O `/webhook-cache-pago` já acha o banco do ano pelo `parent` da proposta (corrigido em set/2026); se aparecer `banco da proposta (...) não reconhecido` no log, investigar.
 - **`PRESENCAS_2026_DB`** em "Minha Presença" do Portal Aluna. Perguntar ao Fábio se em 2027 continua o mesmo banco ou nasce um "Presenças 2027"; se nascer, o portal precisa ler dos dois.
 - **Textos com 2026**: `'Turma Única 2026'` (Meditação), textos da Residência Artística, `VERSAO_TEXTO_CONTRATO`. Revisar se fazem sentido no ano novo.
 
