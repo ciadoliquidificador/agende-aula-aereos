@@ -12862,7 +12862,7 @@ async function garantirBancosOrcamentoDoAno(ano) {
       await enviarWhatsApp(WHATSAPP_FABIO,
         '🗂️ *Bancos criados automaticamente no Notion* para ' + ano + ':\n\n' +
         tituloPropostas + '\n' + tituloApresentacoes +
-        '\n\nOs campos "Status" e "Endereço" nasceram como Select/Texto (a API do Notion não deixa criar os tipos Status/Mapa por fora da interface) — funcionam normalmente, só não têm a mesma carinha do banco de 2026.\n\n⚠️ *Importante*: a automação do Notion que cria a Apresentação quando a Proposta é aprovada precisa ser recriada manualmente nesse banco novo (copiar a automação do banco de 2026, trocando o banco de destino).'
+        '\n\nOs campos "Status" e "Endereço" nasceram como Select/Texto (a API do Notion não deixa criar os tipos Status/Mapa por fora da interface) — funcionam normalmente, só não têm a mesma carinha do banco de 2026.\n\n⚠️ *Importante*: as 5 automações do Notion (2 em Propostas, 3 em Apresentações) precisam ser recriadas manualmente nesses bancos novos, copiando as do banco de 2026. Checklist: rodar /virada-de-ano ' + ano + ' no Claude Code.'
       );
     } catch (e) { /* melhor esforço */ }
   }
