@@ -1,0 +1,49 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check *)",
+      "Bash(railway logs*)",
+      "Bash(railway status*)",
+      "Bash(railway variables*)",
+      "mcp__Claude_Browser__find",
+      "mcp__Claude_Browser__read_console_messages",
+      "mcp__Claude_Browser__get_page_text",
+      "mcp__Claude_Browser__read_page"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in */server.js|server.js) cd /Users/fabiospila/Public/Agende-Aula || exit 0; if err=$(node --check server.js 2>&1); then jq -n '{systemMessage: \"✅ node --check server.js: nenhum erro de sintaxe.\"}'; else jq -n --arg err \"$err\" '{systemMessage: (\"⚠️ ERRO DE SINTAXE em server.js:\\n\" + $err)}'; fi ;; esac; }",
+            "timeout": 30,
+            "statusMessage": "Checando sintaxe do server.js..."
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-server-patterns.sh\"",
+            "timeout": 30,
+            "statusMessage": "Procurando padrões proibidos no server.js..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "cd /Users/fabiospila/Public/Agende-Aula && if err=$(node --check server.js 2>&1); then exit 0; else jq -n --arg err \"$err\" '{hookSpecificOutput: {hookEventName: \"PreToolUse\", permissionDecision: \"deny\", permissionDecisionReason: (\"Commit bloqueado: server.js tem erro de sintaxe.\\n\" + $err)}}'; fi",
+            "timeout": 30,
+            "statusMessage": "Confirmando que server.js está sem erro antes do commit..."
+          }
+        ]
+      }
+    ]
+  }
+}

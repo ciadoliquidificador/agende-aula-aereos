@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "planta-interativa",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8934"],
+      "port": 8934
+    },
+    {
+      "name": "portal-admin",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8935", "--directory", "/Users/fabiospila/Public/portal-admin-deploy"],
+      "port": 8935
+    }
+  ]
+}
