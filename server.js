@@ -487,6 +487,29 @@ setInterval(async () => {
   }
 }, 30 * 60 * 1000);
 
+// Teste manual: força a checagem de todos os domínios agora e manda a data de
+// vencimento de cada um (não só os com problema), pra confirmar que o monitor
+// está funcionando sem esperar o ciclo diário. Também atualiza o cache normal.
+app.post('/ssl-teste', async (req, res) => {
+  res.json({ ok: true, msg: 'Checagem disparada, aguarde o WhatsApp.' });
+  try {
+    const resultados = await Promise.all(DOMINIOS_MONITORADOS_SSL.map(checarCertificadoSSL));
+    for (const r of resultados) {
+      if (!r.erro) _sslCertCache[r.host] = { validoAte: r.validoAte, proximaChecagem: maisUmDia(r.validoAte) };
+    }
+    const linhas = resultados
+      .sort((a, b) => (a.diasRestantes ?? -99999) - (b.diasRestantes ?? -99999))
+      .map(r => {
+        if (r.erro) return '❌ ' + r.host + ' — erro: ' + r.erro;
+        return '✅ ' + r.host + ' — vence em ' + r.diasRestantes + ' dia(s) (' + r.validoAte.toLocaleDateString('pt-BR') + ')';
+      });
+    await enviarWhatsApp(WHATSAPP_FABIO, '🧪 *Teste do Monitor de SSL* — status atual dos ' + resultados.length + ' domínios:\n\n' + linhas.join('\n'));
+  } catch (e) {
+    console.error('[ssl-teste] erro:', e.message);
+    try { await enviarWhatsApp(WHATSAPP_FABIO, '⚠️ Teste do Monitor de SSL falhou: ' + e.message); } catch (e2) {}
+  }
+});
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.post('/teste-agendamento-fila', async (req, res) => {
