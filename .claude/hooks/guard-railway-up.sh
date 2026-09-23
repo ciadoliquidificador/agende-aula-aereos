@@ -2,6 +2,9 @@
 # `railway up` sobe a pasta local, não o GitHub. Barra o deploy se o código
 # que vai subir não for exatamente o que está commitado e enviado pro origin/main.
 
+cmd=$(jq -r '.tool_input.command // empty' 2>/dev/null)
+printf '%s' "$cmd" | grep -qE '(^|[;&|[:space:]])railway[[:space:]]+up([[:space:]]|$)' || exit 0
+
 cd "${CLAUDE_PROJECT_DIR:-/Users/fabiospila/Public/Agende-Aula}" || exit 0
 
 negar() {

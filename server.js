@@ -3788,8 +3788,13 @@ app.post('/webhook-cache-pago', async (req, res) => {
       return;
     }
 
-    // Acha as apresentações vinculadas a essa proposta, pra saber o elenco
-    const rApres = await fetch('https://api.notion.com/v1/databases/' + APRESENTACOES_2026_DB + '/query', {
+    // Acha as apresentações vinculadas a essa proposta, no banco de Apresentações do mesmo ano da proposta
+    const semHifen = (id) => String(id || '').replace(/-/g, '');
+    const propostasDbId = semHifen(proposta.parent?.database_id);
+    const bancosDoAno = (await listarTodosBancosOrcamento()).find(b => semHifen(b.propostas) === propostasDbId);
+    if (!bancosDoAno) console.error('[webhook-cache-pago] banco da proposta (' + propostasDbId + ') não reconhecido, usando Apresentações 2026.');
+    const apresentacoesDb = bancosDoAno?.apresentacoes || APRESENTACOES_2026_DB;
+    const rApres = await fetch('https://api.notion.com/v1/databases/' + apresentacoesDb + '/query', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
       body: JSON.stringify({ filter: { property: 'Proposta', relation: { contains: propostaPageId } }, page_size: 20 }),
