@@ -266,7 +266,7 @@ const FILA_MENSAGENS_DB = '633583f0-c5b0-4e4c-81a0-48fdbd3db891';
 const FILA_MAX_TENTATIVAS = 5;
 
 async function agendarMensagemFila(numero, texto, enviarEmISO) {
-  await fetch('https://api.notion.com/v1/pages', {
+  const r = await fetch('https://api.notion.com/v1/pages', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + NOTION_TOKEN, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -280,6 +280,11 @@ async function agendarMensagemFila(numero, texto, enviarEmISO) {
       },
     }),
   });
+  if (!r.ok) {
+    const t = await r.text();
+    console.error('[fila-mensagens] Notion recusou agendamento para ' + numero + ' em ' + enviarEmISO + ': ' + r.status + ' ' + t.slice(0, 500));
+    throw new Error('Fila de mensagens: Notion ' + r.status);
+  }
 }
 
 setInterval(async () => {
