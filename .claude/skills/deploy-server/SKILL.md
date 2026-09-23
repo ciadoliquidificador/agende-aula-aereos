@@ -1,6 +1,6 @@
 ---
 name: deploy-server
-description: Executa a sequência obrigatória de deploy do server.js (Cia do Liquidificador) na ordem exata do CLAUDE.md — checar sintaxe, commitar, subir pro GitHub, fazer deploy no Railway e confirmar nos logs. Use quando o usuário pedir pra "subir", "fazer deploy" ou "publicar" mudanças no server.js.
+description: Executa a sequência obrigatória de deploy do server.js (Cia do Liquidificador) na ordem exata do CLAUDE.md — checar sintaxe, commitar, dar push (que dispara o deploy automático no Railway) e confirmar nos logs. Use quando o usuário pedir pra "subir", "fazer deploy" ou "publicar" mudanças no server.js.
 disable-model-invocation: true
 ---
 
@@ -35,29 +35,35 @@ git commit -m "<mensagem descritiva da mudança>"
 
 Use a mensagem de commit que o usuário forneceu ao invocar esta skill (ou pergunte, se não foi fornecida nenhuma). Nunca use `git add -A` ou `git add .` aqui — sempre `server.js` explicitamente, a menos que o usuário tenha pedido outros arquivos específicos também.
 
-## Passo 4 — Push
+## Passo 4 — Push (isso É o deploy)
 
 ```bash
 git push origin main
 ```
 
-## Passo 5 — Deploy no Railway
+O Railway está ligado ao GitHub: todo push na `main` que muda `server.js`, `package.json`, `package-lock.json` ou `railway.json` (ver `watchPatterns` em `railway.json`) dispara o deploy sozinho. Push que só muda outros arquivos (docs, `.claude/`, scripts) é pulado e **não** reinicia o servidor.
+
+**Não rode `railway up`** — geraria um segundo deploy com a pasta local (o hook bloqueia). Todo restart derruba o que está em memória: sessões dos portais, fila de disparos de e-mail, estado da Sala de Ensaio.
+
+## Passo 5 — Acompanhar o deploy do commit
 
 ```bash
-railway up --detach
+c=$(git rev-parse --short=7 HEAD); for i in $(seq 1 30); do s=$(railway deployment list --json | jq -r --arg c "$c" '[.[] | select((.meta.commitHash // "") | startswith($c))][0] | "\(.id) \(.status)"'); echo "$s"; case "$s" in *SUCCESS*|*FAILED*|*CRASHED*|*SKIPPED*) break;; esac; sleep 10; done
 ```
 
-## Passo 6 — Esperar a propagação
+- `SUCCESS` → seguir pro passo 6.
+- `FAILED`/`CRASHED` → PARE e mostre `railway logs --deployment <id>` ao usuário.
+- `SKIPPED` → o commit não mudou nenhum arquivo dos `watchPatterns`. Se era pra ter deploy, algo está errado: avise o usuário.
+- Nada aparece em ~1 min (`null null`) → o webhook do GitHub pode ter falhado. Avise o usuário; ele pode usar "Deploy Latest Commit" no painel do Railway. Não contorne com `railway up`.
 
-Espere uns 30 segundos antes de checar os logs (o deploy leva um tempo pra subir).
-
-## Passo 7 — Confirmar nos logs
+## Passo 6 — Confirmar nos logs
 
 ```bash
-railway logs
+railway logs --deployment <id>
+curl -s -o /dev/null -w "%{http_code}\n" https://agende-aula-aereos-production.up.railway.app/health
 ```
 
-Confirme que o serviço subiu limpo, sem erro, sem stack trace. Se aparecer erro, reporte imediatamente ao usuário — não diga "deploy concluído" até confirmar os logs limpos.
+Confirme `Proxy rodando na porta 8080`, sem erro nem stack trace, e health 200. Não diga "deploy concluído" antes disso.
 
 ## Ao final
 

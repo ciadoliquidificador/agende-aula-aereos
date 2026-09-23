@@ -23,16 +23,16 @@ Cia do Liquidificador é uma escola de artes cênicas operando como **Liquidific
 ## Regras obrigatórias — NUNCA pular
 
 1. **`node --check server.js` é mandatório antes de qualquer `git add`.** Um erro de sintaxe já quebrou o servidor em produção por pular essa etapa.
-2. **Sequência de deploy, sempre nessa ordem:**
+2. **Sequência de deploy, sempre nessa ordem** (skill `/deploy-server`):
    ```
    node --check server.js  (silencioso = OK, não prosseguir se der erro)
    git add server.js
    git commit -m "..."
-   git push origin main
-   railway up --detach
-   (esperar ~30s)
-   railway logs   (confirmar que subiu sem erro)
+   git push origin main    ← ISSO é o deploy
+   acompanhar o deploy do commit (railway deployment list) até SUCCESS
+   railway logs --deployment <id>   (confirmar que subiu sem erro)
    ```
+   **O Railway está ligado ao GitHub (set/2026):** push na `main` que muda `server.js`, `package.json`, `package-lock.json` ou `railway.json` dispara o deploy sozinho (`watchPatterns` em `railway.json`); push só de docs/`.claude/`/scripts é pulado e não reinicia nada. **Nunca usar `railway up`**: gerava um segundo deploy com a pasta local, e todo restart derruba o que está em memória (sessões dos portais, fila de disparos de e-mail, estado da Sala de Ensaio). Um hook bloqueia `railway up`. Consequência: **push na main = produção**, então nada de push de `server.js` que não deva ir pro ar.
 3. **`node server.js` nunca é rodado localmente sozinho** — sempre `railway run node server.js` pra injetar as env vars do Railway, se precisar testar local.
 4. Depois de qualquer inserção de bloco grande de código no server.js, rodar `grep -n` pras rotas novas pra confirmar que foram registradas corretamente (já aconteceu de rotas ficarem coladas dentro do corpo de outra função por engano — nunca dava erro de sintaxe, só nunca registrava as rotas, 404 permanente).
 5. **Digisac `scheduledAt` não funciona** — confirmado via teste controlado (mensagem "agendada" pra daqui 3min e 20min chegou na hora, imediatamente). Usar sempre a fila própria Notion-backed (banco "📤 Fila de Mensagens Agendadas", polling a cada 60s).
@@ -184,7 +184,7 @@ Login por CPF + OTP único via WhatsApp. Sessão ativa 10min sem pedir novo cód
 
 ## Fluxo de trabalho
 
-- Fábio não testa localmente fora do que é explicitamente pedido. Todo deploy via Railway.
+- Fábio não testa localmente fora do que é explicitamente pedido. Todo deploy via Railway (automático no push, ver regra 2).
 - FTP sempre em `/public_html/[subdomain]/` — nunca a raiz do FTP.
 - Terminal output é colado direto no chat do Claude.ai pra interpretação; prefere confirmação concisa a explicação longa.
 - `sed` e scripts Python3 são preferidos a `nano` pra edições em lote (nano já corrompeu arquivo). Scripts de uso único (`patch_*.py`, migrações, correções pontuais) ficam em `arquivo/` (ignorado pelo git), nunca soltos na raiz.
