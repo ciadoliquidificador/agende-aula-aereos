@@ -545,29 +545,7 @@ app.post('/inscricao-acro', async (req, res) => {
     });
     if (!response.ok) { const t = await response.text(); throw new Error(`Notion ${response.status}: ${t}`); }
 
-    // Lembrete 24h para a aluna (confirmacao ja e feita pelo frontend)
-    try {
-      if (data) {
-        const numLimpo = (telefone || '').replace(/\D/g, '');
-        const numBr = numLimpo.length === 11 ? '55' + numLimpo : numLimpo;
-        const primeiroNome = nome.split(' ')[0];
-        const horarioFmt = (horario || '10:00').replace(':00', 'h');
-
-        const dataAula = new Date(data + 'T' + (horario || '10:00') + ':00-03:00');
-        const lembrete = new Date(dataAula);
-        lembrete.setDate(lembrete.getDate() - 1);
-        lembrete.setHours(8, 0, 0, 0);
-        const msgLembrete = `Olá, ${primeiroNome}! 🤸\n\nLembrando que amanhã você tem aula experimental de Acrobacias!\n\n⏰ Horário: ${horarioFmt}\n📍 Rua Dr. Carvalho de Mendonça, 67 — Campos Elíseos`;
-        const contactId = await getOrCreateContactId(numBr);
-        if (contactId) {
-          await fetch(DIGISAC_BASE + '/messages', {
-            method: 'POST', headers: digisacHeaders,
-            body: JSON.stringify({ text: msgLembrete, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot', scheduledAt: lembrete.toISOString() }),
-          });
-        }
-      }
-    } catch(e) { console.error('[acro] erro ao agendar lembrete:', e.message); }
-
+    // Confirmação e lembrete de véspera da aluna são disparados pelo app (Agende-Acro-app, via /enviar e /agendar-mensagem).
     return res.json({ ok: true });
   } catch (err) { return res.json({ ok: false, erro: err.message }); }
 });
@@ -10665,16 +10643,18 @@ app.post('/inscricao-yoga', async (req, res) => {
     const msgAluna = 'Ola, ' + primeiroNome + '! Sua vaga na aula de *Hatha Yoga* com Giulia Hoff esta confirmada!\n\nData: ' + dataFmt + '\nHorario: ' + horDisplay + '\nEspaco Liquidificador - Rua Dr. Carvalho de Mendonca, 67, Campos Eliseos\n\nQualquer duvida e so responder aqui!';
     const msgGiulia = 'Nova inscricao - Yoga\n\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + (email ? '\nEmail: ' + email : '') + '\nData: ' + dataFmt + ' - ' + horDisplay + '\nTipo: ' + tipoTexto;
     const msgAdmin  = 'Nova inscricao - Yoga\n\nNome: ' + nome + '\nWhatsApp: ' + whatsapp + '\nData: ' + dataFmt + ' - ' + turma.label + '\nTipo: ' + tipoTexto;
-    const dataAula = new Date(data + 'T' + turma.horario + ':00-03:00');
-    const lembrete = new Date(dataAula); lembrete.setDate(lembrete.getDate() - 1); lembrete.setHours(8, 0, 0, 0);
+    // 8h de Brasília da véspera (Railway roda em UTC, setHours(8) daria 5h)
+    const lembrete = new Date(new Date(data + 'T08:00:00-03:00').getTime() - 24 * 60 * 60 * 1000);
     const msgLembrete = 'Ola, ' + primeiroNome + '! Lembrando que amanha voce tem aula de *Hatha Yoga* com Giulia Hoff!\n\nHorario: ' + horDisplay + '\nRua Dr. Carvalho de Mendonca, 67 - Campos Eliseos';
     try {
       const contactId = await getOrCreateContactId(numBr);
       if (contactId) {
         await fetch(DIGISAC_BASE + '/messages', { method: 'POST', headers: digisacHeaders, body: JSON.stringify({ text: msgAluna, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot' }) });
-        await fetch(DIGISAC_BASE + '/messages', { method: 'POST', headers: digisacHeaders, body: JSON.stringify({ text: msgLembrete, type: 'chat', serviceId: SERVICE_ID, contactId, userId: USER_ID, origin: 'bot', scheduledAt: lembrete.toISOString() }) });
       }
     } catch(e) { console.error('[yoga/msg-aluna]', e.message); }
+    try {
+      if (lembrete.getTime() > Date.now()) await agendarMensagemFila(numBr, msgLembrete, lembrete.toISOString());
+    } catch(e) { console.error('[yoga/lembrete]', e.message); }
     try { await enviarWhatsAppComHorarioComercial(PROF_GIULIA, msgGiulia); } catch(e) { console.error('[yoga/msg-giulia]', e.message); }
     try { await enviarWhatsApp('5511986899433', msgAdmin); } catch(e) { console.error('[yoga/msg-admin]', e.message); }
     res.json({ ok: true });
