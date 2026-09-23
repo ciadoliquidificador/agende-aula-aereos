@@ -12,7 +12,8 @@ Cia do Liquidificador é uma escola de artes cênicas operando como **Liquidific
 ## Stack
 
 - **Frontend:** React apps hospedados na Locaweb via FTP, tema visual creme+vinho (Playfair Display + Inter)
-- **Backend:** Um único proxy Node.js/Express compartilhado no Railway (`~/Public/Agende-Aula/server.js`, 4000+ linhas)
+- **Backend:** Um único proxy Node.js/Express compartilhado no Railway (`~/Public/Agende-Aula/server.js`, 13.000+ linhas — mapa completo de seções/rotas/gotchas em [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md))
+- **Ecossistema completo:** ~30 projetos irmãos vivem em `~/Public/` (os 7 apps de agendamento, o Portal Admin, a triagem de e-mail, portais self-service, etc.) — mapa geral de tudo em [../CODEBASE_MAP.md](../CODEBASE_MAP.md)
 - **Deploy backend:** Railway, projeto em `~/Public/Agende-Aula/`
 - **Database:** Notion (múltiplos bancos, workspace "Produção Liquidificador")
 - **WhatsApp:** Digisac API
@@ -70,11 +71,12 @@ A calculadora de orçamento (`calculadora_orcamento_v11_1.html`, hospedada fora 
 - **Anos seguintes (2027, 2028, ...) são criados sob demanda** pelo próprio server.js (`garantirBancosOrcamentoDoAno`) na primeira vez que aparece uma data daquele ano em `/orcamento/salvar-notion` — clona o schema completo do molde 2026 (propriedades, opções de select/multi_select, fórmula, rollups, relações). Zero trabalho manual de banco na virada do ano.
 - **Página-container:** `🗂️ Bancos de Orçamento por Ano` (`3d5c45031f738153b0fdf6858d76d740`) — precisa estar **conectada à integração "Agende Aereos App"** (feito 1x em set/2026), pois é nela que os bancos novos nascem (a API do Notion não deixa criar banco direto na raiz do workspace).
 - **Duas limitações da própria API do Notion** (não são bug nosso, confirmado até no conector MCP com permissão de usuário completo): não dá pra criar propriedade tipo `status` nem `place` (mapa) via API. Bancos clonados automaticamente usam **`select`** (em vez de `status`) e **`rich_text`** (em vez de `place`) pros campos "Status" e "Endereço" — o server.js já lê/escreve os dois formatos de forma transparente (`propStatusOrcamento`/`lerEnderecoOrcamento`/`propEnderecoOrcamento`). Funciona igual no app, só não tem a mesma carinha visual do banco de 2026.
-- **⚠️ Não automatizável — 4 automações do Notion precisam ser recriadas manualmente** toda vez que um ano novo nasce (copiar do banco de 2026, trocando só o banco de destino/origem; a URL do webhook é sempre a mesma). Automações do Notion (botão/regra "quando X muda, chama URL") não são expostas por nenhuma API, nem a interna do conector MCP com permissão de usuário completo — só cria-se na UI. O código dos webhooks já é 100% independente de ano (opera só pelo pageId recebido), então funciona assim que a automação existir:
+- **⚠️ Não automatizável — 5 automações do Notion precisam ser recriadas manualmente** toda vez que um ano novo nasce (copiar do banco de 2026, trocando só o banco de destino/origem; a URL do webhook é sempre a mesma). Automações do Notion (botão/regra "quando X muda, chama URL") não são expostas por nenhuma API, nem a interna do conector MCP com permissão de usuário completo — só cria-se na UI. Checklist guiado: skill `/virada-de-ano`. O código dos webhooks é independente de ano (opera pelo pageId recebido; `/webhook-cache-pago` acha o banco de Apresentações do ano pelo `parent` da proposta), então funciona assim que a automação existir:
 
   | Automação (banco 2026) | Dispara quando | Chama |
   |---|---|---|
   | Propostas → cria Apresentação | Status vira "Aprovado - Aguardando contrato" | `/webhook-proposta-aprovada` |
+  | Propostas → avisa elenco do cachê pago | Cachê vira "PAGO" | `/webhook-cache-pago` |
   | Apresentações → sincroniza Google Calendar | Apresentação criada/editada | `/webhook-apresentacao-notion` |
   | Apresentações → avisa elenco/equipe escalada | ELENCO/Produção Liqui/Técnico de Som/Luz preenchidos | `/webhook-apresentacao-escalacao` |
   | Apresentações → avisa saída | Local Saída/Horário de Saída preenchidos | `/webhook-apresentacao-saida` |
@@ -109,21 +111,53 @@ Tela `disparos.html` (portal admin) + bloco `PORTAL ADMIN — DISPAROS DE E-MAIL
 - Rotas exigem sessão admin via header `X-Admin-Token` (`verificarSessao`). Público sempre deduplicado por e-mail (`casasdecultura@` tem 20 linhas) e ignora `Status do E-mail` preenchido (bounce).
 - Exclusão pedida pelo Fábio: nunca cadastrar/disparar pra `@semparedescultural.com.br` (Paula Simões, produtora intermediária).
 
-## Apps ativos
+## Apps ativos — mapa completo de FTP (confirmado direto no servidor, set/2026)
 
-| App | URL | FTP path |
-|-----|-----|----------|
-| Agende Aéreos | agende-aereos.ciadoliquidificador.com.br | /public_html/agende-aereos/ |
-| Agende Acro | agende-acro.ciadoliquidificador.com.br | /public_html/agende-acro/ |
-| Agende Infantil | agende-infantil.ciadoliquidificador.com.br | /public_html/agende-infantil/ |
-| Percussão | percussao.ciadoliquidificador.com.br | /public_html/percussao/ |
-| Sala de Ensaio | agende-ensaio.ciadoliquidificador.com.br | (integrado no server.js) |
-| Links/Cursos | links.ciadoliquidificador.com.br | (HTML estático) |
-| Presença | presenca.ciadoliquidificador.com.br | — |
-| Portal Profs | prof.ciadoliquidificador.com.br | — |
-| Portal Aluna | aluna.ciadoliquidificador.com.br | — |
+**Nunca perguntar "em qual pasta isso vai" — a tabela abaixo já responde.** Pasta local → pasta remota dentro de `/public_html/` na Locaweb. Todas as pastas locais ficam em `~/Public/` (irmãs de `Agende-Aula/`), exceto o Portal Admin.
+
+| Pasta local | Pasta remota (`/public_html/…`) | URL | Tipo |
+|---|---|---|---|
+| `agende-aereos-app/` | `agende-aereos/` | agende-aereos.ciadoliquidificador.com.br | React (CRA) — agendamento |
+| `Agende-Acro-app/` | `agende-acro/` | agende-acro.ciadoliquidificador.com.br | React (CRA) — agendamento |
+| `Agende-Infantil-app/` | `agende-infantil/` | agende-infantil.ciadoliquidificador.com.br | React (CRA) — agendamento |
+| `Agende-Percussao-app/` | `percussao/` | percussao.ciadoliquidificador.com.br | React (CRA) — matrícula (nome remoto diferente do local!) |
+| `agende-commedia-app/` | `commedia/` | commedia.ciadoliquidificador.com.br | React (CRA) — matrícula (nome remoto diferente do local!) |
+| `Agende-Ensaio-app/` | `agende-ensaio/` | agende-ensaio.ciadoliquidificador.com.br | HTML estático — Sala de Ensaio |
+| `Agende-Yoga-app/` | `agende-yoga/` | agende-yoga.ciadoliquidificador.com.br | HTML estático — booking Yoga |
+| `portal-admin-deploy/` | `admin/` | admin.ciadoliquidificador.com.br | HTML estático — Portal Admin |
+| `Aluna/` | `aluna/` | aluna.ciadoliquidificador.com.br | HTML estático — Portal Aluna |
+| `prof/` | `prof/` | prof.ciadoliquidificador.com.br | HTML estático — Portal Profs |
+| `equipe/` | `equipe/` | equipe.ciadoliquidificador.com.br | HTML estático — Portal Artista/Equipe |
+| `Presença/` | `presenca/` | presenca.ciadoliquidificador.com.br | HTML estático — chamada de presença |
+| `Sub/` | `sub/` | sub.ciadoliquidificador.com.br | HTML estático — substituição de professor |
+| `migracao/` | `migracao/` | migracao.ciadoliquidificador.com.br | HTML estático — completar cadastro legado |
+| `Matricula/` | `matricula/` | matricula.ciadoliquidificador.com.br | HTML estático — wizard de matrícula |
+| `Links/` | `links/` | links.ciadoliquidificador.com.br | HTML estático — link na bio |
+| `meditacao/` | `meditacao/` | meditacao.ciadoliquidificador.com.br | HTML estático — curso gratuito |
+| `Danças Brasileiras/` | `dancas-brasileiras/` | dancas-brasileiras.ciadoliquidificador.com.br | HTML estático — página de curso |
+| `Yoga/` | `yoga/` | yoga.ciadoliquidificador.com.br | HTML estático — página de curso (≠ agende-yoga, que é o booking) |
+| `avaliacao-luz/` | `Avaliacao-luz/` | (subpasta, sem subdomínio próprio) | HTML estático — pesquisa de satisfação |
+| `Apresentacoes/` | `apresentacao/` | (subpasta) | HTML estático — relatório pós-show (singular no remoto!) |
+| `remarcar-residente/` | `remarcar-residente/` | (subpasta) | HTML estático — remarcação Cia Plá |
+| `Rersidencia/` (nome local com erro de digitação) | `residencia/` | residencia.ciadoliquidificador.com.br | HTML estático — Residência Artística (nome remoto sem o erro) |
+| `Contratos - Professores/` | `contratos-professores/` | contratos-professores.ciadoliquidificador.com.br | HTML estático — assinatura de contrato professor |
+| `Aereos/` | `aereos/` | aereos.ciadoliquidificador.com.br | HTML estático — landing/marketing (≠ agende-aereos, que é o booking) |
+| `Acro/` | `acro/` | acro.ciadoliquidificador.com.br | HTML estático — landing/marketing |
+| `Infantil/` | `infantil/` | infantil.ciadoliquidificador.com.br | HTML estático — landing/marketing |
+| `espaço/` | `espaco/` | espaco.ciadoliquidificador.com.br | HTML estático — locação da sala |
+| `Reposição/` | `Reposicao/` | (subpasta) | HTML estático — hub de links de reposição |
+
+**Nomes remotos sem acento/cedilha** (Locaweb normaliza): `Reposição`→`Reposicao`, `espaço`→`espaco`, `Presença`→`presenca`, `Danças Brasileiras`→`dancas-brasileiras`. **Nomes remotos que fogem totalmente do nome da pasta local**: Percussão (`Agende-Percussao-app` → `percussao/`) e Commedia (`agende-commedia-app` → `commedia/`) — sem o prefixo "agende-"; Residência (`Rersidencia/` local, com erro de digitação → `residencia/` remoto, sem erro).
+
+**Pendências não confirmadas** (não assumir, perguntar antes de mexer):
+- `/public_html/cursos/` está **vazia** no servidor — resquício antigo, sem correspondência local conhecida. Não usar sem confirmar com o Fábio.
+- `/public_html/orcamento/` tem um `index.html` de verdade — mas este CLAUDE.md diz que a calculadora de orçamento não fica no FTP (Fábio abre local). Contradição não resolvida: pode ser uma versão antiga esquecida no servidor. **Confirmar com o Fábio antes de sobrescrever ou apagar essa pasta.**
+
+**Deploy de app React (CRA)**: rodar `npm run build` na pasta do app, depois subir o conteúdo de `build/` (não a pasta toda) pro caminho remoto — **sempre limpando o conteúdo antigo de `static/js`/`static/css` antes**, porque o CRA gera nome de arquivo com hash novo a cada build e deploys antigos nunca limpam os hashes velhos (achado real, set/2026: 3 versões antigas acumuladas do bundle principal em produção).
 
 **Importante:** Agende Acro NÃO tem a distinção de reposição/cota que os outros apps (Aéreos/Infantil/Yoga) têm. Não replicar lógica de cota lá sem pedido explícito.
+
+**Portal Admin:** fonte local em `~/Public/portal-admin-deploy/` (HTML estático, telas carregadas via iframe dentro de `admin.html`). Instalável como PWA no celular (manifest.json + sw.js, set/2026) — no iPhone precisa ser pelo Safari (Compartilhar → Adicionar à Tela de Início); Chrome iOS não expõe essa opção.
 
 ## Portais (Profs + Aluna) — jul/2026
 
@@ -153,5 +187,5 @@ Login por CPF + OTP único via WhatsApp. Sessão ativa 10min sem pedir novo cód
 - Fábio não testa localmente fora do que é explicitamente pedido. Todo deploy via Railway.
 - FTP sempre em `/public_html/[subdomain]/` — nunca a raiz do FTP.
 - Terminal output é colado direto no chat do Claude.ai pra interpretação; prefere confirmação concisa a explicação longa.
-- `sed` e scripts Python3 são preferidos a `nano` pra edições em lote (nano já corrompeu arquivo).
+- `sed` e scripts Python3 são preferidos a `nano` pra edições em lote (nano já corrompeu arquivo). Scripts de uso único (`patch_*.py`, migrações, correções pontuais) ficam em `arquivo/` (ignorado pelo git), nunca soltos na raiz.
 - Planejamento, operações no Notion (criar bancos/colunas) e prompts pro Claude Code continuam no Claude.ai (chat "Cia do Liquidificador"). Edição direta e grande no server.js é feita aqui no Claude Code.

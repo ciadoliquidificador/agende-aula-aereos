@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Planta Interativa — Espaço Liquidificador</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .canvas-scroll { overflow: auto; }
+  input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+  .tooltip-wrap { position: relative; display: inline-block; }
+  .tooltip-wrap .tooltip-bubble {
+    visibility: hidden; opacity: 0; transition: opacity .12s ease;
+    position: absolute; z-index: 50; bottom: 125%; left: 50%; transform: translateX(-50%);
+    background: #1f2937; color: #fff; padding: 6px 8px; border-radius: 6px; font-size: 11px;
+    width: 220px; line-height: 1.35; pointer-events: none;
+  }
+  .tooltip-wrap:hover .tooltip-bubble { visibility: visible; opacity: 1; }
+</style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+<div id="root"></div>
+
+<script type="text/plain" id="app-source">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+/* ============================================================================
+ * DADOS DE GEOMETRIA — fonte: planta oficial de 1970 + levantamento em campo.
+ * Ajuste as coordenadas AQUI (em metros) conforme confirmar medidas reais.
+ * O resto do app (desenho, cálculos de área, réguas) deriva automaticamente
+ * destes valores — não é necessário mexer na lógica para corrigir uma cota.
+ *
+ * Sistema de coordenadas: origem no canto FUNDO-ESQUERDO do imóvel.
+ * X = largura (m), crescendo para a direita.
+ * Y = profundidade (m), crescendo em direção à RUA (a fachada fica no
+ * "topo" do desenho, ou seja, no maior valor de Y).
+ * ==========================================================================*/
+
+// Polígono externo completo do imóvel, sentido horário a partir do
+// fundo-esquerdo (ver memorial descritivo / tabela de vértices).
+const POLYGON = [
+  { id: "P1",  x: 0.00, y: 0.00,  nota: "fundo-esquerda" },
+  { id: "P2",  x: 0.00, y: 8.80,  nota: "fim do acervo / início do ensaio (esq.)" },
+  { id: "P3",  x: 0.00, y: 15.80, nota: "fim do ensaio / início da entrada (esq.)" },
+  { id: "P4",  x: 0.00, y: 22.66, nota: "topo esquerdo da entrada", aproximado: true },
+  { id: "P5",  x: 3.67, y: 22.66, nota: "topo direito, sobre a fachada", aproximado: true },
+  { id: "P6",  x: 3.67, y: 15.80, nota: "pé direito da entrada, desce ao nível do ensaio" },
+  { id: "P6b", x: 3.75, y: 15.80, nota: "pequeno ajuste (3,67→3,75) entre a largura da entrada e a do recuo da escada", aproximado: true },
+  { id: "P6c", x: 3.75, y: 15.10, nota: "parede interna do recuo da escada (canto do 'dente')" },
+  { id: "P7",  x: 5.45, y: 15.10, nota: "fim do recuo, volta à largura plena do ensaio" },
+  { id: "P8",  x: 5.45, y: 8.80,  nota: "fim do ensaio (dir.)" },
+  { id: "P9",  x: 5.65, y: 8.80,  nota: "ajuste de espessura, ligação com acervo" },
+  { id: "P10", x: 5.65, y: 0.00,  nota: "fundo-direita" },
+];
+// A fachada (P4→P5) é OBLÍQUA em relação às laterais — tratada como reta
+// simples; a cota exata do topo tem ±5% de incerteza (marcada "aproximado").
+//
+// O recuo da escada ("dente", P6b→P6c→P7) é um recorte retangular de
+// 1,70 x 0,70 m no canto do ensaio (largura salta de 5,45 m para 3,75 m
+// nos últimos 0,70 m de profundidade antes da entrada) — confirmado por
+// diagrama de campo. A partir daí a Entrada mantém a largura estreita
+// (3,67 m) até a fachada. Fonte: planta oficial de 1970 + esboço "ATUAL"
+// enviado em campo (2026-08).
+
+// As 4 zonas nomeadas. yMin/yMax definem a faixa de profundidade; xMax a
+// largura útil nominal (a planta real usa o polígono acima para o contorno
+// exato — estas faixas retangulares são "recortadas" pelo polígono via
+// clipPath, então o dente e a fachada oblíqua aparecem automaticamente).
+const ZONES = [
+  { id: "acervo",  nome: "Acervo",   yMin: 0.00,  yMax: 8.80,  xMax: 5.65, cor: "#bfe0fb", corBorda: "#5b9bd5",
+    areaBruta: 49.7, largura: "5,65 m",
+    peDireito: { valor: null, aproximado: true, nota: "Pé-direito do acervo ainda não confirmado (trecho incorporado x original)." } },
+  { id: "ensaio",  nome: "Ensaio",   yMin: 8.80,  yMax: 15.80, xMax: 5.45, cor: "#c8ecc8", corBorda: "#5cb85c",
+    areaBruta: 37.0, largura: "5,45 m (3,75 m no trecho do dente)",
+    peDireito: { valor: 5.00, aproximado: false, nota: "Vigas estruturais aprox. 4,60–4,80 m — ver camada de fixos." } },
+  { id: "entrada", nome: "Entrada",  yMin: 15.80, yMax: 22.66, xMax: 3.67, cor: "#f7ecb0", corBorda: "#d9b93f",
+    areaBruta: 29.5, largura: "3,67 m",
+    peDireito: { valor: 2.00, aproximado: false, nota: "Piso até a laje do mezanino." } },
+  { id: "mezanino", nome: "Mezanino", yMin: 15.80, yMax: 22.66, xMax: 3.67, cor: "#e2c8f5", corBorda: "#9b59b6",
+    areaBruta: 22.4, largura: "3,67 m (mesma pegada da entrada)",
+    peDireito: { valor: 3.00, aproximado: false, nota: "Piso do mezanino até o teto." },
+    sobrepoeEmPlanta: "entrada" },
+];
+
+// O recuo ("dente") do ensaio junto à escada caracol NÃO é um elemento à
+// parte: ele nasce do próprio contorno externo (trecho P6b→P6c→P7,
+// recorte de 1,70 x 0,70 m — ver POLYGON acima).
+
+// Escada caracol — dentro do polígono do ensaio, encostada na parede
+// direita recuada (perto do degrau P6-P7-P8), não sobre a linha de
+// divisa com a entrada.
+const ESCADA = { cx: 4.60, cy: 15.10, raio: 0.85, label: "Escada caracol → mezanino" };
+
+// Vigas vermelhas estruturais do ensaio — posições Y aproximadas,
+// distribuídas ao longo do comprimento (todas na largura plena de 5,45 m,
+// já que ficam abaixo do degrau em Y=15,60). Ajustar conforme levantamento.
+const VIGAS = [
+  { y: 10.30, x0: 0.00, x1: 5.45 },
+  { y: 11.80, x0: 0.00, x1: 5.45 },
+  { y: 13.30, x0: 0.00, x1: 5.45 },
+  { y: 14.80, x0: 0.00, x1: 5.45 },
+];
+
+// Claraboias do acervo — grid 2x2 placeholder, posição exata a confirmar.
+const CLARABOIAS = [
+  { x: 1.6, y: 2.7, aproximado: true },
+  { x: 4.0, y: 2.7, aproximado: true },
+  { x: 1.6, y: 6.1, aproximado: true },
+  { x: 4.0, y: 6.1, aproximado: true },
+];
+
+// Parede de fundos do ensaio (Y=8,80), da esquerda (X=0) para a direita
+// (X=5,65): porta do banheiro comum → porta larga de acesso ao acervo →
+// UMA única janela grande com ventilação superior (lado direito).
+const PORTA_BANHEIRO = { x0: 0.10, x1: 0.90, y: 8.80 };
+const PORTA_ACESSO   = { x0: 2.20, x1: 3.40, y: 8.80 };
+const JANELA = { x0: 3.65, x1: 4.95, y: 8.80, aproximado: true };
+
+// Banheiros comuns JÁ EXISTENTES (construídos), encostados na parede
+// esquerda do acervo logo acima da divisa com o ensaio — confirmados pela
+// planta oficial de 1970 e pelo esboço "ATUAL" de campo (2026-08).
+// Dimensões lidas do desenho original (anotações parcialmente legíveis:
+// "100" de largura em ambos) — marcadas como aproximadas até medir in loco.
+const BANHEIROS_EXISTENTES = [
+  { x0: 0.00, x1: 1.00, y0: 7.00, y1: 8.80, label: "Banheiro comum (existente)", aproximado: true },
+  { x0: 0.00, x1: 1.00, y0: 4.90, y1: 7.00, label: "Banheiro comum (existente)", aproximado: true },
+];
+
+// Vão de 50cm na fachada da entrada — possível ventilação, status incerto.
+const VAO_FACHADA = { largura: 0.50, aproximado: true, nota: "Possível abertura de ventilação na fachada — a confirmar se é passante." };
+
+// Réguas/cotas principais a exibir sempre nas bordas do polígono.
+const COTAS = [
+  { tipo: "v", x: -0.9, y0: 0.00, y1: 8.80,  label: "8,80 m" },
+  { tipo: "v", x: -0.9, y0: 8.80, y1: 15.80, label: "7,00 m" },
+  { tipo: "h", y: 0.65, x0: 0.00, x1: 5.65, label: "5,65 m" },
+  { tipo: "h", y: 9.45, x0: 0.00, x1: 5.45, label: "5,45 m" },
+  { tipo: "h", y: 16.45, x0: 0.00, x1: 3.67, label: "3,67 m", aproximado: true },
+];
+
+const MARGIN = 1.6; // margem (m) reservada às réguas/cotas ao redor do polígono
+const maxX = Math.max(...POLYGON.map(p => p.x));
+const maxY = Math.max(...POLYGON.map(p => p.y));
+const totalW = maxX + MARGIN * 2;
+const totalH = maxY + MARGIN * 2;
+const offX = MARGIN;
+// Espelhado no eixo X (esquerda/direita invertidos) para bater com a
+// orientação real do imóvel visto em campo — os dados de geometria acima
+// continuam com X crescendo "para a direita" na definição original; é só
+// a projeção em tela que inverte, então nenhuma constante precisou mudar.
+const toX = (xm) => offX + (maxX - xm);
+const toY = (ym) => MARGIN + (maxY - ym); // flip: Y maior (rua) fica no topo do SVG
+const BASE_PX_PER_M = 34;
+
+const polygonPoints = POLYGON.map(p => `${toX(p.x)},${toY(p.y)}`).join(" ");
+
+// Recorta o polígono do imóvel por uma faixa horizontal [yMin,yMax]
+// (Sutherland–Hodgman contra as duas retas y=yMin e y=yMax) para obter o
+// contorno REAL de cada zona — inclusive o degrau entrada/ensaio — sem
+// depender de clipPath do SVG (mais robusto entre navegadores/visualizadores).
+function intersectY(a, b, y) {
+  const t = (y - a.y) / (b.y - a.y);
+  return { x: a.x + t * (b.x - a.x), y };
+}
+function clipHalfPlane(poly, keep) {
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const cur = poly[i], prev = poly[(i - 1 + poly.length) % poly.length];
+    const curIn = keep(cur), prevIn = keep(prev);
+    if (curIn) {
+      if (!prevIn) out.push(intersectY(prev, cur, keep.y));
+      out.push(cur);
+    } else if (prevIn) {
+      out.push(intersectY(prev, cur, keep.y));
+    }
+  }
+  return out;
+}
+function clipToBand(poly, yMin, yMax) {
+  const keepAbove = (p) => p.y >= yMin; keepAbove.y = yMin;
+  const keepBelow = (p) => p.y <= yMax; keepBelow.y = yMax;
+  return clipHalfPlane(clipHalfPlane(poly, keepAbove), keepBelow);
+}
+const ZONE_POLYGONS = {};
+ZONES.forEach(z => {
+  const pts = clipToBand(POLYGON, z.yMin, z.yMax);
+  ZONE_POLYGONS[z.id] = pts.map(p => `${toX(p.x)},${toY(p.y)}`).join(" ");
+});
+
+/* ============================================================================
+ * PALETA DE ELEMENTOS EDITÁVEIS
+ * ==========================================================================*/
+const PALETTE = [
+  { tipo: "banheiro",        nome: "Banheiro comum",         w: 1.20, h: 1.60, cor: "#fde2c8", corBorda: "#d98a3d" },
+  { tipo: "banheiro_pcd",    nome: "Banheiro acessível (PCD)", w: 1.70, h: 1.50, cor: "#c8e6fd", corBorda: "#3d8ad9" },
+  { tipo: "sofa",            nome: "Sofá / poltrona",         w: 0.90, h: 0.80, cor: "#e3c8fd", corBorda: "#8a3dd9" },
+  { tipo: "colchao",         nome: "Colchão de queda",        w: 2.00, h: 1.00, cor: "#c8fde0", corBorda: "#3dd98f" },
+  { tipo: "ancoragem",       nome: "Ponto de ancoragem aérea", w: 3.00, h: 3.00, cor: "#fdf6c8", corBorda: "#d9c53d", circulo: true, raio: 1.50 },
+  { tipo: "generico",        nome: "Item genérico",           w: 1.00, h: 1.00, cor: "#e8e8e8", corBorda: "#888888" },
+];
+
+const GRID_SNAP = 0.10;
+const snap = (v, on) => on ? Math.round(v / GRID_SNAP) * GRID_SNAP : Math.round(v * 100) / 100;
+
+/* ============================================================================
+ * GEOMETRIA / COLISÃO — retângulos orientados (SAT) para elementos editáveis.
+ * Círculos (ancoragem) são tratados pela bounding box quadrada para overlap.
+ * ==========================================================================*/
+function corners(el) {
+  const rad = (el.rot || 0) * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const hw = el.w / 2, hh = el.h / 2;
+  const local = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+  return local.map(([lx, ly]) => ({
+    x: el.xc + lx * cos - ly * sin,
+    y: el.yc + lx * sin + ly * cos,
+  }));
+}
+
+function overlaps(a, b) {
+  const ca = corners(a), cb = corners(b);
+  const axes = [];
+  [ca, cb].forEach(cs => {
+    for (let i = 0; i < 4; i++) {
+      const p1 = cs[i], p2 = cs[(i + 1) % 4];
+      const ex = p2.x - p1.x, ey = p2.y - p1.y;
+      const len = Math.hypot(ex, ey) || 1;
+      axes.push({ x: -ey / len, y: ex / len });
+    }
+  });
+  for (const axis of axes) {
+    const pa = ca.map(p => p.x * axis.x + p.y * axis.y);
+    const pb = cb.map(p => p.x * axis.x + p.y * axis.y);
+    if (Math.max(...pa) < Math.min(...pb) || Math.max(...pb) < Math.min(...pa)) return false;
+  }
+  return true;
+}
+
+/* ----------------------------------------------------------------------------
+ * Item 5.5 — circulação acessível (referência de estudo NBR 9050, não
+ * substitui verificação profissional). Duas checagens:
+ *  a) vão livre mínimo de 0,90 m entre elementos (fixos ou editáveis);
+ *  b) área de manobra de 1,20 x 1,20 m em frente ao banheiro PCD.
+ * -------------------------------------------------------------------------- */
+const MIN_PASSAGEM = 0.90;
+const PCD_MANOBRA = 1.20;
+
+function pointSegDist(p, a, b) {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const apx = p.x - a.x, apy = p.y - a.y;
+  const lenSq = abx * abx + aby * aby || 1e-9;
+  let t = (apx * abx + apy * aby) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const cx = a.x + t * abx, cy = a.y + t * aby;
+  return { dist: Math.hypot(p.x - cx, p.y - cy), point: { x: cx, y: cy } };
+}
+
+function segSegDist(a1, a2, b1, b2) {
+  const r1 = pointSegDist(a1, b1, b2);
+  const r2 = pointSegDist(a2, b1, b2);
+  const r3 = pointSegDist(b1, a1, a2);
+  const r4 = pointSegDist(b2, a1, a2);
+  let best = { dist: r1.dist, pA: a1, pB: r1.point };
+  if (r2.dist < best.dist) best = { dist: r2.dist, pA: a2, pB: r2.point };
+  if (r3.dist < best.dist) best = { dist: r3.dist, pA: r3.point, pB: b1 };
+  if (r4.dist < best.dist) best = { dist: r4.dist, pA: r4.point, pB: b2 };
+  return best;
+}
+
+function pointInPoly(p, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    const hit = (yi > p.y) !== (yj > p.y) && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi;
+    if (hit) inside = !inside;
+  }
+  return inside;
+}
+
+function polyPolyDist(polyA, polyB) {
+  let best = null;
+  for (let i = 0; i < polyA.length; i++) {
+    const a1 = polyA[i], a2 = polyA[(i + 1) % polyA.length];
+    for (let j = 0; j < polyB.length; j++) {
+      const b1 = polyB[j], b2 = polyB[(j + 1) % polyB.length];
+      const d = segSegDist(a1, a2, b1, b2);
+      if (!best || d.dist < best.dist) best = d;
+    }
+  }
+  return best;
+}
+
+function pointPolyDist(p, poly) {
+  if (pointInPoly(p, poly)) return { dist: 0, pA: p, pB: p };
+  let best = null;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const r = pointSegDist(p, a, b);
+    if (!best || r.dist < best.dist) best = { dist: r.dist, pA: p, pB: r.point };
+  }
+  return best;
+}
+
+// Área de manobra 1,20x1,20 "em frente" ao banheiro PCD — placeholder no
+// lado -Y local do retângulo, já que o lado exato da porta ainda não é
+// modelado (ajustar quando a posição da porta for confirmada em campo).
+function manobraRect(el) {
+  const rad = (el.rot || 0) * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const dist = el.h / 2 + PCD_MANOBRA / 2;
+  return {
+    xc: el.xc - (-dist) * sin,
+    yc: el.yc + (-dist) * cos,
+    w: PCD_MANOBRA, h: PCD_MANOBRA, rot: el.rot || 0,
+  };
+}
+
+function elArea(el) {
+  if (el.circulo) return Math.PI * el.raio * el.raio;
+  return el.w * el.h;
+}
+
+/* ============================================================================
+ * PERSISTÊNCIA (localStorage)
+ * ==========================================================================*/
+const LS_KEY = "planta-liquidificador-v1";
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) { return null; }
+}
+
+function saveState(state) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+}
+
+let uid = 1;
+const nextId = () => `el-${Date.now()}-${uid++}`;
+
+/* ============================================================================
+ * COMPONENTE: ícone de alerta com tooltip (dado "a confirmar")
+ * ==========================================================================*/
+function Alerta({ texto }) {
+  return (
+    <span className="tooltip-wrap align-middle ml-1 cursor-help text-amber-600">
+      ⚠
+      <span className="tooltip-bubble">{texto}</span>
+    </span>
+  );
+}
+
+/* ============================================================================
+ * APP
+ * ==========================================================================*/
+function App() {
+  const saved = useMemo(loadState, []);
+  const [elements, setElements] = useState(saved?.elements ?? []);
+  const [zonesVisible, setZonesVisible] = useState(saved?.zonesVisible ?? { acervo: true, ensaio: true, entrada: true, mezanino: false });
+  const [fixedVisible, setFixedVisible] = useState(saved?.fixedVisible ?? true);
+  const [gridSnap, setGridSnap] = useState(saved?.gridSnap ?? true);
+  const [zoom, setZoom] = useState(saved?.zoom ?? 1);
+  const [selectedId, setSelectedId] = useState(null);
+  const [zonaAtiva, setZonaAtiva] = useState("ensaio");
+
+  const svgRef = useRef(null);
+  const dragRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    saveState({ elements, zonesVisible, fixedVisible, gridSnap, zoom });
+  }, [elements, zonesVisible, fixedVisible, gridSnap, zoom]);
+
+  const selected = elements.find(e => e.id === selectedId) || null;
+
+  const clientToMeters = useCallback((clientX, clientY) => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const rect = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const scaleX = vb.width / rect.width;
+    const scaleY = vb.height / rect.height;
+    const svgX = (clientX - rect.left) * scaleX + vb.x;
+    const svgY = (clientY - rect.top) * scaleY + vb.y;
+    return { x: maxX - (svgX - offX), y: maxY - (svgY - MARGIN) };
+  }, []);
+
+  const updateElement = useCallback((id, patch) => {
+    setElements(els => els.map(e => (e.id === id ? { ...e, ...patch } : e)));
+  }, []);
+
+  const addElement = useCallback((template) => {
+    const zone = ZONES.find(z => z.id === zonaAtiva) || ZONES[1];
+    const xc = Math.min(zone.xMax, 2) / 2 + 0.3;
+    const yc = (zone.yMin + zone.yMax) / 2;
+    const el = {
+      id: nextId(),
+      tipo: template.tipo,
+      label: template.nome,
+      xc, yc,
+      w: template.w, h: template.h,
+      rot: 0,
+      zona: zonaAtiva,
+      circulo: !!template.circulo,
+      raio: template.raio,
+      cor: template.cor, corBorda: template.corBorda,
+    };
+    setElements(els => [...els, el]);
+    setSelectedId(el.id);
+  }, [zonaAtiva]);
+
+  const removeElement = useCallback((id) => {
+    setElements(els => els.filter(e => e.id !== id));
+    setSelectedId(sel => (sel === id ? null : sel));
+  }, []);
+
+  // ---- Pointer drag handling (move / resize / rotate) ----------------------
+  const onPointerDownMove = (e, el) => {
+    e.stopPropagation();
+    setSelectedId(el.id);
+    const start = clientToMeters(e.clientX, e.clientY);
+    dragRef.current = { mode: "move", id: el.id, startMouse: start, startEl: { ...el } };
+    window.addEventListener("pointermove", onPointerMoveWin);
+    window.addEventListener("pointerup", onPointerUpWin);
+  };
+
+  const onPointerDownResize = (e, el) => {
+    e.stopPropagation();
+    setSelectedId(el.id);
+    const start = clientToMeters(e.clientX, e.clientY);
+    dragRef.current = { mode: "resize", id: el.id, startMouse: start, startEl: { ...el } };
+    window.addEventListener("pointermove", onPointerMoveWin);
+    window.addEventListener("pointerup", onPointerUpWin);
+  };
+
+  const onPointerDownRotate = (e, el) => {
+    e.stopPropagation();
+    setSelectedId(el.id);
+    const start = clientToMeters(e.clientX, e.clientY);
+    dragRef.current = { mode: "rotate", id: el.id, startMouse: start, startEl: { ...el } };
+    window.addEventListener("pointermove", onPointerMoveWin);
+    window.addEventListener("pointerup", onPointerUpWin);
+  };
+
+  const onPointerMoveWin = (e) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const cur = clientToMeters(e.clientX, e.clientY);
+    const dx = cur.x - drag.startMouse.x;
+    const dy = cur.y - drag.startMouse.y;
+
+    if (drag.mode === "move") {
+      updateElement(drag.id, {
+        xc: snap(drag.startEl.xc + dx, gridSnap),
+        yc: snap(drag.startEl.yc + dy, gridSnap),
+      });
+    } else if (drag.mode === "resize") {
+      const rad = (drag.startEl.rot || 0) * Math.PI / 180;
+      const cos = Math.cos(rad), sin = Math.sin(rad);
+      // projeta o delta do mouse no referencial local do elemento
+      const localDx = dx * cos + dy * sin;
+      const localDy = -dx * sin + dy * cos;
+      const newW = Math.max(0.2, drag.startEl.w + localDx * 2);
+      const newH = Math.max(0.2, drag.startEl.h + localDy * 2);
+      updateElement(drag.id, {
+        w: snap(newW, gridSnap),
+        h: snap(newH, gridSnap),
+      });
+    } else if (drag.mode === "rotate") {
+      const center = { x: drag.startEl.xc, y: drag.startEl.yc };
+      const angle = Math.atan2(cur.y - center.y, cur.x - center.x) * 180 / Math.PI;
+      const rot = Math.round((90 - angle) / 5) * 5;
+      updateElement(drag.id, { rot });
+    }
+  };
+
+  const onPointerUpWin = () => {
+    dragRef.current = null;
+    window.removeEventListener("pointermove", onPointerMoveWin);
+    window.removeEventListener("pointerup", onPointerUpWin);
+  };
+
+  // ---- Overlap / validação --------------------------------------------------
+  const overlapIds = useMemo(() => {
+    const bad = new Set();
+    for (let i = 0; i < elements.length; i++) {
+      for (let j = i + 1; j < elements.length; j++) {
+        const a = elements[i], b = elements[j];
+        if (a.zona !== b.zona) continue;
+        if (overlaps(a, b)) { bad.add(a.id); bad.add(b.id); }
+      }
+    }
+    return bad;
+  }, [elements]);
+
+  const pcdInvalidIds = useMemo(() => {
+    const bad = new Set();
+    elements.filter(e => e.tipo === "banheiro_pcd").forEach(e => {
+      if (e.w < 1.50 || e.h < 1.50) bad.add(e.id);
+    });
+    return bad;
+  }, [elements]);
+
+  // Item 5.5a — vãos de passagem abaixo de 0,90 m entre elementos editáveis
+  // (e entre elementos e a escada caracol). Elementos circulares (ancoragem
+  // aérea) ficam de fora: representam zona de segurança no ar, não obstáculo
+  // físico no piso.
+  const corridorWarnings = useMemo(() => {
+    const warns = [];
+    const floorEls = elements.filter(e => !e.circulo);
+    for (let i = 0; i < floorEls.length; i++) {
+      for (let j = i + 1; j < floorEls.length; j++) {
+        const a = floorEls[i], b = floorEls[j];
+        if (a.zona !== b.zona) continue;
+        if (overlaps(a, b)) continue;
+        const r = polyPolyDist(corners(a), corners(b));
+        if (r.dist < MIN_PASSAGEM) warns.push({ key: `${a.id}-${b.id}`, dist: r.dist, pA: r.pA, pB: r.pB, zona: a.zona });
+      }
+    }
+    floorEls.forEach(el => {
+      if (el.zona !== "ensaio") return;
+      const r = pointPolyDist({ x: ESCADA.cx, y: ESCADA.cy }, corners(el));
+      const gap = r.dist - ESCADA.raio;
+      if (gap >= 0 && gap < MIN_PASSAGEM) {
+        const dx = r.pB.x - ESCADA.cx, dy = r.pB.y - ESCADA.cy;
+        const len = Math.hypot(dx, dy) || 1;
+        const edge = { x: ESCADA.cx + (dx / len) * ESCADA.raio, y: ESCADA.cy + (dy / len) * ESCADA.raio };
+        warns.push({ key: `${el.id}-escada`, dist: gap, pA: edge, pB: r.pB, zona: el.zona });
+      }
+    });
+    return warns;
+  }, [elements]);
+
+  // Item 5.5b — área de manobra do banheiro PCD invadida por outro elemento.
+  const pcdManobraInvadida = useMemo(() => {
+    const bad = new Set();
+    elements.filter(e => e.tipo === "banheiro_pcd").forEach(pcd => {
+      const rect = manobraRect(pcd);
+      elements.forEach(other => {
+        if (other.id === pcd.id || other.zona !== pcd.zona || other.circulo) return;
+        if (overlaps(rect, other)) bad.add(pcd.id);
+      });
+    });
+    return bad;
+  }, [elements]);
+
+  // ---- Área por zona ----------------------------------------------------
+  const areaPorZona = useMemo(() => {
+    const res = {};
+    ZONES.forEach(z => {
+      const ocupada = elements.filter(e => e.zona === z.id).reduce((s, e) => s + elArea(e), 0);
+      res[z.id] = { ocupada, livre: Math.max(0, z.areaBruta - ocupada) };
+    });
+    return res;
+  }, [elements]);
+
+  // ---- Export / Import ----------------------------------------------------
+  const exportJSON = () => {
+    const data = JSON.stringify({ elements, zonesVisible, fixedVisible }, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "planta-liquidificador.json";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const importJSON = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (Array.isArray(data.elements)) {
+          setElements(data.elements);
+          if (data.zonesVisible) setZonesVisible(data.zonesVisible);
+          if (typeof data.fixedVisible === "boolean") setFixedVisible(data.fixedVisible);
+          setSelectedId(null);
+        } else {
+          alert("Arquivo JSON não tem o formato esperado (campo 'elements' ausente).");
+        }
+      } catch (err) {
+        alert("Não foi possível ler o arquivo JSON: " + err.message);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const exportSVG = () => {
+    const svg = svgRef.current;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    const src = new XMLSerializer().serializeToString(clone);
+    const blob = new Blob([src], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "planta-liquidificador.svg";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportPNG = () => {
+    const svg = svgRef.current;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    const src = new XMLSerializer().serializeToString(clone);
+    const svgBlob = new Blob([src], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(svgBlob);
+    const img = new Image();
+    img.onload = () => {
+      const scale = 3;
+      const canvas = document.createElement("canvas");
+      canvas.width = totalW * BASE_PX_PER_M * scale;
+      canvas.height = totalH * BASE_PX_PER_M * scale;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(blob => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "planta-liquidificador.png";
+        document.body.appendChild(a); a.click(); a.remove();
+      });
+    };
+    img.src = url;
+  };
+
+  const svgWidthPx = totalW * BASE_PX_PER_M * zoom;
+  const svgHeightPx = totalH * BASE_PX_PER_M * zoom;
+
+  return (
+    <div className="h-screen w-screen flex flex-col">
+      <header className="bg-[#3b2f2f] text-[#f6ede3] px-4 py-2 flex items-center justify-between shrink-0">
+        <div>
+          <h1 className="text-lg font-semibold" style={{ fontFamily: "Georgia, serif" }}>Planta Interativa — Espaço Liquidificador</h1>
+          <p className="text-xs opacity-75">Instrumento de estudo — não é peça de projeto executivo. Cotas ⚠ ainda não validadas em campo.</p>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <button onClick={() => setZoom(z => Math.max(0.4, z - 0.15))} className="px-2 py-1 bg-[#5a4a45] rounded hover:bg-[#6b5851]">−</button>
+          <span className="w-12 text-center">{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom(z => Math.min(3, z + 0.15))} className="px-2 py-1 bg-[#5a4a45] rounded hover:bg-[#6b5851]">+</button>
+          <button onClick={() => setZoom(1)} className="px-2 py-1 bg-[#5a4a45] rounded hover:bg-[#6b5851] ml-2">Reset</button>
+        </div>
+      </header>
+
+      <div className="flex-1 flex overflow-hidden">
+        {/* -------- SIDEBAR ESQUERDA -------- */}
+        <aside className="w-72 bg-white border-r overflow-y-auto p-3 space-y-4 shrink-0">
+          <section>
+            <h2 className="font-semibold text-sm mb-2 text-[#5b3a29]">Zonas</h2>
+            <div className="space-y-2">
+              {ZONES.map(z => (
+                <div key={z.id} className="text-xs border rounded p-2" style={{ borderColor: z.corBorda }}>
+                  <label className="flex items-center gap-2 font-medium cursor-pointer">
+                    <input type="checkbox" checked={zonesVisible[z.id]} onChange={() => setZonesVisible(v => ({ ...v, [z.id]: !v[z.id] }))} />
+                    <span className="w-3 h-3 rounded-sm inline-block" style={{ background: z.cor, border: `1px solid ${z.corBorda}` }}></span>
+                    {z.nome}
+                  </label>
+                  <div className="pl-5 mt-1 text-gray-600 space-y-0.5">
+                    <div>Largura: {z.largura}</div>
+                    <div>Área bruta ≈ {z.areaBruta} m²</div>
+                    <div>
+                      Pé-direito: {z.peDireito.valor ? `${z.peDireito.valor.toFixed(2)} m` : "não confirmado"}
+                      {z.peDireito.aproximado && <Alerta texto={z.peDireito.nota} />}
+                    </div>
+                    <div className="text-gray-700">
+                      Ocupado: {areaPorZona[z.id]?.ocupada.toFixed(2)} m² · Livre: {areaPorZona[z.id]?.livre.toFixed(2)} m²
+                    </div>
+                    {z.sobrepoeEmPlanta && <div className="text-amber-600 italic">Ocupa a mesma área em planta que "{ZONES.find(zz=>zz.id===z.sobrepoeEmPlanta)?.nome}" (andar diferente) — desmarque uma para ver a outra sem sobreposição.</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <label className="flex items-center gap-2 text-xs mt-2 cursor-pointer">
+              <input type="checkbox" checked={fixedVisible} onChange={() => setFixedVisible(v => !v)} />
+              Mostrar elementos fixos (escada, vigas, claraboias, janelas, portas)
+            </label>
+          </section>
+
+          <section>
+            <h2 className="font-semibold text-sm mb-2 text-[#5b3a29]">Zona ativa (onde novos itens entram)</h2>
+            <select value={zonaAtiva} onChange={e => setZonaAtiva(e.target.value)} className="w-full border rounded text-xs p-1">
+              {ZONES.map(z => <option key={z.id} value={z.id}>{z.nome}</option>)}
+            </select>
+          </section>
+
+          <section>
+            <h2 className="font-semibold text-sm mb-2 text-[#5b3a29]">Paleta de elementos</h2>
+            <div className="grid grid-cols-1 gap-1.5">
+              {PALETTE.map(t => (
+                <button key={t.tipo} onClick={() => addElement(t)}
+                  className="text-xs text-left px-2 py-1.5 border rounded hover:bg-gray-50 flex items-center gap-2">
+                  <span className="w-3 h-3 inline-block rounded-sm shrink-0" style={{ background: t.cor, border: `1px solid ${t.corBorda}` }}></span>
+                  <span className="flex-1">{t.nome}</span>
+                  <span className="text-gray-400">{t.w.toFixed(2)}×{t.h.toFixed(2)}m</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" checked={gridSnap} onChange={() => setGridSnap(v => !v)} />
+              Snap à grade de 0,10 m
+            </label>
+          </section>
+
+          <section className="space-y-1.5">
+            <h2 className="font-semibold text-sm mb-1 text-[#5b3a29]">Exportar / Importar</h2>
+            <button onClick={exportJSON} className="w-full text-xs px-2 py-1.5 bg-[#5b3a29] text-white rounded hover:bg-[#6f4834]">Exportar JSON</button>
+            <button onClick={exportPNG} className="w-full text-xs px-2 py-1.5 bg-[#5b3a29] text-white rounded hover:bg-[#6f4834]">Exportar PNG</button>
+            <button onClick={exportSVG} className="w-full text-xs px-2 py-1.5 bg-[#5b3a29] text-white rounded hover:bg-[#6f4834]">Exportar SVG</button>
+            <button onClick={() => fileInputRef.current.click()} className="w-full text-xs px-2 py-1.5 border rounded hover:bg-gray-50">Importar JSON</button>
+            <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={importJSON} />
+          </section>
+        </aside>
+
+        {/* -------- CANVAS -------- */}
+        <main className="flex-1 canvas-scroll bg-gray-200 p-6">
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${totalW} ${totalH}`}
+            width={svgWidthPx}
+            height={svgHeightPx}
+            style={{ background: "#fff", touchAction: "none" }}
+            onPointerDown={() => setSelectedId(null)}
+          >
+            <defs>
+              <marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#555" />
+              </marker>
+            </defs>
+
+            {/* ---- ZONAS (coloridas, contorno real de cada zona — inclui o
+                 degrau entrada/ensaio e a fachada oblíqua, sem depender de
+                 clipPath do SVG) ---- */}
+            <g>
+              {ZONES.filter(z => zonesVisible[z.id]).map(z => (
+                <polygon key={z.id} points={ZONE_POLYGONS[z.id]}
+                  fill={z.cor} fillOpacity={z.sobrepoeEmPlanta ? 0.45 : 0.6} />
+              ))}
+            </g>
+
+            {/* ---- Contorno do imóvel ---- */}
+            <polygon points={polygonPoints} fill="none" stroke="#111" strokeWidth="0.06" strokeLinejoin="round" />
+
+            {/* ---- Rótulos de vértice aproximados ---- */}
+            {POLYGON.filter(p => p.aproximado).map(p => (
+              <text key={p.id} x={toX(p.x) + 0.1} y={toY(p.y) - 0.1} fontSize="0.35" fill="#b45309">⚠</text>
+            ))}
+
+            {/* ---- Elementos fixos ---- */}
+            {fixedVisible && (
+              <g>
+                {/* Escada caracol — o recuo ao seu redor já vem do contorno
+                    externo (degrau P6b→P6c→P7), não é desenhado à parte. */}
+                <circle cx={toX(ESCADA.cx)} cy={toY(ESCADA.cy)} r={ESCADA.raio} fill="#d1d5db" stroke="#4b5563" strokeWidth="0.03" />
+                <text x={toX(ESCADA.cx)} y={toY(ESCADA.cy)} fontSize="0.18" textAnchor="middle" fill="#374151" dy="0.06">Escada</text>
+                <text x={toX(ESCADA.cx)} y={toY(ESCADA.cy) - ESCADA.raio - 0.15} fontSize="0.18" textAnchor="middle" fill="#4b5563">{ESCADA.label}</text>
+
+                {/* Banheiros comuns já existentes (construídos) */}
+                {BANHEIROS_EXISTENTES.map((b, i) => (
+                  <g key={i}>
+                    <rect x={toX(b.x0)} y={toY(b.y1)} width={toX(b.x1) - toX(b.x0)} height={toY(b.y0) - toY(b.y1)}
+                      fill="#f0e4d0" stroke="#8a7355" strokeWidth="0.03" />
+                    <text x={(toX(b.x0) + toX(b.x1)) / 2} y={(toY(b.y0) + toY(b.y1)) / 2}
+                      fontSize="0.13" textAnchor="middle" fill="#5c4a35" transform={`rotate(-90 ${(toX(b.x0) + toX(b.x1)) / 2} ${(toY(b.y0) + toY(b.y1)) / 2})`}>
+                      {b.label} ⚠
+                    </text>
+                  </g>
+                ))}
+
+                {/* Vigas */}
+                {VIGAS.map((v, i) => (
+                  <g key={i}>
+                    <line x1={toX(v.x0)} y1={toY(v.y)} x2={toX(v.x1)} y2={toY(v.y)} stroke="#c0392b" strokeWidth="0.06" />
+                    <text x={toX(v.x1) + 0.1} y={toY(v.y)} fontSize="0.18" fill="#c0392b" dy="0.06">viga ~4,7m</text>
+                  </g>
+                ))}
+
+                {/* Claraboias */}
+                {CLARABOIAS.map((c, i) => (
+                  <g key={i}>
+                    <rect x={toX(c.x) - 0.35} y={toY(c.y) - 0.35} width="0.7" height="0.7" fill="#eaf6ff" stroke="#7fb8e0" strokeWidth="0.03" />
+                    <text x={toX(c.x)} y={toY(c.y) - 0.45} fontSize="0.16" textAnchor="middle" fill="#7fb8e0">⚠ claraboia</text>
+                  </g>
+                ))}
+
+                {/* Janela grande (única, lado direito) com ventilação superior */}
+                <g>
+                  <line x1={toX(JANELA.x0)} y1={toY(JANELA.y)} x2={toX(JANELA.x1)} y2={toY(JANELA.y)} stroke="#3d8ad9" strokeWidth="0.1" />
+                  <line x1={toX(JANELA.x0)} y1={toY(JANELA.y) + 0.14} x2={toX(JANELA.x1)} y2={toY(JANELA.y) + 0.14} stroke="#8ec2ea" strokeWidth="0.04" />
+                  <text x={(toX(JANELA.x0) + toX(JANELA.x1)) / 2} y={toY(JANELA.y) + 0.35} fontSize="0.16" textAnchor="middle" fill="#3d8ad9">⚠ janela + ventilação sup.</text>
+                </g>
+
+                {/* Portas na parede de fundos do ensaio */}
+                <line x1={toX(PORTA_BANHEIRO.x0)} y1={toY(PORTA_BANHEIRO.y)} x2={toX(PORTA_BANHEIRO.x1)} y2={toY(PORTA_BANHEIRO.y)} stroke="#fff" strokeWidth="0.1" />
+                <line x1={toX(PORTA_BANHEIRO.x0)} y1={toY(PORTA_BANHEIRO.y)} x2={toX(PORTA_BANHEIRO.x1)} y2={toY(PORTA_BANHEIRO.y)} stroke="#111" strokeWidth="0.02" strokeDasharray="0.05,0.05" />
+                <text x={(toX(PORTA_BANHEIRO.x0) + toX(PORTA_BANHEIRO.x1)) / 2} y={toY(PORTA_BANHEIRO.y) + 0.25} fontSize="0.15" textAnchor="middle" fill="#555">porta banheiro</text>
+
+                <line x1={toX(PORTA_ACESSO.x0)} y1={toY(PORTA_ACESSO.y)} x2={toX(PORTA_ACESSO.x1)} y2={toY(PORTA_ACESSO.y)} stroke="#fff" strokeWidth="0.1" />
+                <line x1={toX(PORTA_ACESSO.x0)} y1={toY(PORTA_ACESSO.y)} x2={toX(PORTA_ACESSO.x1)} y2={toY(PORTA_ACESSO.y)} stroke="#111" strokeWidth="0.02" strokeDasharray="0.05,0.05" />
+                <text x={(toX(PORTA_ACESSO.x0) + toX(PORTA_ACESSO.x1)) / 2} y={toY(PORTA_ACESSO.y) + 0.25} fontSize="0.15" textAnchor="middle" fill="#555">acesso</text>
+
+                {/* Vão na fachada */}
+                <g>
+                  <line x1={toX(1.55)} y1={toY(22.66)} x2={toX(2.05)} y2={toY(22.66)} stroke="#b45309" strokeWidth="0.12" />
+                  <text x={toX(1.8)} y={toY(22.66) - 0.2} fontSize="0.16" textAnchor="middle" fill="#b45309">⚠ vão 0,50m</text>
+                </g>
+
+                {/* Portão (toda a fachada P4-P5) */}
+                <line x1={toX(0)} y1={toY(22.66)} x2={toX(3.67)} y2={toY(22.66)} stroke="#111" strokeWidth="0.1" strokeDasharray="0.15,0.1" />
+                <text x={toX(1.83)} y={toY(22.66) + 0.35} fontSize="0.18" textAnchor="middle" fill="#111">Portão de entrada</text>
+              </g>
+            )}
+
+            {/* ---- Réguas / cotas ---- */}
+            <g stroke="#555" fill="#333" fontSize="0.2">
+              {COTAS.map((c, i) => c.tipo === "v" ? (
+                <g key={i}>
+                  <line x1={toX(c.x)} y1={toY(c.y0)} x2={toX(c.x)} y2={toY(c.y1)} markerStart="url(#arrow)" markerEnd="url(#arrow)" strokeWidth="0.02" />
+                  <text x={toX(c.x) - 0.12} y={(toY(c.y0) + toY(c.y1)) / 2} textAnchor="end" transform={`rotate(-90 ${toX(c.x) - 0.12} ${(toY(c.y0) + toY(c.y1)) / 2})`}>
+                    {c.label}{c.aproximado ? " ⚠" : ""}
+                  </text>
+                </g>
+              ) : (
+                <g key={i}>
+                  <line x1={toX(c.x0)} y1={toY(c.y)} x2={toX(c.x1)} y2={toY(c.y)} markerStart="url(#arrow)" markerEnd="url(#arrow)" strokeWidth="0.02" />
+                  <text x={(toX(c.x0) + toX(c.x1)) / 2} y={toY(c.y) - 0.1} textAnchor="middle">
+                    {c.label}{c.aproximado ? " ⚠" : ""}
+                  </text>
+                </g>
+              ))}
+            </g>
+
+            {/* ---- Elementos editáveis ---- */}
+            {elements.filter(e => zonesVisible[e.zona]).map(el => {
+              const isSel = el.id === selectedId;
+              const bad = overlapIds.has(el.id) || pcdInvalidIds.has(el.id);
+              const wPx = el.w, hPx = el.h;
+              return (
+                <g key={el.id}
+                  transform={`translate(${toX(el.xc)} ${toY(el.yc)}) rotate(${-(el.rot || 0)})`}
+                  onPointerDown={(e) => onPointerDownMove(e, el)}
+                  style={{ cursor: "move" }}>
+                  {el.circulo ? (
+                    <>
+                      <circle cx="0" cy="0" r={el.raio} fill={el.cor} fillOpacity="0.35" stroke={bad ? "#dc2626" : el.corBorda} strokeWidth={bad ? 0.05 : 0.03} />
+                      <circle cx="0" cy="0" r="0.08" fill={el.corBorda} />
+                    </>
+                  ) : (
+                    <rect x={-wPx / 2} y={-hPx / 2} width={wPx} height={hPx}
+                      fill={el.cor} stroke={bad ? "#dc2626" : el.corBorda} strokeWidth={bad ? 0.05 : 0.03} />
+                  )}
+                  {el.tipo === "banheiro_pcd" && (
+                    <circle cx="0" cy="0" r="0.75" fill="none" stroke={pcdInvalidIds.has(el.id) ? "#dc2626" : "#3d8ad9"} strokeDasharray="0.06,0.06" strokeWidth="0.025" />
+                  )}
+                  <text x="0" y="0" fontSize="0.16" textAnchor="middle" fill="#222" dy="-0.05">{el.label}</text>
+                  <text x="0" y="0.18" fontSize="0.14" textAnchor="middle" fill="#555">{el.w.toFixed(2)}×{el.h.toFixed(2)}m</text>
+                  {bad && <text x="0" y="-0.35" fontSize="0.15" textAnchor="middle" fill="#dc2626">
+                    {pcdInvalidIds.has(el.id) ? "giro não cabe" : "sobreposição"}
+                  </text>}
+
+                  {isSel && (
+                    <>
+                      {/* handle de rotação */}
+                      <line x1="0" y1={-hPx / 2} x2="0" y2={-hPx / 2 - 0.5} stroke="#2563eb" strokeWidth="0.02" />
+                      <circle cx="0" cy={-hPx / 2 - 0.5} r="0.09" fill="#2563eb"
+                        onPointerDown={(e) => onPointerDownRotate(e, el)} style={{ cursor: "grab" }} />
+                      {/* handle de resize (canto inferior direito) */}
+                      <rect x={wPx / 2 - 0.09} y={hPx / 2 - 0.09} width="0.18" height="0.18" fill="#2563eb"
+                        onPointerDown={(e) => onPointerDownResize(e, el)} style={{ cursor: "nwse-resize" }} />
+                      {/* botão excluir */}
+                      <g transform={`translate(${wPx / 2 + 0.15} ${-hPx / 2 - 0.15})`}
+                        onPointerDown={(e) => { e.stopPropagation(); removeElement(el.id); }} style={{ cursor: "pointer" }}>
+                        <circle r="0.13" fill="#dc2626" />
+                        <text x="0" y="0.05" fontSize="0.16" textAnchor="middle" fill="#fff">×</text>
+                      </g>
+                    </>
+                  )}
+                </g>
+              );
+            })}
+
+            {/* ---- Item 5.5b: área de manobra do banheiro PCD (1,20x1,20m) ---- */}
+            {elements.filter(e => e.tipo === "banheiro_pcd" && zonesVisible[e.zona]).map(el => {
+              const rect = manobraRect(el);
+              const bad = pcdManobraInvadida.has(el.id);
+              return (
+                <g key={"manobra-" + el.id} transform={`translate(${toX(rect.xc)} ${toY(rect.yc)}) rotate(${-(rect.rot || 0)})`}>
+                  <rect x={-rect.w / 2} y={-rect.h / 2} width={rect.w} height={rect.h}
+                    fill={bad ? "#fecaca" : "none"} fillOpacity="0.5"
+                    stroke={bad ? "#dc2626" : "#d97706"} strokeDasharray="0.05,0.05" strokeWidth="0.03" />
+                  <text x="0" y="0" fontSize="0.13" textAnchor="middle" fill={bad ? "#dc2626" : "#92400e"}>
+                    {bad ? "manobra invadida ⚠" : "manobra 1,20×1,20 ⚠"}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* ---- Item 5.5a: vãos de passagem abaixo de 0,90 m ---- */}
+            {corridorWarnings.filter(w => zonesVisible[w.zona]).map(w => (
+              <g key={w.key}>
+                <line x1={toX(w.pA.x)} y1={toY(w.pA.y)} x2={toX(w.pB.x)} y2={toY(w.pB.y)}
+                  stroke="#ea580c" strokeWidth="0.03" strokeDasharray="0.06,0.06" />
+                <text x={(toX(w.pA.x) + toX(w.pB.x)) / 2} y={(toY(w.pA.y) + toY(w.pB.y)) / 2 - 0.08}
+                  fontSize="0.13" textAnchor="middle" fill="#ea580c">
+                  {w.dist.toFixed(2)}m — abaixo do mínimo de circulação (0,90 m)
+                </text>
+              </g>
+            ))}
+          </svg>
+        </main>
+
+        {/* -------- PAINEL DIREITO (propriedades) -------- */}
+        <aside className="w-64 bg-white border-l overflow-y-auto p-3 shrink-0">
+          <h2 className="font-semibold text-sm mb-2 text-[#5b3a29]">Elemento selecionado</h2>
+          {!selected && <p className="text-xs text-gray-500">Clique em um elemento no canvas para editar suas propriedades, ou adicione um novo pela paleta.</p>}
+          {selected && (
+            <div className="space-y-2 text-xs">
+              <div>
+                <label className="block text-gray-500 mb-0.5">Rótulo</label>
+                <input value={selected.label} onChange={e => updateElement(selected.id, { label: e.target.value })} className="w-full border rounded px-1.5 py-1" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-gray-500 mb-0.5">Largura (m)</label>
+                  <input type="number" step="0.05" min="0.2" value={selected.w}
+                    onChange={e => updateElement(selected.id, { w: Math.max(0.2, parseFloat(e.target.value) || 0.2) })}
+                    className="w-full border rounded px-1.5 py-1" />
+                </div>
+                <div>
+                  <label className="block text-gray-500 mb-0.5">Altura (m)</label>
+                  <input type="number" step="0.05" min="0.2" value={selected.h}
+                    onChange={e => updateElement(selected.id, { h: Math.max(0.2, parseFloat(e.target.value) || 0.2) })}
+                    className="w-full border rounded px-1.5 py-1" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-gray-500 mb-0.5">Rotação (graus)</label>
+                <input type="number" step="5" value={selected.rot || 0}
+                  onChange={e => updateElement(selected.id, { rot: parseFloat(e.target.value) || 0 })}
+                  className="w-full border rounded px-1.5 py-1" />
+              </div>
+              <div>
+                <label className="block text-gray-500 mb-0.5">Zona</label>
+                <select value={selected.zona} onChange={e => updateElement(selected.id, { zona: e.target.value })} className="w-full border rounded px-1.5 py-1">
+                  {ZONES.map(z => <option key={z.id} value={z.id}>{z.nome}</option>)}
+                </select>
+              </div>
+              {overlapIds.has(selected.id) && <p className="text-red-600">⚠ Este elemento se sobrepõe a outro na mesma zona.</p>}
+              {pcdInvalidIds.has(selected.id) && <p className="text-red-600">⚠ O giro de cadeira de rodas (1,50 m Ø) não cabe inteiramente — aumente as dimensões.</p>}
+              {pcdManobraInvadida.has(selected.id) && <p className="text-red-600">⚠ A área de manobra (1,20×1,20 m) em frente ao banheiro está invadida por outro elemento.</p>}
+              <button onClick={() => removeElement(selected.id)} className="w-full mt-2 px-2 py-1.5 bg-red-600 text-white rounded hover:bg-red-700">Excluir elemento</button>
+            </div>
+          )}
+
+          <hr className="my-3" />
+          <h2 className="font-semibold text-sm mb-2 text-[#5b3a29]">Resumo de áreas</h2>
+          <table className="w-full text-xs">
+            <thead><tr className="text-gray-500"><th className="text-left font-normal">Zona</th><th className="text-right font-normal">Livre</th></tr></thead>
+            <tbody>
+              {ZONES.map(z => (
+                <tr key={z.id}><td>{z.nome}</td><td className="text-right">{areaPorZona[z.id]?.livre.toFixed(1)} m²</td></tr>
+              ))}
+            </tbody>
+          </table>
+
+          <hr className="my-3" />
+          <h2 className="font-semibold text-sm mb-2 text-[#5b3a29]">
+            Circulação acessível
+            <Alerta texto="Valores de referência de estudo (NBR 9050) — não substituem a verificação de um profissional habilitado." />
+          </h2>
+          <p className="text-xs text-gray-600">
+            {corridorWarnings.length === 0
+              ? "Nenhum vão de passagem abaixo de 0,90 m detectado."
+              : `${corridorWarnings.length} vão(s) de passagem abaixo de 0,90 m.`}
+          </p>
+          {pcdManobraInvadida.size > 0 && (
+            <p className="text-xs text-red-600 mt-1">
+              {pcdManobraInvadida.size} área(s) de manobra do banheiro PCD invadida(s) por outro elemento.
+            </p>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+<script>
+  // Transform manual (runtime clássico) para evitar o runtime automático
+  // de JSX do Babel 8, que gera "import" e não roda em <script> comum.
+  (function () {
+    const src = document.getElementById("app-source").textContent;
+    const { code } = Babel.transform(src, {
+      presets: [["react", { runtime: "classic" }], "stage-3"],
+      filename: "app.jsx",
+    });
+    const script = document.createElement("script");
+    script.text = code;
+    document.body.appendChild(script);
+  })();
+</script>
+</body>
+</html>
