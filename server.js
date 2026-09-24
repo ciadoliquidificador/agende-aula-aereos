@@ -6315,38 +6315,42 @@ function revExtrairVideoId(url) {
   return m ? m[1] : null;
 }
 
-// Extração não-oficial (scraping): usa a página de watch com ?list=, que carrega o painel
-// lateral da playlist com todos os itens (a página /playlist sozinha não trouxe o mesmo
-// conteúdo em teste, set/2026 — provavelmente exige JS pra popular). Cada item real tem um
-// "simpleText" (título) e uma URL de thumbnail "i.ytimg.com/vi/<ID>/" próximos um do outro;
-// exigir os dois evita pegar falsos positivos (ex: um bloco de nomes de tipo de renderer
-// que aparece antes da lista de itens de verdade).
+// YouTube Data API v3 oficial (não é mais scraping — trocado set/2026 depois que o IP
+// compartilhado do Railway começou a levar 429 ao tentar abrir a página da playlist direto;
+// da máquina do Fábio a mesma página respondia 200, confirmando que era bloqueio de
+// reputação de IP, não limite de requisição — retry com espera não resolvia isso).
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+
 async function revListarVideosDaPlaylist(playlistId) {
-  const r = await fetch(`https://www.youtube.com/watch?list=${playlistId}`, {
-    headers: {
-      'Accept-Language': 'pt-BR',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-    },
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status} ao tentar abrir a playlist no YouTube.`);
-  const html = await r.text();
-  const marcador = 'playlistPanelVideoRenderer":{"title"';
+  if (!YOUTUBE_API_KEY) throw new Error('Chave da YouTube Data API (YOUTUBE_API_KEY) não configurada no servidor.');
+
   const itens = [];
   const idsVistos = new Set();
-  let idx = -1;
-  while (true) {
-    idx = html.indexOf(marcador, idx + 1);
-    if (idx === -1) break;
-    const janela = html.slice(idx, idx + 1000);
-    const simpleText = janela.match(/"simpleText":"([^"]+)"/);
-    const thumb = janela.match(/i\.ytimg\.com\/vi\/([a-zA-Z0-9_-]{11})\//);
-    if (simpleText && thumb && !idsVistos.has(thumb[1])) {
-      idsVistos.add(thumb[1]);
-      itens.push({ id: thumb[1], titulo: simpleText[1] });
+  let placas = 0; // vídeos privados/removidos na playlist — API ainda lista o item, só sem título de verdade
+  let pageToken = '';
+  do {
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${encodeURIComponent(playlistId)}&key=${YOUTUBE_API_KEY}${pageToken ? `&pageToken=${pageToken}` : ''}`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!r.ok) {
+      const motivo = d?.error?.errors?.[0]?.reason;
+      if (motivo === 'quotaExceeded') throw new Error('Cota diária da YouTube Data API esgotada — tente de novo depois da meia-noite (horário do Pacífico) ou aumente a cota no Google Cloud Console.');
+      if (r.status === 404 || motivo === 'playlistNotFound') throw new Error(`Playlist não encontrada (privada ou removida): ${playlistId}`);
+      throw new Error(`HTTP ${r.status} na YouTube Data API: ${d?.error?.message || 'erro desconhecido'}`);
     }
-  }
-  if (itens.length === 0) throw new Error('Não encontrei nenhum vídeo dentro da playlist — a página do YouTube pode ter mudado de formato (extração não-oficial, scraping).');
-  return itens;
+    for (const item of d.items || []) {
+      const videoId = item.snippet?.resourceId?.videoId;
+      const titulo = item.snippet?.title;
+      if (!videoId || idsVistos.has(videoId)) continue;
+      idsVistos.add(videoId);
+      if (titulo === 'Private video' || titulo === 'Deleted video') { placas++; continue; }
+      itens.push({ id: videoId, titulo });
+    }
+    pageToken = d.nextPageToken || '';
+  } while (pageToken);
+
+  if (itens.length === 0) throw new Error(`Playlist sem nenhum vídeo público/disponível (${placas} vídeo(s) privado(s)/removido(s) ignorado(s)).`);
+  return { itens, ocultos: placas };
 }
 
 async function revBuscarTituloVideo(videoId) {
@@ -6395,8 +6399,9 @@ async function revMaterialDeVideo(linkVideo) {
     if (revEhPlaylist(linkVideo)) {
       const playlistId = revExtrairPlaylistId(linkVideo);
       if (!playlistId) throw new Error(`Link parece ser playlist mas não consegui extrair o ID: ${linkVideo}`);
-      itensVideo = await revListarVideosDaPlaylist(playlistId);
-      avisos.push(`Extração de playlist é scraping não-oficial (experimental) — confira se os ${itensVideo.length} vídeo(s) abaixo batem com o que a playlist real mostra no navegador, antes de confiar 100% na lista.`);
+      const resultadoPlaylist = await revListarVideosDaPlaylist(playlistId);
+      itensVideo = resultadoPlaylist.itens;
+      if (resultadoPlaylist.ocultos > 0) avisos.push(`${resultadoPlaylist.ocultos} vídeo(s) da playlist estão privados/removidos e foram ignorados — confira se a playlist real não devia ter mais itens.`);
     } else {
       const videoId = revExtrairVideoId(linkVideo);
       if (!videoId) throw new Error(`Não reconheci o formato do link como vídeo do YouTube: ${linkVideo}`);
