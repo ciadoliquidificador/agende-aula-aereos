@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Planta Interativa — Espaço Liquidificador</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.9/babel.min.js" crossorigin></script>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   .canvas-scroll { overflow: auto; }
@@ -1005,7 +1005,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   (function () {
     const src = document.getElementById("app-source").textContent;
     const { code } = Babel.transform(src, {
-      presets: [["react", { runtime: "classic" }], "stage-3"],
+      presets: [["react", { runtime: "classic" }]],
       filename: "app.jsx",
     });
     const script = document.createElement("script");
