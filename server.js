@@ -6641,11 +6641,94 @@ function revResolverCamposSimples(blocos, opcoes) {
   return { properties, resultados };
 }
 
+// Mesma ideia de revResolverCamposSimples, mas contra o schema separado do Portfólio Online
+// (banco de vendas — nomes de propriedade e opções diferentes de Trabalhos, ver
+// revBuscarOpcoesPortfolio). Sem efeito colateral, nem PDF/upload de arquivo — usado tanto pela
+// pré-visualização quanto pela publicação de verdade, pra garantir que os dois mostrem
+// exatamente o mesmo resultado (antes só o /publicar simulava esse lado, então avisos como
+// "opção nova em Tema Geral" só apareciam depois de já ter gravado em Trabalhos).
+function revResolverCamposPortfolio(blocos, opcoesPortfolio) {
+  const properties = {};
+  const resultados = [];
+
+  if (blocos.SINOPSE) properties['Sinopse'] = { rich_text: [{ text: { content: blocos.SINOPSE.slice(0, 2000) } }] };
+  if (blocos.RELEASE) properties['Release - Texto'] = { rich_text: [{ text: { content: blocos.RELEASE.slice(0, 2000) } }] };
+
+  // Classificação Indicativa é sistema regulatório FIXO (só existem os níveis oficiais do
+  // CLASSIND) — nunca cria valor novo. Se não bater, avisa alto, não grava em silêncio.
+  if (blocos.CLASSIFICACAO_INDICATIVA) {
+    const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoesPortfolio.classificacao);
+    if (valor) {
+      properties['Classificação Indicativa'] = { select: { name: valor } };
+      resultados.push({ campo: 'Classificação Indicativa (Portfólio Online)', status: 'ok', valor });
+    } else {
+      resultados.push({ campo: 'Classificação Indicativa (Portfólio Online)', status: 'aviso', mensagem: `"${blocos.CLASSIFICACAO_INDICATIVA}" não é um dos níveis oficiais do CLASSIND — não será gravado. Opções válidas: ${opcoesPortfolio.classificacao.join(' | ')}` });
+    }
+  }
+
+  // Vocabulário fechado de verdade (Público-Alvo, Tema Social/Edital, Descritores) — taxonomia
+  // institucional/edital, não deve crescer por decisão da revisão. Só grava o que bater com
+  // opção existente; o que não bater vira aviso (nunca falha em silêncio).
+  const mapaMultiFechadoPortfolio = { PUBLICO_ALVO: ['Público-Alvo', 'publicoAlvo'], TEMA_SOCIAL_EDITAL: ['Tema Social/Edital', 'temaSocialEdital'], DESCRITORES: ['Descritores de Classificação', 'descritores'] };
+  for (const [chave, [propName, chaveOpcoes]] of Object.entries(mapaMultiFechadoPortfolio)) {
+    if (!blocos[chave]) continue;
+    const partes = blocos[chave].split(',').map(s => s.trim()).filter(Boolean);
+    const validas = [], invalidas = [];
+    for (const p of partes) {
+      const achou = revEncontrarOpcao(p, opcoesPortfolio[chaveOpcoes]);
+      if (achou) validas.push(achou); else invalidas.push(p);
+    }
+    if (validas.length) { properties[propName] = { multi_select: validas.map(n => ({ name: n })) }; resultados.push({ campo: `${propName} (Portfólio Online)`, status: 'ok', valor: validas.join(', ') }); }
+    if (invalidas.length) resultados.push({ campo: `${propName} (Portfólio Online)`, status: 'aviso', mensagem: `Não bateram com opções existentes (não serão gravadas): ${invalidas.join(', ')}` });
+  }
+
+  // Tema Geral é vocabulário CONTROLADO, mas pode crescer com moderação (diretriz do projeto:
+  // "checar se já existe equivalente antes de criar opção nova" — quem faz essa checagem é a
+  // revisão no Claude.ai, não o Portal Admin). Por isso: tenta bater com opção existente; se não
+  // bater, GRAVA mesmo assim (Notion cria a opção nova), mas sempre reporta como "opção nova".
+  if (blocos.TEMA_GERAL) {
+    const partes = blocos.TEMA_GERAL.split(',').map(s => s.trim()).filter(Boolean);
+    const finais = [], novas = [];
+    for (const p of partes) {
+      const achou = revEncontrarOpcao(p, opcoesPortfolio.temaGeral);
+      if (achou) finais.push(achou); else { finais.push(p); novas.push(p); }
+    }
+    if (finais.length) properties['Tema Geral'] = { multi_select: finais.map(n => ({ name: n })) };
+    resultados.push(novas.length
+      ? { campo: 'Tema Geral (Portfólio Online)', status: 'aviso', valor: finais.join(', '), mensagem: `Opção(ões) NOVA(S), não existiam antes — confirme que não é duplicata de uma já cadastrada: ${novas.join(', ')}` }
+      : { campo: 'Tema Geral (Portfólio Online)', status: 'ok', valor: finais.join(', ') });
+  }
+
+  // Tema Específico é vocabulário ABERTO (diretriz do projeto) — grava direto, sem checar
+  // contra lista fixa; o Notion cria a opção nova sozinho se ainda não existir.
+  if (blocos.TEMA_ESPECIFICO) {
+    const partes = blocos.TEMA_ESPECIFICO.split(',').map(s => s.trim()).filter(Boolean);
+    if (partes.length) { properties['Tema Específico'] = { multi_select: partes.map(n => ({ name: n })) }; resultados.push({ campo: 'Tema Específico (Portfólio Online)', status: 'ok', valor: partes.join(', ') }); }
+  }
+
+  // Campo "Temas" é DEPRECIADO (diretriz do projeto) — limpa ao publicar pelos 3 eixos novos,
+  // pra não deixar dado antigo/duplicado dessincronizado.
+  if (blocos.TEMA_GERAL || blocos.TEMA_ESPECIFICO || blocos.TEMA_SOCIAL_EDITAL) {
+    properties['Temas'] = { multi_select: [] };
+  }
+
+  return { properties, resultados };
+}
+
 function revColetarArquivos(props, propName) {
   return (props[propName]?.files || []).map(f => ({
     nome: f.name,
     url: f.type === 'file' ? f.file.url : f.external.url,
   }));
+}
+
+// Links externos (Canva, Drive) de um campo de arquivo, no formato aceito de volta num PATCH —
+// o PATCH de "files" substitui a lista inteira, e sem isso o PDF novo apagava o link do Canva
+// que a maioria dos Trabalhos guarda em Release.
+function revArquivosExternos(props, propName) {
+  return (props?.[propName]?.files || [])
+    .filter(f => f.type === 'external')
+    .map(f => ({ type: 'external', name: f.name, external: { url: f.external.url } }));
 }
 
 function revAdivinharContentType(nome) {
@@ -6759,6 +6842,29 @@ async function revMontarDadosRevisao(pageId) {
       : `- **Vídeo (usado como material-base, ver acima) — leitura obrigatória** já que não há Texto Base pra essa peça.`);
   }
 
+  // O chat grava direto pelo conector, e o Notion cria opção nova sozinho quando o texto não
+  // bate exato — por isso só listar opções que existem nos DOIS bancos (senão uma opção válida
+  // em Trabalhos viraria opção nova inventada no Portfólio Online, ou vice-versa).
+  const vocabComum = (a, b) => {
+    const comum = a.filter(x => b.includes(x));
+    const soEmUm = [...a.filter(x => !b.includes(x)), ...b.filter(x => !a.includes(x))];
+    return comum.join(' | ') + (soEmUm.length ? `\n    (existem só em UM dos dois bancos — não usar; se achar que precisa, me avise: ${soEmUm.join(' | ')})` : '');
+  };
+
+  // Não há relation entre Trabalhos e Portfólio Online — casa por Nome exato aqui, pra o chat
+  // receber o destino já resolvido (atualizar/criar) em vez de adivinhar.
+  const candidatosPortfolio = await revNotion('POST', `/databases/${PORTFOLIO_ONLINE_DB}/query`, {
+    filter: { property: 'Nome', title: { equals: nome } }, page_size: 10,
+  });
+  let destinoPortfolio = null;
+  if (candidatosPortfolio.results.length === 1) {
+    destinoPortfolio = `ATUALIZAR a página que já existe: ${candidatosPortfolio.results[0].url}`;
+  } else if (candidatosPortfolio.results.length === 0) {
+    destinoPortfolio = `ainda NÃO existe página desse trabalho — CRIAR uma nova dentro do banco Portfólio Online (https://www.notion.so/${PORTFOLIO_ONLINE_DB}), com o título (propriedade "Nome") exatamente: ${nome}`;
+  } else {
+    avisos.push(`Existem ${candidatosPortfolio.results.length} páginas chamadas "${nome}" no Portfólio Online (duplicata) — o chat vai pular o Portfólio Online. Apague a duplicata no Notion e baixe o material de novo.`);
+  }
+
   const instrucoesRevisao = `# Prompt de REVISÃO — ${nome}
 ${avisos.length ? `\n## ⚠️⚠️ AVISOS — LEIA ANTES DE CONTINUAR ⚠️⚠️\n${avisos.map(a => '- ' + a).join('\n')}\n` : ''}
 ## Onde rodar isso
@@ -6776,7 +6882,7 @@ ${materiaisObrigatorios.length ? `\n## ⚠️ Materiais OBRIGATÓRIOS antes de f
 - Sinopse atual: ${sinopseAtual || '(vazio)'}
 - Classificação Indicativa atual: ${classificacaoAtual || '(vazio)'}
 - Público-alvo atual: ${publicoAtual.join(', ') || '(vazio)'}
-- Temas atuais (campo antigo "TEMAS", só como referência): ${temasAtual.join(', ') || '(vazio)'}
+- Temas atuais (campo TEMAS de Trabalhos — espelha o eixo Tema Social/Edital): ${temasAtual.join(', ') || '(vazio)'}
 - Descritores atuais: ${descritoresAtual.join(', ') || '(vazio)'}
 
 ## Sua tarefa
@@ -6790,20 +6896,13 @@ importa pro contratante, não só do que ela trata), Texto Complementar (texto M
 venda/justificativa do projeto, com o embasamento da pesquisa por trás — diferente da
 Sinopse/Release, que são sucintos), Relação BNCC, Proposta Pedagógica, Classificação Indicativa,
 Público-Alvo Adequado, Descritores de Classificação e os 3 eixos de tema (Tema Geral / Tema
-Específico / Tema Social-Edital — o campo antigo "TEMAS" acima é só referência histórica, **não
-usar nem preencher ele de novo**).
+Específico / Tema Social-Edital — em Trabalhos, o campo TEMAS recebe os mesmos valores do Tema
+Social/Edital; no Portfólio Online, o campo antigo "Temas" é depreciado e deve ser limpo).
 
 **Sinopse e Release finais também vão ser aplicados no design do Canva** (a peça gráfica de
 venda, não só o Notion) — por isso os dois precisam sair desta revisão já prontos pra publicação
-final, sem placeholder, colchete ou nota de rascunho.${arqReleaseCanva.length ? ` **Quando eu
-aprovar o resultado, aplique você mesmo a Sinopse e o Release direto no link do Canva listado em
-Materiais Obrigatórios acima**, usando o conector Canva desta conversa (se disponível) — não
-preciso colar o link de novo. Isso é só pro Canva.` : ''} **A publicação no Notion (Trabalhos e
-Portfólio Online) continua sendo feita por mim colando o bloco final no Portal Admin — não tente
-escrever no Notion direto por essa conversa**, mesmo que exista conector disponível: o Portal
-Admin faz upload de arquivo/PDF pras propriedades que exigem isso, valida vocabulário fechado
-contra opção nova (3 regimes diferentes) e casa Trabalhos com Portfólio Online por nome exato —
-lógica que não existe fora dele.
+final, sem placeholder, colchete ou nota de rascunho. Depois que eu aprovar, **você mesmo grava
+tudo** (Notion e Canva) pelos conectores desta conversa, seguindo a seção "Execução" no fim.
 
 **Relação BNCC: ESCREVER DE NOVO DO ZERO, não corrigir/editar o documento existente em cima
 do material anexado.** Já foram encontrados códigos BNCC incorretos em documentos antigos da
@@ -6820,27 +6919,108 @@ registro, o vocabulário nem a profundidade desses dois documentos pra ficar "ap
 criança" — eles não são material de leitura direta pro público-alvo da apresentação, são
 subsídio de bastidor pra quem organiza/media a experiência.
 
-**Vocabulário de cada campo — três regimes diferentes, não misturar:**
+**Vocabulário de cada campo — três regimes diferentes, não misturar.** Ao gravar, copie o valor
+EXATAMENTE como aparece nas listas abaixo: o Notion cria uma opção nova sozinho se o texto tiver
+qualquer diferença (acento, maiúscula, espaço), e isso quebraria o vocabulário.
 - **NUNCA inventar, mesmo se achar que falta categoria** (é sistema fixo/regulatório — se achar
-  que falta algo, me avise à parte, fora do bloco final, eu decido manualmente):
-  - Classificação Indicativa (escolha 1, só isso existe oficialmente no CLASSIND): ${opcoes.classificacao.join(' | ')}
-  - Público-Alvo Adequado (escolha 1 ou mais): ${opcoes.publicoAlvo.join(' | ')}
-  - Tema Social/Edital (escolha 1 ou mais): ${opcoesPortfolio.temaSocialEdital.join(' | ')}
-  - Descritores de Classificação (0 ou mais, só os do guia CLASSIND, se aplicável): ${opcoes.descritores.join(' | ')}
+  que falta algo, NÃO grave aquele valor e me avise no relatório final, eu decido manualmente).
+  As listas abaixo já são só as opções que existem nos DOIS bancos (Trabalhos e Portfólio Online):
+  - Classificação Indicativa (escolha 1, só isso existe oficialmente no CLASSIND): ${vocabComum(opcoes.classificacao, opcoesPortfolio.classificacao)}
+  - Público-Alvo Adequado (escolha 1 ou mais): ${vocabComum(opcoes.publicoAlvo, opcoesPortfolio.publicoAlvo)}
+  - Tema Social/Edital (escolha 1 ou mais): ${vocabComum(opcoes.temas, opcoesPortfolio.temaSocialEdital)}
+  - Descritores de Classificação (0 ou mais, só os do guia CLASSIND, se aplicável): ${vocabComum(opcoes.descritores, opcoesPortfolio.descritores)}
 - **Pode criar opção nova, mas só depois de checar que não existe equivalente** (evitar
-  duplicata tipo "Poesia" vs "poesia brasileira" — se criar, é uma decisão sua, não do Portal
-  Admin, que só registra o que vier):
+  duplicata tipo "Poesia" vs "poesia brasileira" — se criar, liste no relatório final):
   - Tema Geral (termos amplos, SEM nome próprio) — opções já cadastradas: ${opcoesPortfolio.temaGeral.join(' | ')}
 - **Vocabulário ABERTO, cria à vontade** (cresce por peça — nomes próprios, obras, movimentos
   específicos):
   - Tema Específico
 
-${temSuspeitoDeImagem ? `\n## Texto Base escaneado (imagem)\nAlgum(ns) arquivo(s) do Texto Base parecem ser foto/scan sem texto extraível (aviso acima). Leia a imagem direto (você lê nativamente) e TRANSCREVA o conteúdo por completo, com fidelidade — essa transcrição vai virar um arquivo de texto novo, reanexado ao lado do original, pra não precisar reabrir a imagem numa próxima consulta. Inclua essa transcrição no bloco === TEXTO BASE TRANSCRITO === do resultado final.\n` : ''}
+${temSuspeitoDeImagem ? `\n## Texto Base escaneado (imagem)\nAlgum(ns) arquivo(s) do Texto Base parecem ser foto/scan sem texto extraível (aviso acima). Leia a imagem direto (você lê nativamente) e TRANSCREVA o conteúdo por completo, com fidelidade — essa transcrição vai virar um arquivo de texto novo, reanexado ao lado do original, pra não precisar reabrir a imagem numa próxima consulta. Essa transcrição vira um PDF anexado no campo Texto Base, AO LADO do original (ver Execução).\n` : ''}
 ## Discussão
-${materiaisObrigatorios.length ? `Antes de qualquer coisa, confirme que abriu/leu cada item listado em "Materiais OBRIGATÓRIOS" acima — sem isso a revisão fica incompleta (baseada só no texto escrito, não no que existe de fato em imagem/cena). ` : ''}Debata os pontos que achar necessário antes de fechar. Só gere o bloco final abaixo quando eu
-confirmar que estamos de acordo.
+${materiaisObrigatorios.length ? `Antes de qualquer coisa, confirme que abriu/leu cada item listado em "Materiais OBRIGATÓRIOS" acima — sem isso a revisão fica incompleta (baseada só no texto escrito, não no que existe de fato em imagem/cena). ` : ''}Debata os pontos que achar necessário antes de fechar. **Não grave nada (nem no Notion, nem no
+Canva) antes de eu escrever APROVADO.** Quando estivermos de acordo, mostre numa única mensagem a
+versão final de todos os campos, pra minha aprovação.
 
-## Formato da resposta final (gerar só quando eu pedir)
+## Execução — só depois do meu APROVADO
+Você grava tudo pelos conectores desta conversa. Siga as etapas NA ORDEM, uma de cada vez, e não
+passe pra próxima se a anterior falhou.
+
+**Etapa 0 — Conferência (não grava nada).** Confirme que o conector Notion${arqReleaseCanva.length ? ' e o conector Canva estão ativos' : ' está ativo'} nesta
+conversa. Faça fetch das páginas de destino e anote o que existe hoje em cada campo de arquivo
+(vai precisar disso na regra de preservação):
+- 🎭 Trabalhos: ${pagina.url}
+- Portfólio Online: ${destinoPortfolio || 'PULAR (duplicata — ver avisos no topo)'}
+
+**Etapa 1 — Gerar os PDFs.** Um PDF por documento, bem diagramado (títulos, negrito, tabelas
+quando ajudar, cabeçalho com o nome do trabalho e "Cia. do Liquidificador"). Nomes:
+- Release - ${nome}.pdf
+- Texto Complementar - ${nome}.pdf
+- Relação BNCC - ${nome}.pdf
+- Proposta Pedagógica - ${nome}.pdf${temSuspeitoDeImagem ? `\n- Texto Base (transcrito) - ${nome}.pdf` : ''}
+Deixe os PDFs disponíveis pra eu baixar também (uso pra mandar direto pra contratante).
+
+**Etapa 2 — Enviar TODOS os PDFs pro Notion, antes de gravar qualquer texto.** Pra cada PDF e
+cada página de destino: notion-create-file-upload → POST multipart do arquivo pro upload_url
+(campo "file", com os upload_headers) a partir do seu ambiente de código → guarde o id. Faça um
+envio separado por página (não reaproveite o mesmo id em Trabalhos e no Portfólio Online). Se
+QUALQUER envio falhar, PARE aqui — nada foi gravado ainda — e me mostre o erro completo. Os envios
+expiram em cerca de 1h: siga direto pras etapas 3 e 4.
+
+**Etapa 3 — Gravar em 🎭 Trabalhos** (um único notion-update-page, update_properties). Não mexa
+em nenhum outro campo além destes:
+| Propriedade (nome exato) | O que gravar |
+|---|---|
+| ${REV_PROP_SINOPSE} | Sinopse (texto, até 350 caracteres) |
+| ${REV_PROP_CLASSIFICACAO} | Classificação Indicativa (1 opção da lista) |
+| ${REV_PROP_PUBLICO_ALVO} | Público-Alvo (opções da lista) |
+| ${REV_PROP_TEMAS} | os mesmos valores do Tema Social/Edital |
+| ${REV_PROP_DESCRITORES} | Descritores (opções da lista; vazio se não houver) |
+| Release | PDF do Release |
+| Texto Complementar | PDF do Texto Complementar |
+| Relação BNCC | PDF da Relação BNCC |
+| Proposta Pedagógica | PDF da Proposta Pedagógica |${temSuspeitoDeImagem ? `\n| Texto Base | original(is) + PDF da transcrição |` : ''}
+Depois, faça fetch de novo e confira campo por campo.
+
+**Etapa 4 — Gravar no Portfólio Online** (banco de vendas — os nomes das propriedades são
+DIFERENTES dos de Trabalhos). ${destinoPortfolio ? `Destino: ${destinoPortfolio}.` : 'PULAR esta etapa (duplicata — ver avisos no topo).'}
+| Propriedade (nome exato) | O que gravar |
+|---|---|
+| Sinopse | Sinopse |
+| Release - Texto | o texto do Release |
+| Classificação Indicativa | Classificação Indicativa |
+| Público-Alvo | Público-Alvo |
+| Tema Geral | Tema Geral |
+| Tema Específico | Tema Específico |
+| Tema Social/Edital | Tema Social/Edital |
+| Descritores de Classificação | Descritores |
+| Temas | LIMPAR (campo antigo, deixar vazio) |
+| Release | PDF do Release |
+| Relação BNCC | PDF da Relação BNCC |
+| Proposta Pedagógica | PDF da Proposta Pedagógica |
+Texto Complementar NÃO existe nesse banco — fica só em Trabalhos. Depois, fetch e confira.
+
+**Regra de preservação — vale pra todo campo de arquivo das etapas 3 e 4.** O PDF novo substitui
+os PDFs antigos do mesmo documento, MAS link externo que estiver no campo (Canva, Drive etc.) tem
+que continuar lá${arqReleaseCanva.length ? ` — em Trabalhos, o campo Release hoje tem o link do Canva ${arqReleaseCanva.map(a => a.url).join(', ')}` : ''}${temSuspeitoDeImagem ? '; e no Texto Base os arquivos originais continuam, a transcrição entra AO LADO deles' : ''}.
+Grave a lista completa: itens a manter (exatamente como vieram no fetch da Etapa 0) + o id do PDF
+novo. Se no fetch de conferência algum item que devia ficar tiver sumido, PARE na hora, não mexa em
+mais nada e me diga qual item sumiu e qual era o valor original (eu restauro pelo histórico da
+página).
+${arqReleaseCanva.length ? `
+**Etapa 5 — Canva.** Aplique a Sinopse e o Release finais no design ${arqReleaseCanva.map(a => a.url).join(', ')}.
+Mostre o antes/depois e só confirme a alteração (commit) depois do meu ok — é peça de venda, e
+texto estourando a caixa só se vê olhando.
+` : ''}
+**Etapa ${arqReleaseCanva.length ? 6 : 5} — Status.** Se as etapas 3 e 4 terminaram sem erro, grave "${REV_STATUS_PROP}" =
+"Publicado" em Trabalhos. Se algo falhou, grave "Aguardando Publicação".
+
+**Etapa ${arqReleaseCanva.length ? 7 : 6} — Relatório final:** uma tabela com cada campo de cada banco (✅ gravado e conferido /
+⚠️ não gravado e por quê / ❌ erro), as opções NOVAS criadas em Tema Geral/Tema Específico e os
+links pros PDFs.
+
+## Plano B — só se a Etapa 2 falhar ou se eu pedir
+Gere o bloco abaixo, exatamente nesse formato, pra eu colar no Portal Admin (que publica por lá):
 === SINOPSE ===
 (texto)${temSuspeitoDeImagem ? `
 === TEXTO BASE TRANSCRITO ===
@@ -6937,13 +7117,17 @@ app.post('/portal-admin/revisao-trabalhos/:id/prompt-imagens', async (req, res) 
     const textoColado = req.body?.textoColado || '';
     const blocos = textoColado.trim() ? revParsearTexto(textoColado) : {};
     const d = await revMontarDadosRevisao(req.params.id);
+    // No fluxo normal o chat grava direto no Notion — com status "Publicado", o valor atual do
+    // Notion JÁ é o revisado, não precisa colar nada.
+    const jaPublicado = d.pagina.properties[REV_STATUS_PROP]?.select?.name === 'Publicado';
 
     function resolvido(chave, valorAtual, label) {
       if (blocos[chave]) return { valor: blocos[chave], origem: 'revisão' };
-      return { valor: valorAtual || '(vazio)', origem: `valor atual do Notion — NÃO veio da revisão (${label} não estava no texto colado)` };
+      if (jaPublicado) return { valor: valorAtual || '(vazio)', origem: 'Notion, já revisado' };
+      return { valor: valorAtual || '(vazio)', origem: `valor atual do Notion — NÃO veio da revisão (${label} ainda não foi publicado)` };
     }
     const sinopseR = resolvido('SINOPSE', d.sinopseAtual, 'Sinopse');
-    const temasR = resolvido('TEMAS', d.temasAtual.join(', '), 'Temas');
+    const temasR = resolvido('TEMA_SOCIAL_EDITAL', d.temasAtual.join(', '), 'Temas');
     const publicoR = resolvido('PUBLICO_ALVO', d.publicoAtual.join(', '), 'Público-alvo');
     const classificacaoR = resolvido('CLASSIFICACAO_INDICATIVA', d.classificacaoAtual, 'Classificação Indicativa');
 
@@ -6991,7 +7175,7 @@ formato A4 retrato"
 - Imagem 3 (card de e-mail) → propriedade "Card E-mail" na página correspondente deste trabalho no **Portfólio Online** (banco de vendas) — não fica em 🎭 Trabalhos.
 `;
 
-    res.json({ ok: true, instrucoesImagem, avisoTextoNaoColado: !textoColado.trim() });
+    res.json({ ok: true, instrucoesImagem, avisoTextoNaoColado: !textoColado.trim() && !jaPublicado });
   } catch (err) {
     console.error('[revisao-trabalhos] erro ao montar prompt de imagens:', err.message);
     res.status(500).json({ ok: false, erro: err.message });
@@ -7021,6 +7205,32 @@ app.post('/portal-admin/revisao-trabalhos/:id/pre-visualizar', async (req, res) 
       resultados.push({ campo: 'Aviso geral', status: 'aviso', mensagem: 'Não encontrei os marcadores "=== CAMPO ===" esperados — confira se colou o bloco completo.' });
     }
 
+    // Simula também o lado Portfólio Online (banco de vendas, schema/opções separados de
+    // Trabalhos) — antes só o /publicar de verdade fazia essa checagem, então avisos como
+    // "opção nova em Tema Geral" só apareciam depois de já ter gravado em Trabalhos.
+    try {
+      const paginaAtual = await revNotion('GET', `/pages/${req.params.id}`);
+      const nomeTrabalho = revTxt(paginaAtual.properties['Nome']?.title) || 'trabalho';
+      const candidatos = await revNotion('POST', `/databases/${PORTFOLIO_ONLINE_DB}/query`, {
+        filter: { property: 'Nome', title: { equals: nomeTrabalho } }, page_size: 10,
+      });
+      if (candidatos.results.length > 1) {
+        resultados.push({ campo: 'Portfólio Online', status: 'aviso', mensagem: `Encontrei ${candidatos.results.length} páginas com o nome "${nomeTrabalho}" no Portfólio Online — ambíguo, publicação lá será pulada.` });
+      } else {
+        const opcoesPortfolio = await revBuscarOpcoesPortfolio();
+        const { resultados: resultadosPortfolio } = revResolverCamposPortfolio(blocos, opcoesPortfolio);
+        resultados.push(...resultadosPortfolio);
+        for (const [chave, propName] of [['RELACAO_BNCC', 'Relação BNCC'], ['PROPOSTA_PEDAGOGICA', 'Proposta Pedagógica'], ['RELEASE', 'Release']]) {
+          if (blocos[chave]) resultados.push({ campo: `${propName} (Portfólio Online)`, status: 'ok', mensagem: 'será gerado como PDF e anexado ao confirmar' });
+        }
+        resultados.push(candidatos.results.length === 0
+          ? { campo: 'Portfólio Online', status: 'aviso', mensagem: `Não encontrei "${nomeTrabalho}" — uma página NOVA será criada nesse banco ao confirmar.` }
+          : { campo: 'Portfólio Online', status: 'ok', mensagem: `página existente ("${nomeTrabalho}") será atualizada.` });
+      }
+    } catch (e) {
+      resultados.push({ campo: 'Portfólio Online', status: 'erro', mensagem: e.message });
+    }
+
     await revAtualizarStatus(req.params.id, 'Aguardando Publicação');
     res.json({ ok: true, resultados, preview: true });
   } catch (err) {
@@ -7048,7 +7258,7 @@ app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
         const pdfBuffer = await revGerarPdf(`${propName} — ${nomeTrabalho}`, blocos[chave]);
         const nomeArquivo = `${propName} - ${nomeTrabalho}.pdf`.replace(/[\\/]/g, '-');
         const uploadId = await revSubirArquivoNotion(nomeArquivo, pdfBuffer, 'application/pdf');
-        properties[propName] = { files: [{ type: 'file_upload', file_upload: { id: uploadId }, name: nomeArquivo }] };
+        properties[propName] = { files: [...revArquivosExternos(paginaAtual.properties, propName), { type: 'file_upload', file_upload: { id: uploadId }, name: nomeArquivo }] };
         resultados.push({ campo: propName, status: 'ok' });
       } catch (e) {
         resultados.push({ campo: propName, status: 'erro', mensagem: e.message });
@@ -7086,89 +7296,43 @@ app.post('/portal-admin/revisao-trabalhos/:id/publicar', async (req, res) => {
     await revNotion('PATCH', `/pages/${req.params.id}`, { properties });
 
     // Publicação também no Portfólio Online (banco de vendas) — não há relation entre os
-    // dois bancos, então o match é só por Nome EXATO. Ambíguo ou sem match: reporta e pula,
-    // nunca adivinha em cima de dado de venda.
+    // dois bancos, então o match é só por Nome EXATO. Ambíguo: reporta e pula, nunca adivinha
+    // em cima de dado de venda. Sem match: CRIA a página (pedido do Fábio, set/2026) — antes
+    // pulava e ficava pra sempre desincronizado, já que nada mais preenche esse banco sozinho.
     try {
       const candidatos = await revNotion('POST', `/databases/${PORTFOLIO_ONLINE_DB}/query`, {
         filter: { property: 'Nome', title: { equals: nomeTrabalho } }, page_size: 10,
       });
-      if (candidatos.results.length === 0) {
-        resultados.push({ campo: 'Portfólio Online', status: 'aviso', mensagem: `Não encontrei "${nomeTrabalho}" no Portfólio Online (o nome precisa bater exatamente) — publicação lá foi pulada.` });
-      } else if (candidatos.results.length > 1) {
+      if (candidatos.results.length > 1) {
         resultados.push({ campo: 'Portfólio Online', status: 'aviso', mensagem: `Encontrei ${candidatos.results.length} páginas com o nome "${nomeTrabalho}" no Portfólio Online — ambíguo, publicação lá foi pulada.` });
       } else {
-        const paginaPortfolio = candidatos.results[0];
+        const paginaPortfolioExistente = candidatos.results[0] || null;
         const opcoesPortfolio = await revBuscarOpcoesPortfolio();
-        const propsPortfolio = {};
-
-        if (blocos.SINOPSE) propsPortfolio['Sinopse'] = { rich_text: [{ text: { content: blocos.SINOPSE.slice(0, 2000) } }] };
-        if (blocos.RELEASE) propsPortfolio['Release - Texto'] = { rich_text: [{ text: { content: blocos.RELEASE.slice(0, 2000) } }] };
-
-        // Classificação Indicativa é sistema regulatório FIXO (só existem os 6 níveis oficiais
-        // do CLASSIND) — nunca cria valor novo. Se não bater, avisa alto, não grava em silêncio.
-        if (blocos.CLASSIFICACAO_INDICATIVA) {
-          const valor = revEncontrarOpcao(blocos.CLASSIFICACAO_INDICATIVA, opcoesPortfolio.classificacao);
-          if (valor) {
-            propsPortfolio['Classificação Indicativa'] = { select: { name: valor } };
-          } else {
-            resultados.push({ campo: 'Classificação Indicativa (Portfólio Online)', status: 'aviso', mensagem: `"${blocos.CLASSIFICACAO_INDICATIVA}" não é um dos 6 níveis oficiais do CLASSIND — não gravei. Opções válidas: ${opcoesPortfolio.classificacao.join(' | ')}` });
-          }
-        }
-        // Vocabulário fechado de verdade (Público-Alvo, Tema Social/Edital, Descritores) —
-        // taxonomia institucional/edital, não deve crescer por decisão da revisão. Só grava o
-        // que bater com opção existente; o que não bater vira aviso (nunca falha em silêncio).
-        const mapaMultiFechadoPortfolio = { PUBLICO_ALVO: ['Público-Alvo', 'publicoAlvo'], TEMA_SOCIAL_EDITAL: ['Tema Social/Edital', 'temaSocialEdital'], DESCRITORES: ['Descritores de Classificação', 'descritores'] };
-        for (const [chave, [propName, chaveOpcoes]] of Object.entries(mapaMultiFechadoPortfolio)) {
-          if (!blocos[chave]) continue;
-          const partes = blocos[chave].split(',').map(s => s.trim()).filter(Boolean);
-          const validas = [], invalidas = [];
-          for (const p of partes) {
-            const achou = revEncontrarOpcao(p, opcoesPortfolio[chaveOpcoes]);
-            if (achou) validas.push(achou); else invalidas.push(p);
-          }
-          if (validas.length) propsPortfolio[propName] = { multi_select: validas.map(n => ({ name: n })) };
-          if (invalidas.length) resultados.push({ campo: `${propName} (Portfólio Online)`, status: 'aviso', mensagem: `Não bateram com opções existentes (não gravadas): ${invalidas.join(', ')}` });
-        }
-        // Tema Geral é vocabulário CONTROLADO, mas pode crescer com moderação (diretriz do
-        // projeto: "checar se já existe equivalente antes de criar opção nova" — quem faz essa
-        // checagem é a revisão no Claude.ai, não o Portal Admin). Por isso: tenta bater com
-        // opção existente; se não bater, GRAVA mesmo assim (Notion cria a opção nova), mas
-        // sempre reporta como "opção nova" pra ficar visível — nunca cria em silêncio.
-        if (blocos.TEMA_GERAL) {
-          const partes = blocos.TEMA_GERAL.split(',').map(s => s.trim()).filter(Boolean);
-          const finais = [], novas = [];
-          for (const p of partes) {
-            const achou = revEncontrarOpcao(p, opcoesPortfolio.temaGeral);
-            if (achou) finais.push(achou); else { finais.push(p); novas.push(p); }
-          }
-          if (finais.length) propsPortfolio['Tema Geral'] = { multi_select: finais.map(n => ({ name: n })) };
-          if (novas.length) resultados.push({ campo: 'Tema Geral (Portfólio Online)', status: 'aviso', mensagem: `Opção(ões) NOVA(S) criada(s), não existiam antes — confirme que não é duplicata de uma já cadastrada: ${novas.join(', ')}` });
-        }
-        // Tema Específico é vocabulário ABERTO (diretriz do projeto) — grava direto, sem
-        // checar contra lista fixa; o Notion cria a opção nova sozinho se ainda não existir.
-        if (blocos.TEMA_ESPECIFICO) {
-          const partes = blocos.TEMA_ESPECIFICO.split(',').map(s => s.trim()).filter(Boolean);
-          if (partes.length) propsPortfolio['Tema Específico'] = { multi_select: partes.map(n => ({ name: n })) };
-        }
-        // Campo "Temas" é DEPRECIADO (diretriz do projeto) — limpa ao publicar pelos 3 eixos
-        // novos, pra não deixar dado antigo/duplicado dessincronizado.
-        if (blocos.TEMA_GERAL || blocos.TEMA_ESPECIFICO || blocos.TEMA_SOCIAL_EDITAL) {
-          propsPortfolio['Temas'] = { multi_select: [] };
-        }
+        const { properties: propsPortfolio, resultados: resultadosPortfolio } = revResolverCamposPortfolio(blocos, opcoesPortfolio);
+        resultados.push(...resultadosPortfolio);
 
         for (const [chave, propName] of [['RELACAO_BNCC', 'Relação BNCC'], ['PROPOSTA_PEDAGOGICA', 'Proposta Pedagógica'], ['RELEASE', 'Release']]) {
           if (!blocos[chave]) continue;
           const pdfBuffer = await revGerarPdf(`${propName} — ${nomeTrabalho}`, blocos[chave]);
           const nomeArquivo = `${propName} - ${nomeTrabalho}.pdf`.replace(/[\\/]/g, '-');
           const uid = await revSubirArquivoNotion(nomeArquivo, pdfBuffer, 'application/pdf');
-          propsPortfolio[propName] = { files: [{ type: 'file_upload', file_upload: { id: uid }, name: nomeArquivo }] };
+          propsPortfolio[propName] = { files: [...revArquivosExternos(paginaPortfolioExistente?.properties, propName), { type: 'file_upload', file_upload: { id: uid }, name: nomeArquivo }] };
         }
 
-        await revNotion('PATCH', `/pages/${paginaPortfolio.id}`, { properties: propsPortfolio });
-        resultados.push({
-          campo: 'Portfólio Online', status: 'ok',
-          mensagem: `publicado em "${nomeTrabalho}" (Texto Complementar não existe nesse banco — só ficou em Trabalhos)${propsPortfolio['Temas'] ? '; campo antigo "Temas" (depreciado) foi limpo' : ''}`,
-        });
+        if (paginaPortfolioExistente) {
+          await revNotion('PATCH', `/pages/${paginaPortfolioExistente.id}`, { properties: propsPortfolio });
+          resultados.push({
+            campo: 'Portfólio Online', status: 'ok',
+            mensagem: `publicado em "${nomeTrabalho}" (Texto Complementar não existe nesse banco — só ficou em Trabalhos)${propsPortfolio['Temas'] ? '; campo antigo "Temas" (depreciado) foi limpo' : ''}`,
+          });
+        } else {
+          propsPortfolio['Nome'] = { title: [{ text: { content: nomeTrabalho } }] };
+          await revNotion('POST', '/pages', { parent: { database_id: PORTFOLIO_ONLINE_DB }, properties: propsPortfolio });
+          resultados.push({
+            campo: 'Portfólio Online', status: 'ok',
+            mensagem: `página NOVA criada para "${nomeTrabalho}" (não existia no Portfólio Online) e publicada (Texto Complementar não existe nesse banco — só ficou em Trabalhos).`,
+          });
+        }
       }
     } catch (e) {
       resultados.push({ campo: 'Portfólio Online', status: 'erro', mensagem: e.message });
