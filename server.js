@@ -6670,33 +6670,6 @@ async function revChecarPdfEscaneado(arquivo) {
   }
 }
 
-// ROTA TEMPORÁRIA DE DIAGNÓSTICO (set/2026) — só pra testar se baixar áudio do YouTube
-// funciona a partir do IP real do Railway, antes de construir o pipeline de transcrição
-// própria. Remover depois do teste, sucesso ou falha.
-app.get('/portal-admin/revisao-trabalhos/_teste-audio-temp', async (req, res) => {
-  if (req.query.chave !== 'teste-audio-8f2c1a') return res.status(404).end();
-  const path = require('path');
-  const os = require('os');
-  const fs = require('fs');
-  const youtubedl = require('youtube-dl-exec');
-  const arquivoSaida = path.join(os.tmpdir(), `teste-audio-${Date.now()}.m4a`);
-  try {
-    await youtubedl('https://www.youtube.com/watch?v=jNQXAC9IVRw', {
-      extractAudio: true,
-      audioFormat: 'm4a',
-      output: arquivoSaida,
-      noCheckCertificates: true,
-      noWarnings: true,
-    });
-    const tamanhoBytes = fs.statSync(arquivoSaida).size;
-    res.json({ ok: true, tamanhoBytes });
-  } catch (e) {
-    res.json({ ok: false, erro: e.message, stderr: e.stderr || null });
-  } finally {
-    try { fs.unlinkSync(arquivoSaida); } catch {}
-  }
-});
-
 app.get('/portal-admin/revisao-trabalhos/lista', async (req, res) => {
   if (!exigirSessaoAdmin(req, res)) return;
   try {
